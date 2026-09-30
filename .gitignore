@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Secrets: credentials live in Windows Credential Manager, never here
+.env
+*.secret
+credentials*.json
+
+# Generated datasets and evidence
+output/
+runs/
+
+# Package Manager exports (may contain client configuration)
+inputs/*.json

@@ -1,0 +1,55 @@
+{
+  "journey": "CJ_SkYDE_NCRM_Demo_final",
+  "contact_de": "SF_Master_DataExtension_DE",
+  "contact_key": "ContactId",
+  "entry": {
+    "de": "DE_NCM_AdHoc_Entry",
+    "automation": "A_SkyDE_NCRM_AdHoc_CJ_entry",
+    "query": "Q_SKYDE_AdHoc_Target"
+  },
+  "de_levels": {
+    "DE_NCM_AdHoc_Entry": "contact",
+    "DE_NCRM_AD_HOC_CONFIG": "scenario",
+    "DE_NCRM_AdHoc_Target": "contact",
+    "SF_Master_DataExtension_DE": "contact"
+  },
+  "injection_des": [
+    "SF_Master_DataExtension_DE",
+    "DE_NCRM_AdHoc_Target",
+    "DE_NCRM_AD_HOC_CONFIG"
+  ],
+  "field_links": {
+    "SF_Master_DataExtension_DE.ContactId": "contact_key",
+    "DE_NCRM_AdHoc_Target.SalesforceId": "contact_key",
+    "DE_NCRM_AdHoc_Target.Description": "scenario_key",
+    "DE_NCRM_AD_HOC_CONFIG.CampaignName": "scenario_key"
+  },
+  "fixed_values": {
+    "DE_NCRM_AD_HOC_CONFIG.ACTIVE": "True",
+    "DE_NCRM_AD_HOC_CONFIG.HAS_RUN": "False"
+  },
+  "date_rules": {
+    "DE_NCRM_AD_HOC_CONFIG.START_DATE": "yesterday",
+    "DE_NCRM_AD_HOC_CONFIG.END_DATE": "tomorrow",
+    "DE_NCRM_AD_HOC_CONFIG.WAIT2": "yesterday",
+    "DE_NCRM_AD_HOC_CONFIG.WAIT1": "yesterday",
+    "DE_NCRM_AD_HOC_CONFIG.WAIT3": "yesterday"
+  },
+  "notes": [],
+  "settings": {
+    "records_per_case": 3,
+    "control_group_sample_size": 50,
+    "case_insensitive_text": true,
+    "fictitious_email_domain": "example.invalid",
+    "fictitious_phone": "333333333333",
+    "engagement_mailbox": "790karoll@gmail.com",
+    "mailbox_plus_addressing": true,
+    "id_prefix": "CJT",
+    "other_value": "TST_OTHER",
+    "date_format": "%Y-%m-%d",
+    "candidates_per_round": 200,
+    "max_exhaustive_scenarios": 200000,
+    "greedy_restarts": 40,
+    "seed": 42
+  }
+}
