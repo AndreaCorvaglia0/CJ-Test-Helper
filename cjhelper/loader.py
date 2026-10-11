@@ -462,6 +462,8 @@ class _ExportReader:
         journey_data = _entity_data(self.entities, "journeys", journey_id)
         entry_event = self.read_entry_event(journey_data)
         journey = self.read_journey(journey_id, journey_data, entry_event)
+        self.check_constant_writes_into_keys(journey)
+        self.check_one_to_one_joins(relationships)
         return Package(
             name=package_name,
             journey=journey,
@@ -474,6 +476,46 @@ class _ExportReader:
             warnings=self.warnings,
             unsupported_activities=[a.key for a in journey.activities.values() if a.kind == KIND_UNSUPPORTED],
         )
+
+    # -- checks carried over from the earlier tool (spec, "Outputs") ----------
+
+    def check_constant_writes_into_keys(self, journey: Journey) -> None:
+        """Spec check: "An update contact step that writes a constant into a primary-key field"."""
+        found: dict[tuple[str, str, str], list[str]] = {}
+        for activity in journey.activities.values():
+            for write in activity.writes:
+                table = self.tables.get(write.table)
+                field = table.field(write.field) if table is not None else None
+                if field is None or not field.is_primary_key or write.value is None:
+                    continue
+                if "{{" in write.value:
+                    continue   # a placeholder such as {{DateTime.Now}} is not a constant
+                found.setdefault((table.name, field.name, write.value), []).append(activity.key)
+        for (table, field, value), keys in found.items():
+            self.warn(f"suspicious pattern: {len(keys)} update contact step(s) write the constant {value!r} into the "
+                      f"primary-key field {table}.{field}, so every contact gets the same key value there "
+                      f"({', '.join(keys)}).")
+
+    def check_one_to_one_joins(self, relationships: list[Relationship]) -> None:
+        """Spec check: "A one-to-one relationship to a table whose primary key is wider than the join"."""
+        by_name: dict[str, list[Relationship]] = {}
+        for rel in relationships:
+            if rel.left_table is not None:
+                by_name.setdefault(rel.name, []).append(rel)
+        for name, rels in by_name.items():
+            first = rels[0]
+            if first.left_cardinality != "One" or first.right_cardinality != "One":
+                continue
+            table = self.tables.get(first.right_table)
+            if table is None:
+                continue
+            join_fields = {r.right_field.lower() for r in rels}
+            pk = [f.name for f in table.fields if f.is_primary_key]
+            extra = [f for f in pk if f.lower() not in join_fields]
+            if extra:
+                self.warn(f"suspicious pattern: the one-to-one relationship '{name}' joins {table.name} on "
+                          f"{', '.join(sorted(r.right_field for r in rels))}, but its primary key also has "
+                          f"{', '.join(extra)}: several rows can match one contact.")
 
     # -- tables -------------------------------------------------------------
 

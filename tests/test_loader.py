@@ -1075,6 +1075,37 @@ def test_pilot_update_contact_write_to_the_entry_table(pilot):
 
 
 def test_pilot_warnings(pilot):
-    assert len(pilot.warnings) == 2, pilot.warnings
+    # two reading warnings plus the carried-over checks: constant writes into the Log table's three
+    # primary-key fields and the one-to-one relationship to the entry table with a wider primary key
+    plain = [w for w in pilot.warnings if not w.startswith("suspicious pattern")]
+    assert len(plain) == 2, pilot.warnings
     assert has_warning(pilot, "assets/1806207", "legacyId")
     assert has_warning(pilot, "mobileNumber", "CJ_SkYDE_NCRM_Demo", "DEAudience-6021dd4c")
+
+
+def test_constant_write_into_primary_key_is_flagged():
+    """Spec check: an update contact step that writes a constant into a primary-key field."""
+    package = load(default_activities())
+    assert not any("primary-key field" in w for w in package.warnings)
+    activities = default_activities()
+    activities.append({
+        "key": "UPDATE-PK", "type": "UPDATECONTACTDATA", "name": "log",
+        "arguments": {"activityData": {"updateContactFields": [
+            {"dataExtensionId": ref("dataExtensions", ENTRY, "id"),
+             "field": ref("dataExtensions", ENTRY, "fields/name:ContactId/id"), "value": "FIXED"},
+            {"dataExtensionId": ref("dataExtensions", ENTRY, "id"),
+             "field": ref("dataExtensions", ENTRY, "fields/name:ContactId/id"), "value": "{{DateTime.Now}}"},
+        ]}},
+        "outcomes": [{"key": "o", "next": None, "metaData": {}}],
+    })
+    package = load(activities)
+    flagged = [w for w in package.warnings if "primary-key field" in w]
+    assert len(flagged) == 1 and "'FIXED'" in flagged[0] and "UPDATE-PK" in flagged[0]
+
+
+def test_pilot_flags_constant_writes_and_wide_one_to_one_join(pilot):
+    writes = [w for w in pilot.warnings if "primary-key field" in w]
+    assert any("DE_SkyDE_AdHoc_Log_partial.CampaignName" in w and "'DemoSKY'" in w for w in writes)
+    assert any("DE_SkyDE_AdHoc_Log_partial.ActionId" in w and "'ActionId'" in w for w in writes)
+    joins = [w for w in pilot.warnings if "one-to-one relationship" in w]
+    assert len(joins) == 1 and "DE_NCM_AdHoc_Entry" in joins[0] and "ActionId" in joins[0] and "CampaignName" in joins[0]
