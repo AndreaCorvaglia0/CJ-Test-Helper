@@ -1,9 +1,62 @@
-# The page's only departures from Streamlit's defaults (docs/ux-review.md, change 12):
-# no developer toolbar (Deploy, menu, Stop), and a neutral accent colour instead of red.
+# The page's look, from the Lutech brand guidelines (docs/brand.md): colours, Montserrat, light theme only.
 # Streamlit reads this file when the page is started from the repository root.
 
 [client]
+# No developer toolbar (Deploy, menu, Stop): docs/ux-review.md, change 12.
 toolbarMode = "minimal"
 
+[server]
+# Serves cjhelper/static/ (the Montserrat files and the logo) at app/static/.
+enableStaticServing = true
+
 [theme]
-primaryColor = "#31333F"
+base = "light"
+primaryColor = "#BE0036"                    # Crimson Glory
+textColor = "#333333"                       # Jet
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F6F7FA"        # tint of the auxiliary grey #E1E3EA, for input fields and table headers
+borderColor = "#E1E3EA"
+dataframeBorderColor = "#E1E3EA"
+dataframeHeaderBackgroundColor = "#F6F7FA"
+linkColor = "#BE0036"
+# Status colours (st.success, st.warning, st.error) from the secondary palette: there is no green in the brand.
+greenColor = "#335A66"
+greenBackgroundColor = "#E8F0F3"
+greenTextColor = "#335A66"
+yellowColor = "#E5D352"
+yellowBackgroundColor = "#F5EFC0"
+yellowTextColor = "#5E5400"
+redColor = "#BE0036"
+redBackgroundColor = "#F9E5EA"
+redTextColor = "#8C0031"
+font = "Montserrat, sans-serif"
+headingFont = "Montserrat, sans-serif"
+baseFontSize = 14
+baseRadius = "4px"
+buttonRadius = "4px"
+showWidgetBorder = true
+
+[[theme.fontFaces]]
+family = "Montserrat"
+url = "app/static/fonts/Montserrat-Light.woff2"
+weight = 300
+
+[[theme.fontFaces]]
+family = "Montserrat"
+url = "app/static/fonts/Montserrat-Regular.woff2"
+weight = 400
+
+[[theme.fontFaces]]
+family = "Montserrat"
+url = "app/static/fonts/Montserrat-Medium.woff2"
+weight = 500
+
+[[theme.fontFaces]]
+family = "Montserrat"
+url = "app/static/fonts/Montserrat-SemiBold.woff2"
+weight = 600
+
+[[theme.fontFaces]]
+family = "Montserrat"
+url = "app/static/fonts/Montserrat-Bold.woff2"
+weight = 700

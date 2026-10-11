@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Brand assets: never convert line endings
+*.ai binary
+*.woff2 binary
+*.pdf binary
