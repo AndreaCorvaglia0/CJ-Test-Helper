@@ -1,0 +1,29 @@
+{
+  "journey_name": "EX_RandomSplit",
+  "activity_count": 8,
+  "csv_tables": ["DE_Entry", "DE_Master", "DE_Config"],
+  "table_levels": {"DE_Entry": "contact", "DE_Master": "contact", "DE_Config": "scenario"},
+  "branches": {
+    "SPLIT-1/path_a": {"status": "covered"},
+    "SPLIT-1/remainder_path": {"status": "covered", "statistical": false},
+    "RANDOM-1/branchResult-1": {"status": "covered", "statistical": true},
+    "RANDOM-1/branchResult-2": {"status": "covered", "statistical": true},
+    "SPLIT-2/path_a": {"status": "covered", "statistical": false},
+    "SPLIT-2/remainder_path": {"status": "covered", "statistical": false}
+  },
+  "scenario_count": {"min": 2, "max": 2},
+  "case_count": {"min": 3, "max": 3},
+  "contact_count": 56,
+  "cases": [
+    {"scenario_values": {"DE_Config.Control Group Required": "False"},
+     "contact_values": {"DE_Master.IsMailOffers": "True"},
+     "end_activity": "UPDATE-3", "manual_actions": [], "contact_count": 3},
+    {"scenario_values": {"DE_Config.Control Group Required": "False"},
+     "end_activity": "UPDATE-4", "manual_actions": [], "contact_count": 3},
+    {"scenario_values": {"DE_Config.Control Group Required": "True"},
+     "manual_actions": [], "contact_count": 50,
+     "random": {"activity_key": "RANDOM-1", "expected_low": 1, "expected_high": 9}}
+  ],
+  "unsupported": [],
+  "checks_pass": true
+}

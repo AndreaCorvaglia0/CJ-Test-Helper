@@ -1,0 +1,25 @@
+{
+  "journey_name": "EX_UpdateScenarioField",
+  "activity_count": 9,
+  "csv_tables": ["DE_Entry", "DE_Master", "DE_Config"],
+  "table_levels": {"DE_Entry": "contact", "DE_Master": "contact", "DE_Config": "scenario"},
+  "branches": {
+    "SPLIT-1/path_a": {"status": "covered"},
+    "SPLIT-1/remainder_path": {"status": "covered"},
+    "SPLIT-2/path_a": {"status": "not covered", "reason_contains": "unreachable"},
+    "SPLIT-2/path_b": {"status": "covered"},
+    "SPLIT-2/remainder_path": {"status": "not covered", "reason_contains": "unreachable"},
+    "SPLIT-3/path_a": {"status": "covered"},
+    "SPLIT-3/remainder_path": {"status": "covered"}
+  },
+  "scenario_count": {"min": 3, "max": 3},
+  "case_count": {"min": 3, "max": 3},
+  "contact_count": 9,
+  "cases": [
+    {"scenario_values": {"DE_Config.MODE": "A"}, "end_activity": "UPDATE-4", "manual_actions": [], "contact_count": 3},
+    {"scenario_values": {"DE_Config.MODE": "B"}, "end_activity": "UPDATE-6", "manual_actions": [], "contact_count": 3},
+    {"end_activity": "UPDATE-7", "manual_actions": [], "contact_count": 3}
+  ],
+  "unsupported": [],
+  "checks_pass": true
+}

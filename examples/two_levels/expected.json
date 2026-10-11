@@ -1,0 +1,37 @@
+{
+  "journey_name": "EX_TwoLevels",
+  "activity_count": 9,
+  "csv_tables": ["DE_Entry", "DE_Master", "DE_Target", "DE_Config"],
+  "table_levels": {"DE_Entry": "contact", "DE_Master": "contact", "DE_Target": "contact", "DE_Config": "scenario"},
+  "branches": {
+    "SPLIT-1/path_a": {"status": "covered"},
+    "SPLIT-1/path_b": {"status": "covered"},
+    "SPLIT-1/remainder_path": {"status": "covered"},
+    "SPLIT-2/path_a": {"status": "covered"},
+    "SPLIT-2/remainder_path": {"status": "covered"},
+    "SPLIT-3/path_a": {"status": "covered"},
+    "SPLIT-3/remainder_path": {"status": "covered"},
+    "SPLIT-4/path_a": {"status": "covered"},
+    "SPLIT-4/remainder_path": {"status": "covered"}
+  },
+  "scenario_count": {"min": 4, "max": 4},
+  "case_count": {"min": 6, "max": 6},
+  "contact_count": 18,
+  "cases": [
+    {"scenario_values": {"DE_Config.CHANNEL": "Email", "DE_Config.IGNOREPERM": "False"},
+     "contact_values": {"DE_Master.MarketingPermission": "True"},
+     "end_activity": "UPDATE-2", "manual_actions": [], "contact_count": 3},
+    {"scenario_values": {"DE_Config.CHANNEL": "Email", "DE_Config.IGNOREPERM": "False"},
+     "end_activity": "UPDATE-3", "manual_actions": [], "contact_count": 3},
+    {"scenario_values": {"DE_Config.CHANNEL": "Email", "DE_Config.IGNOREPERM": "True"},
+     "end_activity": "UPDATE-1", "manual_actions": [], "contact_count": 3},
+    {"scenario_values": {"DE_Config.CHANNEL": "DM"},
+     "contact_values": {"DE_Master.IsMailOffers": "True"},
+     "end_activity": "UPDATE-4", "manual_actions": [], "contact_count": 3},
+    {"scenario_values": {"DE_Config.CHANNEL": "DM"},
+     "end_activity": "UPDATE-5", "manual_actions": [], "contact_count": 3},
+    {"end_activity": "SPLIT-1", "manual_actions": [], "contact_count": 3}
+  ],
+  "unsupported": [],
+  "checks_pass": true
+}

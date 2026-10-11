@@ -1,0 +1,9 @@
+# The page's only departures from Streamlit's defaults (docs/ux-review.md, change 12):
+# no developer toolbar (Deploy, menu, Stop), and a neutral accent colour instead of red.
+# Streamlit reads this file when the page is started from the repository root.
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+primaryColor = "#31333F"
