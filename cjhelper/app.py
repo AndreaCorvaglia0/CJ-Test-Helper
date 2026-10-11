@@ -94,7 +94,7 @@ DETAIL_LIMIT = 20        # details shown under a failed trust check
 
 DETECTION_KEY = "cjhelper.detection"   # st.session_state: (file digest, DetectionSummary)
 RESULT_KEY = "cjhelper.result"         # st.session_state: StoredRun of the last generation
-RUNNING_KEY = "cjhelper.running"       # st.session_state: set by the Generate click, read once by the next run
+PENDING_KEY = "cjhelper.pending"       # st.session_state: (file digest, Settings) from the Generate click to the run that generates
 
 # Plain names of the activity kinds, in the order of the spec's "Supported in the PoC" table.
 ACTIVITY_NAMES: dict[str, str] = {
@@ -501,8 +501,13 @@ def main() -> None:
 
 
 def render(data: Optional[bytes]) -> None:
-    """Steps 2 to 4 for the uploaded bytes (None: no file, so nothing to show)."""
-    running = bool(st.session_state.pop(RUNNING_KEY, False))
+    """Steps 2 to 4 for the uploaded bytes (None: no file, so nothing to show).
+
+    Generate takes three short runs of the page, so that its button is disabled while it works: the
+    click keeps the settings as pending, the next run shows the button disabled and generates, and a
+    last run shows the result with the button enabled again. (Streamlit ignores a click on a button
+    that is drawn disabled in the same run, so the click and the generation cannot share one run.)
+    """
     if data is None:
         _forget()
         return
@@ -517,9 +522,16 @@ def render(data: Optional[bytes]) -> None:
             _show_failure(UNEXPECTED_READ, technical_details(error))
         return
     _show_detection(summary)
+    pending = st.session_state.get(PENDING_KEY)
+    running = pending is not None and pending[0] == digest
     settings, submitted = _settings_form(summary, running)
     if submitted:
-        _generate(data, digest, settings)
+        st.session_state.pop(RESULT_KEY, None)
+        st.session_state[PENDING_KEY] = (digest, settings)
+        st.rerun()
+    if running:
+        st.session_state.pop(PENDING_KEY, None)
+        _generate(data, digest, pending[1])
     stored = st.session_state.get(RESULT_KEY)
     if stored is not None and stored.digest == digest and stored.settings == settings:
         if stored.result is None:
@@ -595,6 +607,7 @@ def _forget() -> None:
     """Nothing is kept once the file is gone or replaced."""
     st.session_state.pop(DETECTION_KEY, None)
     st.session_state.pop(RESULT_KEY, None)
+    st.session_state.pop(PENDING_KEY, None)
 
 
 def _show_detection(summary: DetectionSummary) -> None:
@@ -619,7 +632,7 @@ def _settings_form(summary: DetectionSummary, running: bool) -> tuple[Settings, 
     """Step 3 in a form whose submit button is step 4's Generate, so the settings apply together.
 
     The real inbox and the run identifier come first; the other settings wait in a closed expander.
-    The Generate button is disabled while its own generation runs.
+    The Generate button is disabled while a generation runs (``running``).
     """
     st.header(STEP_SETTINGS)
     defaults = default_form_values(summary.activation_field)
@@ -673,14 +686,9 @@ def _settings_form(summary: DetectionSummary, running: bool) -> tuple[Settings, 
                                                           value=defaults["case_insensitive_text"],
                                                           help=SETTING_HELP["case_insensitive_text"])
         st.header(STEP_GENERATE)
-        submitted = st.form_submit_button(GENERATE_LABEL, type="primary", disabled=running, on_click=_mark_running)
+        submitted = st.form_submit_button(GENERATE_LABEL, type="primary", disabled=running)
         st.caption(GENERATE_NOTE)
     return settings_from_form(values), submitted
-
-
-def _mark_running() -> None:
-    """Runs on the Generate click, before the page runs again: that run shows the button disabled."""
-    st.session_state[RUNNING_KEY] = True
 
 
 def _number(name: str, defaults: Mapping[str, Any], min_value: Optional[int] = None) -> int:
@@ -707,7 +715,6 @@ def _generate(data: bytes, digest: str, settings: Settings) -> None:
 
     The page then runs once more, so that the Generate button is enabled again under the result.
     """
-    st.session_state.pop(RESULT_KEY, None)
     try:
         with st.spinner(SPINNER_TEXT):
             result = pipeline.generate(data, settings)
