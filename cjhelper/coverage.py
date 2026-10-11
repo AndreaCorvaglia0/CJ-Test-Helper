@@ -866,8 +866,8 @@ class CoverageEngine:
         key = activity.key
         if key in self.package.unsupported_activities:
             if activity.unsupported_reason:
-                return f"the activity itself is not supported: {activity.unsupported_reason}"
-            return f"the activity itself has the unsupported type {activity.raw_type}"
+                return f"unsupported activity: {activity.unsupported_reason}"
+            return f"unsupported activity: its type {activity.raw_type} is not one the PoC understands"
         if key in behind_unsupported:
             blockers = sorted(self.package.unsupported_activities)
             return "unreachable: lies behind the unsupported activity " + ", ".join(f"'{b}'" for b in blockers)
