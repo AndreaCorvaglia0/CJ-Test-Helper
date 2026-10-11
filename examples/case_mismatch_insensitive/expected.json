@@ -1,0 +1,26 @@
+{
+  "journey_name": "EX_CaseMismatch",
+  "activity_count": 7,
+  "csv_tables": ["DE_Entry", "DE_Master", "DE_Config"],
+  "table_levels": {"DE_Entry": "contact", "DE_Master": "contact", "DE_Config": "scenario"},
+  "branches": {
+    "SPLIT-1/path_a": {"status": "covered"},
+    "SPLIT-1/path_b": {"status": "covered"},
+    "SPLIT-1/remainder_path": {"status": "covered"},
+    "SPLIT-2/path_a": {"status": "covered"},
+    "SPLIT-2/remainder_path": {"status": "not covered", "reason_contains": "unreachable"}
+  },
+  "scenario_count": {"min": 3, "max": 3},
+  "case_count": {"min": 3, "max": 3},
+  "contact_count": 9,
+  "cases": [
+    {"end_activity": "UPDATE-3", "manual_actions": [], "contact_count": 3},
+    {"scenario_values": {"DE_Config.CHANNEL": "DM"},
+     "end_activity": "UPDATE-2", "manual_actions": [], "contact_count": 3},
+    {"end_activity": "WAIT-1", "manual_actions": [], "contact_count": 3}
+  ],
+  "unsupported": [],
+  "warnings_contain": ["Email", "EMAIL"],
+  "checks_pass": true,
+  "settings": {"case_insensitive_text": true}
+}

@@ -1,0 +1,24 @@
+{
+  "journey_name": "EX_NestedRandom",
+  "activity_count": 7,
+  "csv_tables": ["DE_Entry", "DE_Master", "DE_Config"],
+  "table_levels": {"DE_Entry": "contact", "DE_Master": "contact", "DE_Config": "scenario"},
+  "branches": {
+    "SPLIT-1/path_a": {"status": "covered"},
+    "SPLIT-1/remainder_path": {"status": "covered", "statistical": false},
+    "RANDOM-1/branchResult-1": {"status": "covered", "statistical": true},
+    "RANDOM-1/branchResult-2": {"status": "covered", "statistical": true},
+    "RANDOM-2/branchResult-1": {"status": "covered", "statistical": true},
+    "RANDOM-2/branchResult-2": {"status": "covered", "statistical": true}
+  },
+  "scenario_count": {"min": 2, "max": 2},
+  "case_count": {"min": 2, "max": 2},
+  "contact_count": 53,
+  "cases": [
+    {"scenario_values": {"DE_Config.Test Group": "True"}, "manual_actions": [], "contact_count": 50,
+     "random": {"activity_key": "RANDOM-1"}},
+    {"scenario_values": {"DE_Config.Test Group": "False"}, "end_activity": "UPDATE-5", "manual_actions": [], "contact_count": 3}
+  ],
+  "unsupported": [],
+  "checks_pass": true
+}

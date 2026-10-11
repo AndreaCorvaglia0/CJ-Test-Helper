@@ -1,0 +1,22 @@
+{
+  "journey_name": "EX_FieldNameCase",
+  "activity_count": 5,
+  "csv_tables": ["DE_Entry", "DE_Master", "DE_Config"],
+  "table_levels": {"DE_Entry": "contact", "DE_Master": "contact", "DE_Config": "scenario"},
+  "branches": {
+    "SPLIT-1/path_a": {"status": "covered"},
+    "SPLIT-1/remainder_path": {"status": "covered"},
+    "SPLIT-2/path_a": {"status": "covered"},
+    "SPLIT-2/remainder_path": {"status": "covered"}
+  },
+  "scenario_count": {"min": 2, "max": 2},
+  "case_count": {"min": 3, "max": 3},
+  "contact_count": 9,
+  "cases": [
+    {"end_activity": "UPDATE-1", "manual_actions": [], "contact_count": 3},
+    {"end_activity": "UPDATE-2", "manual_actions": [], "contact_count": 3},
+    {"end_activity": "UPDATE-3", "manual_actions": [], "contact_count": 3}
+  ],
+  "unsupported": [],
+  "checks_pass": true
+}
