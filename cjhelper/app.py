@@ -26,7 +26,9 @@ bytes to ``render()``, which draws steps 2 to 4; the tests drive ``render()`` di
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import logging
 import re
@@ -94,7 +96,7 @@ DETAIL_LIMIT = 20        # details shown under a failed trust check
 
 DETECTION_KEY = "cjhelper.detection"   # st.session_state: (file digest, DetectionSummary)
 RESULT_KEY = "cjhelper.result"         # st.session_state: StoredRun of the last generation
-PENDING_KEY = "cjhelper.pending"       # st.session_state: (file digest, Settings) from the Generate click to the run that generates
+PENDING_KEY = "cjhelper.pending"       # st.session_state: (file digest, Settings) from the click to the generation
 
 # Plain names of the activity kinds, in the order of the spec's "Supported in the PoC" table.
 ACTIVITY_NAMES: dict[str, str] = {
@@ -140,7 +142,8 @@ SETTING_NOTES: dict[str, str] = {
 }
 SETTING_HELP: dict[str, str] = {
     "fake_phone": "The clearly fake number written for every contact.",
-    "wait_offset_hours": "Wait-by-attribute dates are the generation time plus this offset, so 0 ends the wait at once.",
+    "wait_offset_hours": ("Wait-by-attribute dates are the generation time plus this offset, so 0 ends the wait "
+                          "at once."),
     "wait_offset_before_engagement_hours": ("For a wait-by-attribute on the path to an engagement split: "
                                             "time left to open the email."),
     "activation_field": ("A Boolean field of a scenario-level table. When one active scenario at a time is on, "
@@ -336,9 +339,17 @@ class StoredRun:
 
 
 def done_line(result: GenerationResult) -> str:
-    text = f"Done at {result.generation_time:%H:%M}"
+    """The line that ends a generation: when, with which run identifier, and the trust checks' result."""
     run_id = result.settings.run_id
-    return f"{text}, run identifier {run_id}." if run_id else f"{text}."
+    text = f"Done at {result.generation_time:%H:%M}" + (f", run identifier {run_id}." if run_id else ".")
+    total = len(result.checks)
+    failed = sum(1 for check in result.checks if not check.passed)
+    if failed:
+        text += (f" {failed} of {_count(total, 'trust check', 'trust checks')} failed: read Trust checks below "
+                 "before you import.")
+    elif total:
+        text += f" {total} of {_count(total, 'trust check', 'trust checks')} passed."
+    return text
 
 
 def summary_rows(result: GenerationResult) -> list[tuple[str, int]]:
@@ -370,8 +381,8 @@ def summary_notes(result: GenerationResult) -> list[str]:
         roots = {tuple(b.behind) for b in behind}
         verb = "lies" if len(behind) == 1 else "lie"
         notes.append(f"{len(behind)} of the {_count(len(missing), 'branch', 'branches')} not covered {verb} behind "
-                     f"{_count(len(roots), 'branch', 'branches')} that no contact can reach. report.md explains "
-                     "why, under Branches not covered.")
+                     f"{_count(len(roots), 'branch', 'branches')} that no contact can reach (see "
+                     f"{outputs.REPORT_FILE}).")
     elif missing:
         notes.append("report.md gives the reason for each branch not covered.")
     kinds = _unique(action.kind for case in result.coverage.cases for action in case.manual_actions)
@@ -409,13 +420,15 @@ def generation_warnings(result: GenerationResult) -> tuple[list[str], bool]:
     return warning_lines(warnings, result.package.journey.activities)
 
 
-def csv_preview(content: bytes, limit: int = PREVIEW_ROWS) -> tuple[dict[str, list[str]], int]:
-    """The first ``limit`` rows of a written CSV as {column: values}, exactly as written (an empty cell
-    stays empty), and the number of rows."""
-    header, rows = outputs.read_csv(content)
-    shown = rows[:limit]
-    columns = {name: ["" if row.get(name) is None else str(row[name]) for row in shown] for name in header}
-    return columns, len(rows)
+def csv_preview(content: bytes, limit: int = PREVIEW_ROWS) -> tuple[str, int]:
+    """The header and the first ``limit`` rows of a written CSV, as the file writes them (comma-separated,
+    minimal quoting, outputs.py's format), and the number of rows."""
+    records = [record for record in csv.reader(io.StringIO(content.decode("utf-8-sig"), newline="")) if record]
+    if not records:
+        return "", 0
+    text = io.StringIO()
+    csv.writer(text, lineterminator="\n").writerows(records[:limit + 1])
+    return text.getvalue().rstrip("\n"), len(records) - 1
 
 
 def preview_files(result: GenerationResult) -> list[str]:
@@ -464,7 +477,8 @@ def error_message(error: BaseException) -> str:
         return UNEXPECTED_READ
     parse_error = error if isinstance(error, json.JSONDecodeError) else _json_error_behind(error)
     if parse_error is not None:
-        text = f"The file is not valid JSON: there is a problem at line {parse_error.lineno}, column {parse_error.colno}."
+        text = (f"The file is not valid JSON: there is a problem at line {parse_error.lineno}, "
+                f"column {parse_error.colno}.")
     elif isinstance(error, UnicodeDecodeError):
         text = "The file is not UTF-8 text, so it is not a valid JSON package export."
     else:
@@ -541,8 +555,9 @@ def render(data: Optional[bytes]) -> None:
 
 
 def render_result(result: GenerationResult, zip_bytes: bytes) -> None:
-    """Step 4 after a generation: done line, summary, what to do before importing, trust checks, a
-    preview of each CSV, the download, then the warnings of the generation."""
+    """Step 4 after a generation, in the order a tester needs it: the done line with the trust checks'
+    result, the summary, what to do before importing, a preview of each CSV, the download, then the
+    trust checks one by one and the warnings of the generation."""
     st.markdown(_md(done_line(result)))
 
     _label("Summary")
@@ -552,6 +567,22 @@ def render_result(result: GenerationResult, zip_bytes: bytes) -> None:
 
     _label("Before you import")
     _show_list(import_notes(result), empty="")
+
+    _label("Preview of the CSVs")
+    for name in preview_files(result):
+        text, total = csv_preview(result.files[name])
+        title = f"{name}: the run plan" if name == outputs.SCENARIOS_FILE else name
+        with st.expander(_md(f"{title} ({_count(total, 'row', 'rows')})")):
+            if total > PREVIEW_ROWS:
+                st.caption(f"The first {PREVIEW_ROWS} of {total} rows.")
+            # The file's own lines: a preview holds only its first rows, so it offers no CSV download of its own.
+            st.code(text, language=None)
+
+    _label("Download")
+    file_name = zip_file_name(result.package.journey.name)
+    st.download_button(DOWNLOAD_LABEL, data=zip_bytes, file_name=file_name, mime="application/zip", type="primary")
+    st.markdown(_md(f"{file_name} holds {_count(len(result.files), 'file', 'files')}:"))
+    _show_list(download_lines(result), empty="")
 
     _label("Trust checks")
     checks = result.checks
@@ -566,23 +597,6 @@ def render_result(result: GenerationResult, zip_bytes: bytes) -> None:
                 lines.append(f"    - and {len(check.details) - DETAIL_LIMIT} more")
     if lines:
         st.markdown("\n".join(lines))
-
-    _label("Preview of the CSVs")
-    for name in preview_files(result):
-        columns, total = csv_preview(result.files[name])
-        title = f"{name}: the run plan" if name == outputs.SCENARIOS_FILE else name
-        with st.expander(_md(f"{title} ({_count(total, 'row', 'rows')})")):
-            if total > PREVIEW_ROWS:
-                st.caption(f"The first {PREVIEW_ROWS} of {total} rows.")
-            # A static table: a preview holds only its first rows, so it offers no CSV download of its own.
-            st.table({_md(column): [_md(value) for value in values] for column, values in columns.items()},
-                     hide_index=True, hide_header=False)
-
-    _label("Download")
-    file_name = zip_file_name(result.package.journey.name)
-    st.markdown(_md(f"{file_name} holds {_count(len(result.files), 'file', 'files')}:"))
-    _show_list(download_lines(result), empty="")
-    st.download_button(DOWNLOAD_LABEL, data=zip_bytes, file_name=file_name, mime="application/zip", type="primary")
 
     warnings, left_out = generation_warnings(result)
     _label("Warnings from the generation")
