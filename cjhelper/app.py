@@ -74,7 +74,6 @@ from cjhelper.model import (  # noqa: E402
 LOG = logging.getLogger(__name__)
 
 TITLE = "CJ Test Helper"
-HEADER_NOTE = "Il file viene letto in memoria e poi scartato. Non viene salvato nulla."
 # The spec's four steps: the title of each card, and its name and description in the stepper.
 STEP_UPLOAD = "Carica l'export"
 STEP_REVIEW = "Verifica il rilevamento"
@@ -931,11 +930,11 @@ def _html(text: str) -> str:
 
 
 def _header_html() -> str:
-    """Logo (docs/brand.md: primary version, at least 90 px wide), app name, and the privacy note."""
+    """Logo (docs/brand.md: primary version, at least 90 px wide) and app name."""
     logo = base64.b64encode(LOGO_FILE.read_bytes()).decode("ascii")
     return (f'<div class="cj-header"><img src="data:image/svg+xml;base64,{logo}" alt="Lutech">'
-            f'<span class="cj-sep"></span><span class="cj-name">{_html(TITLE)}</span>'
-            f'<span class="cj-note">{_html(HEADER_NOTE)}</span></div><div class="cj-rule"></div>')
+            f'<span class="cj-sep"></span><span class="cj-name">{_html(TITLE)}</span></div>'
+            f'<div class="cj-rule"></div>')
 
 
 def _stepper_html(phase: str) -> str:
