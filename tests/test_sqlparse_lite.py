@@ -428,7 +428,7 @@ def test_or_group_becomes_unsupported_filter():
         EqualityFilter(ColumnRef(CONFIG, "ACTIVE"), "True"),
         UnsupportedFilter("C.CHANNEL1 = 'Email' OR C.CHANNEL1 = 'SMS'"),
     ]
-    assert warned(parsed, "filter not understood", "C.CHANNEL1 = 'Email' OR C.CHANNEL1 = 'SMS'")
+    assert warned(parsed, "filtro non compreso", "C.CHANNEL1 = 'Email' OR C.CHANNEL1 = 'SMS'")
 
 
 def test_top_level_or_is_one_unsupported_filter():
@@ -534,7 +534,7 @@ def test_other_conditions_are_unsupported_filters(condition):
     assert parsed.filters[0] == EqualityFilter(ColumnRef(CONFIG, "ACTIVE"), "True")
     assert len(parsed.filters) == 2
     assert isinstance(parsed.filters[1], UnsupportedFilter)
-    assert warned(parsed, "filter not understood", parsed.filters[1].text)
+    assert warned(parsed, "filtro non compreso", parsed.filters[1].text)
 
 
 def test_unsupported_filter_text_leaves_comments_out():
@@ -556,7 +556,7 @@ def test_non_equality_join_condition_gives_a_warning():
         f"AND T.LastSyncedAt > M.Entitle_CommitmentStartDate"
     )
     assert parsed.joins == [JoinEquality(ColumnRef(MASTER, "ContactId"), ColumnRef(TARGET, "SalesforceId"))]
-    assert warned(parsed, "join condition not understood", "T.LastSyncedAt > M.Entitle_CommitmentStartDate")
+    assert warned(parsed, "condizione di join non compresa", "T.LastSyncedAt > M.Entitle_CommitmentStartDate")
 
 
 @pytest.mark.parametrize("on", [
@@ -568,7 +568,7 @@ def test_join_conditions_that_are_not_equalities_are_left_out(on):
     parsed = parse(f"SELECT M.ContactId FROM [{MASTER}] M JOIN [{TARGET}] T ON {on}")
     assert parsed.sources == [TableRef(MASTER, "M"), TableRef(TARGET, "T")]
     assert parsed.joins == []
-    assert warned(parsed, "join condition not understood")
+    assert warned(parsed, "condizione di join non compresa")
 
 
 def test_join_condition_with_a_literal_is_not_a_join():
@@ -577,7 +577,7 @@ def test_join_condition_with_a_literal_is_not_a_join():
         f"JOIN [{TARGET}] T ON (M.ContactId = T.SalesforceId) AND T.Description = 'Campaign A'"
     )
     assert parsed.joins == [JoinEquality(ColumnRef(MASTER, "ContactId"), ColumnRef(TARGET, "SalesforceId"))]
-    assert warned(parsed, "join condition not understood", "T.Description = 'Campaign A'")
+    assert warned(parsed, "condizione di join non compresa", "T.Description = 'Campaign A'")
 
 
 def test_left_join_is_read_as_an_inner_join_with_a_warning():
@@ -596,14 +596,14 @@ def test_join_without_on_condition_is_reported(from_clause):
     parsed = parse(f"SELECT M.ContactId {from_clause}")
     assert parsed.sources == [TableRef(MASTER, "M"), TableRef(TARGET, "T")]
     assert parsed.joins == []
-    assert warned(parsed, TARGET, "without an ON condition")
+    assert warned(parsed, TARGET, "senza una condizione ON")
 
 
 def test_join_on_a_column_of_unknown_table_is_left_out():
     parsed = parse(f"SELECT M.ContactId FROM [{MASTER}] M JOIN [{TARGET}] T ON M.ContactId = X.SalesforceId")
     assert parsed.joins == []
-    assert warned(parsed, "X.SalesforceId", "not a table or alias")
-    assert warned(parsed, "join condition ignored", "M.ContactId = X.SalesforceId")
+    assert warned(parsed, "X.SalesforceId", "non è una tabella né un alias")
+    assert warned(parsed, "condizione di join ignorata", "M.ContactId = X.SalesforceId")
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +613,7 @@ def test_join_on_a_column_of_unknown_table_is_left_out():
 def test_unresolvable_column_gives_empty_table_and_a_warning():
     parsed = parse(f"SELECT M.ContactId, NoSuchField {FROM_MASTER}")
     assert parsed.select[1] == SelectItem("NoSuchField", SelectColumn(ColumnRef("", "NoSuchField")))
-    assert warned(parsed, "column NoSuchField", "no table of the FROM/JOIN")
+    assert warned(parsed, "colonna NoSuchField", "nessuna tabella nota del FROM/JOIN")
 
 
 def test_column_found_in_several_tables_is_not_resolved():
@@ -621,13 +621,13 @@ def test_column_found_in_several_tables_is_not_resolved():
         f"SELECT CampaignName FROM [{CONFIG}] a JOIN [{ENTRY}] b ON a.CampaignName = b.CampaignName"
     )
     assert parsed.select == [SelectItem("CampaignName", SelectColumn(ColumnRef("", "CampaignName")))]
-    assert warned(parsed, "column CampaignName", "several tables", CONFIG, ENTRY)
+    assert warned(parsed, "colonna CampaignName", "più tabelle", CONFIG, ENTRY)
 
 
 def test_unknown_qualifier_gives_empty_table_and_a_warning():
     parsed = parse(f"SELECT X.ContactId {FROM_MASTER}")
     assert parsed.select == [SelectItem("ContactId", SelectColumn(ColumnRef("", "ContactId")))]
-    assert warned(parsed, "X.ContactId", "not a table or alias")
+    assert warned(parsed, "X.ContactId", "non è una tabella né un alias")
 
 
 def test_bare_table_name_as_qualifier():
@@ -650,7 +650,7 @@ def test_aliases_and_table_names_ignore_letter_case():
 def test_qualified_column_missing_from_the_schema_is_reported():
     parsed = parse(f"SELECT M.NoSuchField {FROM_MASTER}")
     assert parsed.select == [SelectItem("NoSuchField", SelectColumn(ColumnRef(MASTER, "NoSuchField")))]
-    assert warned(parsed, f"table {MASTER} has no field named NoSuchField")
+    assert warned(parsed, f"la tabella {MASTER} non ha un campo NoSuchField")
 
 
 def test_shared_table_with_ent_prefix():
@@ -690,7 +690,7 @@ def test_shared_table_named_in_full_as_qualifier():
 def test_other_table_prefix_is_ignored_with_a_warning():
     parsed = parse(f"SELECT M.ContactId FROM dbo.[{MASTER}] M")
     assert parsed.sources == [TableRef(MASTER, "M")]
-    assert warned(parsed, "prefix", MASTER)
+    assert warned(parsed, "prefisso", MASTER)
 
 
 def test_table_missing_from_the_export_is_reported():
@@ -700,15 +700,15 @@ def test_table_missing_from_the_export_is_reported():
         SelectItem("SubscriberKey", SelectColumn(ColumnRef("_Subscribers", "SubscriberKey"))),
         SelectItem("EmailAddress", SelectColumn(ColumnRef("", "EmailAddress"))),
     ]
-    assert warned(parsed, "table _Subscribers is not in the export")
-    assert warned(parsed, "column EmailAddress")
+    assert warned(parsed, "la tabella _Subscribers non è nell'export")
+    assert warned(parsed, "colonna EmailAddress")
 
 
 def test_warnings_name_the_query_and_are_not_repeated():
     parsed = parse(f"SELECT NoSuchField, NoSuchField AS Again {FROM_MASTER} WHERE NoSuchField = 'x'")
     assert parsed.warnings == [
-        "Query Q_TEST: column NoSuchField: no table of the FROM/JOIN is known to have it, "
-        "so its table is unknown",
+        "Query Q_TEST: colonna NoSuchField: nessuna tabella nota del FROM/JOIN la contiene, "
+        "quindi la sua tabella è sconosciuta",
     ]
     assert parsed.filters == [EqualityFilter(ColumnRef("", "NoSuchField"), "x")]
 
@@ -727,9 +727,9 @@ def test_functions_in_select_are_unsupported():
         SelectItem("City", SelectUnsupported("ISNULL(M.City, 'n/a')")),
         SelectItem("FullName", SelectUnsupported("M.FirstName + ' ' + M.LastName")),
     ]
-    assert warned(parsed, "column FirstName", "expression not understood", "UPPER(M.FirstName)")
-    assert warned(parsed, "column City", "ISNULL(M.City, 'n/a')")
-    assert warned(parsed, "column FullName", "M.FirstName + ' ' + M.LastName")
+    assert warned(parsed, "colonna FirstName", "espressione non compresa", "UPPER(M.FirstName)")
+    assert warned(parsed, "colonna City", "ISNULL(M.City, 'n/a')")
+    assert warned(parsed, "colonna FullName", "M.FirstName + ' ' + M.LastName")
 
 
 def test_select_literals():
@@ -789,7 +789,7 @@ def test_other_select_expressions_are_unsupported(expression):
     item = parsed.select[0]
     assert item.target_column == "X"
     assert isinstance(item.expr, SelectUnsupported)
-    assert warned(parsed, "column X", "expression not understood", item.expr.text)
+    assert warned(parsed, "colonna X", "espressione non compresa", item.expr.text)
 
 
 def test_concat_keeps_its_parts_even_when_one_is_unsupported():
@@ -800,7 +800,7 @@ def test_concat_keeps_its_parts_even_when_one_is_unsupported():
         SelectUnsupported("UPPER(M.City)"),
         SelectConcat((SelectLiteral("a"), SelectLiteral("1"))),
     )))]
-    assert warned(parsed, "column X", "UPPER(M.City)")
+    assert warned(parsed, "colonna X", "UPPER(M.City)")
 
 
 def test_alias_forms():
@@ -821,7 +821,7 @@ def test_select_item_without_a_name_is_reported():
         SelectItem("", SelectLiteral("x")),
         SelectItem("", SelectCurrentDate(None)),
     ]
-    assert warned(parsed, "select item 'x' has no column name")
+    assert warned(parsed, "l'elemento della SELECT 'x' non ha un nome di colonna")
 
 
 def test_table_star_is_read_as_select_star_with_a_warning():
@@ -858,14 +858,14 @@ def test_unparseable_sql_gives_empty_result_and_one_warning(sql):
     assert parsed.filters == []
     assert parsed.select == []
     assert len(parsed.warnings) == 1
-    assert parsed.warnings[0].startswith("Query Q_TEST: the SQL could not be parsed: ")
+    assert parsed.warnings[0].startswith("Query Q_TEST: non è stato possibile analizzare il codice SQL: ")
 
 
 def test_parse_error_names_the_problem_in_plain_text():
     parsed = parse("SELECT FROM WHERE")
     assert parsed.warnings == [
-        "Query Q_TEST: the SQL could not be parsed: Expected table name but got 'WHERE', "
-        "near 'WHERE' at line 1, column 17"
+        "Query Q_TEST: non è stato possibile analizzare il codice SQL: Expected table name but got 'WHERE', "
+        "vicino a 'WHERE' alla riga 1, colonna 17"
     ]
 
 
@@ -873,32 +873,32 @@ def test_parse_error_names_the_problem_in_plain_text():
 def test_empty_sql_gives_one_warning(sql):
     parsed = parse(sql)
     assert (parsed.sources, parsed.select, parsed.select_all) == ([], [], False)
-    assert parsed.warnings == ["Query Q_TEST: the SQL is empty"]
+    assert parsed.warnings == ["Query Q_TEST: il codice SQL è vuoto"]
 
 
 def test_select_without_columns_is_reported():
     parsed = parse("SELECT")
     assert parsed.select == []
-    assert parsed.warnings == ["Query Q_TEST: the SELECT lists no columns"]
+    assert parsed.warnings == ["Query Q_TEST: la SELECT non elenca alcuna colonna"]
 
 
 def test_statement_that_is_not_a_select_is_not_read():
     parsed = parse(f"UPDATE [{CONFIG}] SET HAS_RUN = 'True'")
     assert parsed.sources == []
-    assert parsed.warnings == ["Query Q_TEST: the SQL is not a SELECT (UPDATE statement); nothing was read"]
+    assert parsed.warnings == ["Query Q_TEST: il codice SQL non è una SELECT (istruzione UPDATE); non è stato letto nulla"]
 
 
 def test_union_reads_the_first_select():
     parsed = parse(f"SELECT M.ContactId {FROM_MASTER} UNION SELECT T.SalesforceId FROM [{TARGET}] T")
     assert parsed.sources == [TableRef(MASTER, "M")]
     assert parsed.select == [SelectItem("ContactId", SelectColumn(ColumnRef(MASTER, "ContactId")))]
-    assert warned(parsed, "UNION", "only the first SELECT is read")
+    assert warned(parsed, "UNION", "viene letta solo la prima SELECT")
 
 
 def test_several_statements_read_the_first():
     parsed = parse(f"SELECT M.ContactId {FROM_MASTER}; SELECT C.CampaignName {FROM_CONFIG}")
     assert parsed.sources == [TableRef(MASTER, "M")]
-    assert warned(parsed, "2 statements", "only the first one is read")
+    assert warned(parsed, "2 istruzioni", "viene letta solo la prima")
 
 
 @pytest.mark.parametrize("sql, part", [
@@ -911,13 +911,13 @@ def test_several_statements_read_the_first():
 ])
 def test_parts_that_are_not_read_are_reported(sql, part):
     parsed = parse(sql)
-    assert warned(parsed, f"the {part} part of the query is ignored")
+    assert warned(parsed, f"la parte {part} della query è ignorata")
 
 
 def test_subquery_in_from_is_reported():
     parsed = parse(f"SELECT s.ContactId FROM (SELECT M.ContactId {FROM_MASTER}) s")
     assert parsed.sources == []
-    assert warned(parsed, "in the FROM/JOIN is not a table")
+    assert warned(parsed, "nel FROM/JOIN non è una tabella")
     assert parsed.select == [SelectItem("ContactId", SelectColumn(ColumnRef("", "ContactId")))]
 
 
@@ -930,14 +930,14 @@ def test_joined_subquery_and_apply_are_reported_once_and_not_joined():
     assert parsed.sources == [TableRef(MASTER, "M")]
     assert parsed.joins == []
     assert len(parsed.warnings) == 2
-    assert warned(parsed, "SELECT T.SalesforceId", "is not a table and was not read")
-    assert warned(parsed, "OPENJSON(M.City)", "is not a table and was not read")
+    assert warned(parsed, "SELECT T.SalesforceId", "non è una tabella e non è stato letto")
+    assert warned(parsed, "OPENJSON(M.City)", "non è una tabella e non è stato letto")
 
 
 def test_pivot_on_a_table_is_reported():
     parsed = parse(f"SELECT C.CampaignName FROM [{CONFIG}] PIVOT (MAX(v) FOR k IN ([x], [y])) p")
     assert parsed.sources == [TableRef(CONFIG, None)]
-    assert warned(parsed, f"the PIVOT on table {CONFIG} is ignored")
+    assert warned(parsed, f"il PIVOT sulla tabella {CONFIG} è ignorato")
 
 
 def test_long_and_chain_is_read_in_full():
@@ -962,7 +962,7 @@ def test_unexpected_error_keeps_what_was_read(monkeypatch):
     assert len(parsed.filters) == 4
     assert parsed.select == []
     assert parsed.warnings == [
-        "Query Q_SKYDE_AdHoc_Target: the SQL was only partly read because of an unexpected error "
+        "Query Q_SKYDE_AdHoc_Target: il codice SQL è stato letto solo in parte a causa di un errore imprevisto "
         "(ValueError: boom)"
     ]
 
@@ -987,7 +987,7 @@ def test_unexpected_error_keeps_what_was_read(monkeypatch):
 def test_odd_sql_never_raises(sql):
     parsed = parse(sql)
     assert isinstance(parsed, ParsedQuery)
-    assert not warned(parsed, "unexpected error")  # the module's own safety net was not needed
+    assert not warned(parsed, "errore imprevisto")  # the module's own safety net was not needed
 
 
 def test_the_standard_tsql_dialect_is_left_unchanged():
@@ -1042,4 +1042,4 @@ def test_format_with_tokens_the_poc_cannot_write_is_unsupported():
     assert unsupported_dotnet_tokens("d/M/yyyy HH:mm:ss.fff") == ["d", "M", "fff"]
     parsed = parse(f"SELECT FORMAT(GETUTCDATE(), 'd/M/yyyy') AS X {FROM_MASTER}")
     assert isinstance(parsed.select[0].expr, SelectUnsupported)
-    assert warned(parsed, "column X", "tokens")
+    assert warned(parsed, "colonna X", "token che il PoC non sa scrivere")

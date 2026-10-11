@@ -479,7 +479,7 @@ def test_unsupported_source_type_raises_load_error():
 def test_export_without_journey_raises_load_error():
     export = make_export()
     del export["entities"]["journeys"]
-    with pytest.raises(LoadError, match="no journey"):
+    with pytest.raises(LoadError, match="non contiene alcun journey"):
         load_package(export)
     with pytest.raises(LoadError):
         load_package({"name": "not an export"})
@@ -488,21 +488,21 @@ def test_export_without_journey_raises_load_error():
 def test_journey_without_trigger_raises_load_error():
     export = make_export()
     export["entities"]["journeys"][JOURNEY]["data"]["triggers"] = []
-    with pytest.raises(LoadError, match="entry"):
+    with pytest.raises(LoadError, match="trigger di ingresso"):
         load_package(export)
 
 
 def test_missing_entry_event_raises_load_error():
     export = make_export()
     del export["entities"]["eventDefinitions"][EVENT]
-    with pytest.raises(LoadError, match="entry"):
+    with pytest.raises(LoadError, match="entry event del journey non è nell'export"):
         load_package(export)
 
 
 def test_missing_entry_table_raises_load_error():
     export = make_export()
     del export["entities"]["dataExtensions"][ENTRY]
-    with pytest.raises(LoadError, match="entry table"):
+    with pytest.raises(LoadError, match="tabella di ingresso dell'entry event"):
         load_package(export)
 
 
@@ -523,7 +523,8 @@ def with_two_journeys(selected):
 def test_selected_journey_is_used():
     package = load_package(with_two_journeys([OTHER_JOURNEY]))
     assert package.journey.name == "J_Other"
-    assert not has_warning(package, "journeys") and not has_warning(package, "selected journey")
+    assert not has_warning(package, "seleziona") and not has_warning(package, "nessuno è selezionato")
+    assert not has_warning(package, "journey selezionato")
 
 
 def test_single_journey_is_used_without_selection():
@@ -531,13 +532,13 @@ def test_single_journey_is_used_without_selection():
     del export["selectedEntities"]
     package = load_package(export)
     assert package.journey.name == "J_Test"
-    assert not has_warning(package, "selects")
+    assert not has_warning(package, "seleziona")
 
 
 def test_several_journeys_without_selection_use_the_first_with_a_warning():
     package = load_package(with_two_journeys(None))
     assert package.journey.name == "J_Test"
-    assert has_warning(package, "2 journeys", "J_Test")
+    assert has_warning(package, "contiene 2 journey", "J_Test")
 
 
 def test_selected_journey_missing_from_the_export_is_reported():
@@ -558,7 +559,7 @@ def test_references_of_other_journeys_are_not_reported():
 def test_several_selected_journeys_use_the_first_with_a_warning():
     package = load_package(with_two_journeys([OTHER_JOURNEY, JOURNEY]))
     assert package.journey.name == "J_Other"
-    assert has_warning(package, "selects 2 journeys")
+    assert has_warning(package, "seleziona 2 journey")
 
 
 # ---------------------------------------------------------------------------
@@ -600,7 +601,7 @@ def test_two_tables_with_the_same_name_keep_the_first():
     export["entities"]["sharedDataExtensions"] = {"de-copy": table("DE_Log", [field("Other")])}
     package = load_package(export)
     assert package.tables["DE_Log"].id == LOG
-    assert has_warning(package, "Two tables are named DE_Log")
+    assert has_warning(package, "Due tabelle si chiamano DE_Log")
 
 
 def test_relationships_resolved_through_attribute_sets():
@@ -666,7 +667,7 @@ def test_entry_event_and_automation():
 def test_default_reading_another_entry_event_is_reported():
     package = load()
     assert has_warning(package, "mobileNumber", "DEAudience-2", "Old event", "DEAudience-1")
-    assert not has_warning(package, "default email")
+    assert not has_warning(package, "valore predefinito email")
 
 
 def test_default_email_reading_another_entry_event():
@@ -676,7 +677,7 @@ def test_default_email_reading_another_entry_event():
         "{{Event." + ref("eventDefinitions", OLD_EVENT, "eventDefinitionKey") + '."Emailaddress"}}']
     package = load_package(export)
     assert package.journey.default_email_event_key == "DEAudience-2"
-    assert has_warning(package, "default email", "DEAudience-2")
+    assert has_warning(package, "valore predefinito email", "DEAudience-2")
     assert not has_warning(package, "mobileNumber")
 
 
@@ -716,7 +717,7 @@ def test_several_start_candidates_take_the_first_with_a_warning():
     activities.insert(0, update("ORPHAN-1", None, [write(LOG, "Note", "x")]))
     package = load(activities)
     assert package.journey.start_key == "ORPHAN-1"
-    assert has_warning(package, "ORPHAN-1", "DECISION-1", "no incoming link")
+    assert has_warning(package, "ORPHAN-1", "DECISION-1", "collegamenti in entrata")
 
 
 def test_decision_outcomes_formula_and_remainder():
@@ -754,7 +755,7 @@ def test_condition_on_unknown_attribute_set_keeps_the_name_with_a_warning():
         '<Condition Key="DE_Log.Note" Operator="Equal"><Value><![CDATA[x]]></Value></Condition>')
     package = load(activities)
     assert package.journey.activities["DECISION-1"].outcomes[1].formula == Condition("DE_Log", "Note", "Equal", "x")
-    assert has_warning(package, "No attribute set is named DE_Log")
+    assert has_warning(package, "Nessun attribute set si chiama DE_Log")
 
 
 def test_condition_field_spelling_follows_the_schema():
@@ -788,7 +789,7 @@ def test_unreadable_criteria_make_the_split_unsupported():
     assert channel.kind == KIND_UNSUPPORTED and channel.raw_type == "MULTICRITERIADECISION"
     assert all(o.formula is None and not o.is_remainder for o in channel.outcomes)
     assert package.unsupported_activities == ["DECISION-1"]
-    assert has_warning(package, "DECISION-1", "unsupported", "SMS")
+    assert has_warning(package, "DECISION-1", "non supportata", "SMS")
 
 
 def test_unsupported_operator_is_reported():
@@ -801,7 +802,7 @@ def test_unsupported_operator_is_reported():
     # not covered"; the outcome is unsupported instead of crashing the generation.
     assert channel.kind == KIND_DECISION
     assert "Between" in channel.outcomes[1].unsupported_reason
-    assert has_warning(package, "DECISION-1", "Between", "not support")
+    assert has_warning(package, "DECISION-1", "Between", "non supporta")
 
 
 def test_decision_without_remainder_is_reported():
@@ -888,13 +889,13 @@ def test_wait_by_attribute_without_any_field_is_reported():
     activities[2]["metaData"].pop("attribute")
     package = load(activities)
     assert package.journey.activities["WAITATTR-1"].wait_field is None
-    assert has_warning(package, "WAITATTR-1", "cannot be identified")
+    assert has_warning(package, "WAITATTR-1", "non è possibile identificare")
 
 
 def test_wait_by_attribute_offset_is_reported():
     activities = default_activities()
     activities[2]["configurationArguments"]["waitDuration"] = 2
-    assert has_warning(load(activities), "WAITATTR-1", "waitDuration of 2 DAYS")
+    assert has_warning(load(activities), "WAITATTR-1", "waitDuration di 2 DAYS")
 
 
 def test_wait_with_unknown_ui_type_is_unsupported():
@@ -1086,7 +1087,7 @@ def test_pilot_warnings(pilot):
 def test_constant_write_into_primary_key_is_flagged():
     """Spec check: an update contact step that writes a constant into a primary-key field."""
     package = load(default_activities())
-    assert not any("primary-key field" in w for w in package.warnings)
+    assert not any("campo di chiave primaria" in w for w in package.warnings)
     activities = default_activities()
     activities.append({
         "key": "UPDATE-PK", "type": "UPDATECONTACTDATA", "name": "log",
@@ -1099,13 +1100,13 @@ def test_constant_write_into_primary_key_is_flagged():
         "outcomes": [{"key": "o", "next": None, "metaData": {}}],
     })
     package = load(activities)
-    flagged = [w for w in package.warnings if "primary-key field" in w]
+    flagged = [w for w in package.warnings if "campo di chiave primaria" in w]
     assert len(flagged) == 1 and "'FIXED'" in flagged[0] and "UPDATE-PK" in flagged[0]
 
 
 def test_pilot_flags_constant_writes_and_wide_one_to_one_join(pilot):
-    writes = [w for w in pilot.warnings if "primary-key field" in w]
+    writes = [w for w in pilot.warnings if "campo di chiave primaria" in w]
     assert any("DE_SkyDE_AdHoc_Log_partial.CampaignName" in w and "'DemoSKY'" in w for w in writes)
     assert any("DE_SkyDE_AdHoc_Log_partial.ActionId" in w and "'ActionId'" in w for w in writes)
-    joins = [w for w in pilot.warnings if "one-to-one relationship" in w]
+    joins = [w for w in pilot.warnings if "relazione uno a uno" in w]
     assert len(joins) == 1 and "DE_NCM_AdHoc_Entry" in joins[0] and "ActionId" in joins[0] and "CampaignName" in joins[0]

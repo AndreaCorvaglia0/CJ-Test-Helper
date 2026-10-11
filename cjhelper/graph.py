@@ -217,19 +217,21 @@ def engagement_verdict(activity: Activity, state: WalkState, emails: dict[str, E
     a click needs a link in that email."""
     ref = activity.engagement_ref
     if activity.engagement_kind not in ("open", "click"):
-        return EngagementVerdict(False, "the kind of engagement (open or click) could not be read from the export")
+        return EngagementVerdict(False, "non è stato possibile leggere dall'export il tipo di engagement "
+                                        "(open o click)")
     if not ref:
-        return EngagementVerdict(False, "the split does not name the email it refers to")
+        return EngagementVerdict(False, "lo split non indica l'email a cui si riferisce")
     if ref not in state.emails_sent:
         email = journey.activities.get(ref)
         name = email.email_name if email is not None and email.email_name else ref
-        return EngagementVerdict(False, f"the referenced email '{name}' ({ref}) is not sent on the paths reaching this split")
+        return EngagementVerdict(False, f"l'email di riferimento '{name}' ({ref}) non viene inviata sui percorsi "
+                                        f"che raggiungono questo split")
     if activity.engagement_kind == "click":
         email = journey.activities.get(ref)
         asset = emails.get(email.email_asset_id) if email is not None and email.email_asset_id else None
         if asset is None or not asset.has_link:
             name = email.email_name if email is not None and email.email_name else ref
-            return EngagementVerdict(False, f"the referenced email '{name}' has no link to click")
+            return EngagementVerdict(False, f"l'email di riferimento '{name}' non contiene link da cliccare")
     return EngagementVerdict(True)
 
 
@@ -257,7 +259,7 @@ class Walker:
         state.current = self.journey.start_key
         if state.current is None:
             state.stop = STOP_ERROR
-            state.stop_detail = "the journey has no start activity"
+            state.stop_detail = "il journey non ha un'attività iniziale"
         return state
 
     def value_of(self, state: WalkState, ref: FieldRef, lookup: ValueLookup) -> "Value | Unknown":
@@ -285,11 +287,11 @@ class Walker:
         activity = self.journey.activities.get(key)
         if activity is None:
             state.stop = STOP_DANGLING
-            state.stop_detail = f"outcome points to a missing activity '{key}'"
+            state.stop_detail = f"un branch porta a un'attività mancante, '{key}'"
             return
         if key in state.visited:
             state.stop = STOP_LOOP
-            state.stop_detail = f"activity '{key}' reached twice on the same path"
+            state.stop_detail = f"l'attività '{key}' è raggiunta due volte sullo stesso percorso"
             return
         state.visited.add(key)
 
@@ -306,7 +308,7 @@ class Walker:
         elif kind == KIND_UNSUPPORTED:
             state.steps.append(Step(key, None))
             state.stop = STOP_UNSUPPORTED
-            state.stop_detail = f"activity '{key}' has the unsupported type {activity.raw_type}"
+            state.stop_detail = f"l'attività '{key}' è di un tipo non supportato, {activity.raw_type}"
         else:
             if kind == KIND_EMAIL:
                 state.emails_sent.append(key)
@@ -365,15 +367,15 @@ class Walker:
                 observe()
                 state.steps.append(Step(activity.key, None))
                 state.stop = STOP_UNSUPPORTED
-                state.stop_detail = (f"outcome '{outcome.label or outcome.key}' of split '{activity.key}' "
-                                     f"is not supported: {outcome.unsupported_reason}")
+                state.stop_detail = (f"il branch '{outcome.label or outcome.key}' dello split '{activity.key}' "
+                                     f"non è supportato: {outcome.unsupported_reason}")
                 return
             try:
                 result = evaluate(outcome.formula, value, self.schema, self.case_insensitive)
             except criteria.UnsupportedOperator as exc:
                 state.steps.append(Step(activity.key, None))
                 state.stop = STOP_ERROR
-                state.stop_detail = f"split '{activity.key}' uses an operator the PoC does not support: {exc}"
+                state.stop_detail = f"lo split '{activity.key}' usa un operatore che il PoC non supporta: {exc}"
                 return
             if isinstance(result, Unknown):
                 state.stop = STOP_UNDETERMINED
@@ -389,7 +391,7 @@ class Walker:
         state.steps.append(Step(activity.key, None))
         state.current = None
         state.stop = STOP_EXIT
-        state.stop_detail = f"split '{activity.key}' matched no outcome and has no remainder"
+        state.stop_detail = f"lo split '{activity.key}' non trova alcun branch corrispondente e non ha un remainder"
 
     def _update(self, activity: Activity, state: WalkState) -> None:
         """Spec: written values are tracked so a later split reads the updated value."""
@@ -451,13 +453,14 @@ def structural_problems(journey: Journey) -> list[str]:
     for a in journey.activities.values():
         for o in a.outcomes:
             if o.next is not None and o.next not in journey.activities:
-                problems.append(f"outcome '{o.key}' of activity '{a.key}' points to a missing activity '{o.next}'")
+                problems.append(f"il branch '{o.key}' dell'attività '{a.key}' porta a un'attività mancante, "
+                                f"'{o.next}'")
     preds = predecessors(journey)
     starts = [k for k, p in preds.items() if not p]
     if len(starts) > 1:
-        problems.append("several activities have no incoming link: " + ", ".join(starts)
-                        + f"; the journey starts at '{journey.start_key}'")
+        problems.append("più attività non hanno collegamenti in entrata: " + ", ".join(starts)
+                        + f"; il journey inizia da '{journey.start_key}'")
     unreachable = activities_behind(journey, set())
     if unreachable:
-        problems.append("activities not reachable from the start: " + ", ".join(sorted(unreachable)))
+        problems.append("attività non raggiungibili dall'inizio: " + ", ".join(sorted(unreachable)))
     return problems

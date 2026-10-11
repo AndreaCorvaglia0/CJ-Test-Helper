@@ -284,22 +284,24 @@ def test_pilot_shape_reasons_are_plain_words(sql):
     model = tables.build_table_model(pilot_like(sql))
     reasons = {name: role.reason for name, role in model.tables.items()}
 
-    assert reasons[ENTRY] == ("Entry table of the journey, filled by the entry query Q_Entry; also written by "
-                              "1 update contact step. Contact-level: it is the entry table, one row per contact.")
-    assert reasons[MASTER] == ("Read by 1 split and the entry query Q_Entry. Contact-level: joined to the entry "
-                               "on the contact key (DE_Master.ContactId).")
-    assert reasons[TARGET] == ("Read by the entry query Q_Entry. Contact-level: joined to the entry on the "
-                               "contact key (DE_Target.SalesforceId).")
+    assert reasons[ENTRY] == ("Tabella di ingresso del journey, popolata dalla entry query Q_Entry; scritta anche "
+                              "da 1 attività Update contact. A livello di contatto: è la tabella di ingresso, una "
+                              "riga per contatto.")
+    assert reasons[MASTER] == ("Letta da 1 split e dalla entry query Q_Entry. A livello di contatto: collegata alla "
+                               "tabella di ingresso tramite la chiave del contatto (DE_Master.ContactId).")
+    assert reasons[TARGET] == ("Letta dalla entry query Q_Entry. A livello di contatto: collegata alla tabella di "
+                               "ingresso tramite la chiave del contatto (DE_Target.SalesforceId).")
     assert reasons[CONFIG] == (
-        "Read by 2 splits, 1 wait by attribute and the entry query Q_Entry; also written by query "
-        "Q_ConfigUpdate. Scenario-level: joined on DE_Entry.CampaignName = DE_Config.CampaignName, not on "
-        "the contact key, so many contacts share one row. Its field ACTIVE is suggested as the activation "
-        "field (entry query filter active = 'True').")
-    assert reasons["DE_Log"] == "Written by 1 update contact step, never read by a split or by the entry query: no CSV."
-    assert reasons["DE_Check"] == "Written by query Q_Check, never read by a split or by the entry query: no CSV."
-    assert reasons["DE_Entry_Backup"] == ("Written by query Q_Backup, never read by a split or by the entry query: "
-                                          "no CSV.")
-    assert reasons["DE_Unused"] == "Not read or written by this journey."
+        "Letta da 2 split, da 1 Wait by attribute e dalla entry query Q_Entry; scritta anche dalla query "
+        "Q_ConfigUpdate. A livello di scenario: collegata tramite DE_Entry.CampaignName = DE_Config.CampaignName, "
+        "non tramite la chiave del contatto, quindi più contatti condividono una riga. Il suo campo ACTIVE è "
+        "suggerito come campo di attivazione (filtro della entry query active = 'True').")
+    assert reasons["DE_Log"] == ("Scritta da 1 attività Update contact, mai letta da uno split o dalla entry query: "
+                                 "nessun CSV.")
+    assert reasons["DE_Check"] == "Scritta dalla query Q_Check, mai letta da uno split o dalla entry query: nessun CSV."
+    assert reasons["DE_Entry_Backup"] == ("Scritta dalla query Q_Backup, mai letta da uno split o dalla entry query: "
+                                          "nessun CSV.")
+    assert reasons["DE_Unused"] == "Né letta né scritta da questo journey."
 
 
 # ---------------------------------------------------------------------------
@@ -327,13 +329,14 @@ def test_no_entry_query_leaves_the_entry_table_alone(sql):
     }
     assert model.activation_field is None
     assert model.warnings == [
-        "No query of the entry automation A_Entry fills the entry table DE_Entry, and no other query of the "
-        "export fills DE_Entry: there is no entry query, so the entry table alone is the source side",
-        "Table DE_Config is not joined to the entry: treated as one row shared by all contacts "
-        "(scenario-level). This is an assumption: check how the journey links this table",
+        "Nessuna query dell'automation di ingresso A_Entry popola la tabella di ingresso DE_Entry, e nessun'altra "
+        "query dell'export popola DE_Entry: non c'è una entry query, quindi l'unica sorgente è la tabella di "
+        "ingresso",
+        "La tabella DE_Config non è collegata alla tabella di ingresso: è trattata come una riga condivisa da tutti "
+        "i contatti (a livello di scenario). È un'assunzione: verifica come il journey collega questa tabella",
     ]
-    assert "filled by no query of the export" in model.tables[ENTRY].reason
-    assert "Scenario-level: not joined to the entry" in model.tables[CONFIG].reason
+    assert "non popolata da alcuna query dell'export" in model.tables[ENTRY].reason
+    assert "A livello di scenario: non collegata alla tabella di ingresso" in model.tables[CONFIG].reason
 
 
 def test_every_query_filling_the_entry_table_is_followed(sql):
@@ -356,14 +359,14 @@ def test_every_query_filling_the_entry_table_is_followed(sql):
     assert sorted(sql.calls) == ["Q_First", "Q_Second"]
     assert model.warnings == [
         "Query Q_Second: an OR group in WHERE is not understood",
-        "Several queries fill the entry table DE_Entry (Q_First and Q_Second): the tables they read are all "
-        "source tables, and the entry rows are built from Q_Second, the last one in step order",
+        "Più query popolano la tabella di ingresso DE_Entry (Q_First e Q_Second): le tabelle che leggono sono "
+        "tutte tabelle sorgente, e le righe di ingresso sono costruite da Q_Second, l'ultima nell'ordine degli step",
     ]
-    assert "also written by query Q_First" in model.tables[ENTRY].reason
+    assert "scritta anche dalla query Q_First" in model.tables[ENTRY].reason
     assert model.tables[MASTER].level == LEVEL_CONTACT
     other = model.tables["DE_Other"]
     assert (other.roles, other.selected, other.level) == ({ROLE_SOURCE}, True, LEVEL_CONTACT)
-    assert other.reason.startswith("Read by query Q_First, which fills DE_Entry.")
+    assert other.reason.startswith("Letta dalla query Q_First, che popola DE_Entry.")
 
 
 def test_a_post_processing_query_on_the_entry_table_does_not_replace_the_entry_query(sql):
@@ -381,9 +384,9 @@ def test_a_post_processing_query_on_the_entry_table_does_not_replace_the_entry_q
     assert model.tables[TARGET].roles == {ROLE_SOURCE}
     assert model.activation_field == (CONFIG, "ACTIVE")
     assert model.warnings == [
-        "Several queries fill the entry table DE_Entry (Q_Entry and Q_Mark): the tables they read are all "
-        "source tables, and the entry rows are built from Q_Entry, the last one that reads a table other "
-        "than DE_Entry",
+        "Più query popolano la tabella di ingresso DE_Entry (Q_Entry e Q_Mark): le tabelle che leggono sono "
+        "tutte tabelle sorgente, e le righe di ingresso sono costruite da Q_Entry, l'ultima che legge una tabella "
+        "diversa da DE_Entry",
     ]
 
 
@@ -401,9 +404,9 @@ def test_entry_query_found_outside_the_entry_automation(sql):
     # Master is a source, so the query writing it is followed too.
     assert [q.name for q in model.source_queries] == ["Q_Elsewhere", "Q_Unrelated"]
     assert model.warnings == [
-        "The entry automation A_Entry runs query Q_Missing, which is not in the export",
-        "No query of the entry automation A_Entry fills the entry table DE_Entry; query Q_Elsewhere fills "
-        "DE_Entry and is taken as the entry query",
+        "L'automation di ingresso A_Entry esegue la query Q_Missing, che non è nell'export",
+        "Nessuna query dell'automation di ingresso A_Entry popola la tabella di ingresso DE_Entry; la query "
+        "Q_Elsewhere popola DE_Entry e viene presa come entry query",
     ]
 
 
@@ -426,9 +429,9 @@ def test_table_both_written_and_read_is_selected(sql):
 
     master, config, log = model.tables[MASTER], model.tables[CONFIG], model.tables["DE_Log"]
     assert (master.roles, master.selected, master.level) == ({ROLE_SPLIT}, True, LEVEL_CONTACT)
-    assert master.reason.startswith("Read by 1 split; also written by 1 update contact step.")
+    assert master.reason.startswith("Letta da 1 split; scritta anche da 1 attività Update contact.")
     assert (config.roles, config.selected) == ({ROLE_SPLIT}, True)
-    assert config.reason.startswith("Read by 1 split; also written by query Q_Config.")
+    assert config.reason.startswith("Letta da 1 split; scritta anche dalla query Q_Config.")
     assert (log.roles, log.selected, log.level) == ({ROLE_WRITTEN}, False, None)
     assert sql.calls == []   # Q_Config feeds no source table: it is never parsed
 
@@ -441,9 +444,9 @@ def test_split_on_a_table_or_field_missing_from_the_export(sql):
     model = tables.build_table_model(package)
 
     assert list(model.tables) == [ENTRY]
-    assert "Table DE_Ghost is read by SPLIT-1 and SPLIT-3 but is not in the export: no CSV can be made for it" \
+    assert "La tabella DE_Ghost è letta da SPLIT-1 e SPLIT-3 ma non è nell'export: non è possibile crearne il CSV" \
         in model.warnings
-    assert "DE_Entry.Nope is read by SPLIT-2 but is not a field of the export" in model.warnings
+    assert "DE_Entry.Nope è letto da SPLIT-2 ma non è un campo dell'export" in model.warnings
 
 
 # ---------------------------------------------------------------------------
@@ -467,8 +470,8 @@ def test_source_chain_of_two_queries(sql):
         "DE_A": ({ROLE_SOURCE}, True, LEVEL_CONTACT),
         "DE_B": ({ROLE_SOURCE}, True, LEVEL_CONTACT),
     }
-    assert model.tables["DE_A"].reason.startswith("Read by the entry query Q1; also written by query Q2.")
-    assert model.tables["DE_B"].reason.startswith("Read by query Q2, which fills DE_A.")
+    assert model.tables["DE_A"].reason.startswith("Letta dalla entry query Q1; scritta anche dalla query Q2.")
+    assert model.tables["DE_B"].reason.startswith("Letta dalla query Q2, che popola DE_A.")
     # The copied contact key links the three tables; the copied e-mail columns do not become keys.
     assert groups(model) == [("contact", [(ENTRY, "ContactId"), ("DE_A", "Id"), ("DE_B", "Key")])]
     assert model.warnings == []
@@ -533,7 +536,7 @@ def test_contact_key_is_the_sendable_field_in_schema_spelling(sql):
     model = tables.build_table_model(package)
 
     assert model.contact_key_field == (ENTRY, "ContactId")
-    assert not any("contact key" in w for w in model.warnings)
+    assert not any("chiave del contatto" in w for w in model.warnings)
 
 
 def test_contact_key_falls_back_to_the_contact_link_of_the_entry_table(sql):
@@ -542,8 +545,8 @@ def test_contact_key_falls_back_to_the_contact_link_of_the_entry_table(sql):
     model = tables.build_table_model(package)
 
     assert model.contact_key_field == (ENTRY, "SubscriberKey")
-    assert ("The entry table DE_Entry has no usable sendable field: the contact key is SubscriberKey, the field "
-            "relationship Contact -> de_entry links to the contact") in model.warnings
+    assert ("La tabella di ingresso DE_Entry non ha un campo sendable utilizzabile: la chiave del contatto è "
+            "SubscriberKey, il campo che la relazione Contact -> de_entry collega al contatto") in model.warnings
 
 
 def test_contact_key_falls_back_to_a_single_field_primary_key(sql):
@@ -553,8 +556,8 @@ def test_contact_key_falls_back_to_a_single_field_primary_key(sql):
     model = tables.build_table_model(package)
 
     assert model.contact_key_field == (ENTRY, "Id")
-    assert ("The entry table DE_Entry has no usable sendable field and no contact link: the contact key is its "
-            "primary key Id") in model.warnings
+    assert ("La tabella di ingresso DE_Entry non ha un campo sendable utilizzabile né un collegamento al contatto: "
+            "la chiave del contatto è la sua chiave primaria Id") in model.warnings
 
 
 def test_contact_key_falls_back_to_the_first_of_several_primary_key_fields(sql):
@@ -563,7 +566,7 @@ def test_contact_key_falls_back_to_the_first_of_several_primary_key_fields(sql):
     model = tables.build_table_model(package)
 
     assert model.contact_key_field == (ENTRY, "ContactId")
-    assert any("several fields (ContactId and CampaignName)" in w and "the first one, ContactId" in w
+    assert any("più campi (ContactId e CampaignName)" in w and "si prende il primo, ContactId" in w
                for w in model.warnings)
 
 
@@ -572,7 +575,7 @@ def test_sendable_field_missing_from_the_schema_falls_back(sql):
     model = tables.build_table_model(package)
 
     assert model.contact_key_field == (ENTRY, "Id")
-    assert "The sendable field ContactId of the entry table DE_Entry is not in its schema" in model.warnings
+    assert "Il campo sendable ContactId della tabella di ingresso DE_Entry non è nel suo schema" in model.warnings
 
 
 # ---------------------------------------------------------------------------
@@ -617,9 +620,9 @@ def test_neighbour_of_a_scenario_table_is_scenario_level(sql):
         ("scenario", [(ENTRY, "CampaignName"), (CONFIG, "CampaignName")]),
         ("scenario", [(CONFIG, "PromoCode"), ("DE_Promo", "PromoCode")]),
     ]
-    assert ("Scenario-level: joined on DE_Config.PromoCode = DE_Promo.PromoCode, not on the contact key, so many "
-            "contacts share one row.") in model.tables["DE_Promo"].reason
-    assert not any("not joined to the entry" in w for w in model.warnings)
+    assert ("A livello di scenario: collegata tramite DE_Config.PromoCode = DE_Promo.PromoCode, non tramite la "
+            "chiave del contatto, quindi più contatti condividono una riga.") in model.tables["DE_Promo"].reason
+    assert not any("non è collegata alla tabella di ingresso" in w for w in model.warnings)
 
 
 def test_link_through_a_table_without_csv_still_counts(sql):
@@ -705,14 +708,17 @@ def test_unresolvable_join_sides_are_skipped_with_a_warning(sql):
     model = tables.build_table_model(package)
 
     assert model.warnings == [
-        "Query Q_Entry reads table DE_Missing, which is not in the export: no CSV can be made for it",
-        "Query Q_Entry: join CampaignName = DE_Config.CampaignName is skipped: the table of column CampaignName "
-        "is not known",
-        "Query Q_Entry: join DE_Master.Nope = DE_Config.CampaignName is skipped: DE_Master has no field Nope",
-        "Query Q_Entry: join DE_Missing.X = DE_Config.CampaignName is skipped: table DE_Missing is not in the export",
-        "Relationship DE_Master -> DE_Gone is skipped: table DE_Gone is not in the export",
-        "Table DE_Config is not joined to the entry: treated as one row shared by all contacts (scenario-level). "
-        "This is an assumption: check how the journey links this table",
+        "Query Q_Entry: la tabella DE_Missing, letta dalla query, non è nell'export, quindi non è possibile "
+        "crearne il CSV",
+        "Query Q_Entry: il join CampaignName = DE_Config.CampaignName viene ignorato, perché la tabella della "
+        "colonna CampaignName non è nota",
+        "Query Q_Entry: il join DE_Master.Nope = DE_Config.CampaignName viene ignorato, perché DE_Master non ha il "
+        "campo Nope",
+        "Query Q_Entry: il join DE_Missing.X = DE_Config.CampaignName viene ignorato, perché la tabella DE_Missing "
+        "non è nell'export",
+        "La relazione DE_Master -> DE_Gone viene ignorata, perché la tabella DE_Gone non è nell'export",
+        "La tabella DE_Config non è collegata alla tabella di ingresso: è trattata come una riga condivisa da tutti "
+        "i contatti (a livello di scenario). È un'assunzione: verifica come il journey collega questa tabella",
     ]
     assert model.tables[MASTER].level == LEVEL_CONTACT
     assert model.tables[CONFIG].level == LEVEL_SCENARIO
@@ -754,7 +760,7 @@ def test_boolean_filter_on_false_is_not_an_activation_field(sql):
 
     assert model.tables[CONFIG].level == LEVEL_SCENARIO
     assert model.activation_field is None
-    assert "activation field" not in model.tables[CONFIG].reason
+    assert "campo di attivazione" not in model.tables[CONFIG].reason
 
 
 def test_first_true_boolean_filter_is_the_activation_field(sql):
@@ -763,7 +769,8 @@ def test_first_true_boolean_filter_is_the_activation_field(sql):
     model = tables.build_table_model(package)
 
     assert model.activation_field == (CONFIG, "ACTIVE")
-    assert any(w.startswith("Several entry query filters could be the activation field") for w in model.warnings)
+    assert any(w.startswith("Più filtri della entry query possono indicare il campo di attivazione")
+               for w in model.warnings)
 
 
 def test_sql_and_criteria_spelling_is_normalised_to_the_schema(sql):
@@ -835,4 +842,4 @@ def test_pilot_export():
     assert model.activation_field == (config, "ACTIVE")
     assert model.contact_tables == [entry, target, master]
     assert model.scenario_tables == [config]
-    assert not any("not joined to the entry" in w for w in model.warnings)
+    assert not any("non è collegata alla tabella di ingresso" in w for w in model.warnings)

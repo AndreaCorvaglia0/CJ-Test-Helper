@@ -109,7 +109,8 @@ def load_package(source: Any) -> Package:
     export = _read_export(source)
     entities = export.get("entities")
     if not isinstance(entities, dict):
-        raise LoadError("The file is not a package export: it has no 'entities' section, so it holds no journey.")
+        raise LoadError("Il file non è un export di un package: manca la sezione 'entities', quindi non contiene "
+                        "alcun journey.")
     warnings: list[str] = []
     journey_id = _choose_journey(export, entities, warnings)
     # Every reference is resolved before anything is read; journeys other than the chosen one
@@ -166,9 +167,9 @@ def _read_export(source: Any) -> dict:
         else:
             export = _parse_json(_decode(_read_file(Path(source))))
     else:
-        raise LoadError(f"A package export cannot be read from a {type(source).__name__}.")
+        raise LoadError(f"Un export di un package non si può leggere da un valore di tipo {type(source).__name__}.")
     if not isinstance(export, dict):
-        raise LoadError("The file is valid JSON but not a package export: a JSON object is expected.")
+        raise LoadError("Il file è un JSON valido, ma non è un export di un package: deve contenere un oggetto JSON.")
     return export
 
 
@@ -176,14 +177,14 @@ def _read_file(path: Path) -> bytes:
     try:
         return path.read_bytes()
     except OSError as error:
-        raise LoadError(f"The file {path} cannot be read ({error.strerror or error}).") from None
+        raise LoadError(f"Non è possibile leggere il file {path} ({error.strerror or error}).") from None
 
 
 def _decode(data: bytes) -> str:
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:
-        raise LoadError("The file is not UTF-8 text, so it is not a valid JSON package export.") from None
+        raise LoadError("Il file non è testo UTF-8, quindi non è un export JSON valido.") from None
 
 
 def _parse_json(text: str) -> Any:
@@ -191,7 +192,7 @@ def _parse_json(text: str) -> Any:
         return json.loads(text)
     except json.JSONDecodeError as error:
         raise LoadError(
-            f"The file is not valid JSON ({error.msg} at line {error.lineno}, column {error.colno})."
+            f"Il file non è un JSON valido ({error.msg} alla riga {error.lineno}, colonna {error.colno})."
         ) from None
 
 
@@ -203,21 +204,21 @@ def _choose_journey(export: dict, entities: dict, warnings: list[str]) -> str:
     """
     journeys = [journey_id for journey_id, _ in _entity_items(entities, "journeys")]
     if not journeys:
-        raise LoadError("The export holds no journey.")
+        raise LoadError("L'export non contiene alcun journey.")
     selection = export.get("selectedEntities")
     selected = selection.get("journeys") if isinstance(selection, dict) else None
     selected = [journey_id for journey_id in selected or [] if isinstance(journey_id, str)]
     if selected:
         if len(selected) > 1:
-            _warn(warnings, f"The export selects {len(selected)} journeys; only the first one, {selected[0]}, is read.")
+            _warn(warnings, f"L'export seleziona {len(selected)} journey: viene letto solo il primo, {selected[0]}.")
         if selected[0] in journeys:
             return selected[0]
-        _warn(warnings, f"The selected journey {selected[0]} is not in the export.")
+        _warn(warnings, f"Il journey selezionato {selected[0]} non è nell'export.")
     if len(journeys) == 1:
         return journeys[0]
     first_name = _entity_data(entities, "journeys", journeys[0]).get("name") or journeys[0]
-    _warn(warnings, f"The export holds {len(journeys)} journeys and none of them is selected; the first one, "
-                    f"{first_name}, is read.")
+    _warn(warnings, f"L'export contiene {len(journeys)} journey e nessuno è selezionato: viene letto il primo, "
+                    f"{first_name}.")
     return journeys[0]
 
 
@@ -234,7 +235,7 @@ def _resolve_text(text: str, entities: dict, warnings: Optional[list[str]]) -> s
             break
         text = resolved
     if "{{mcpm#" in text:
-        _warn(warnings, f"A reference could not be resolved and is kept as written: {text[:160]}")
+        _warn(warnings, f"Un riferimento non si può risolvere e resta com'è scritto: {text[:160]}")
     return text
 
 
@@ -252,9 +253,10 @@ def _reference_value(match: re.Match, entities: dict, warnings: Optional[list[st
     if isinstance(found, (str, int, float, bool)):
         return str(found)
     if not data:
-        _warn(warnings, f"The export does not hold {kind}/{entity_id}; a reference to it is replaced by the id {entity_id}.")
+        _warn(warnings, f"L'export non contiene {kind}/{entity_id}; il riferimento è sostituito con l'id {entity_id}.")
     else:
-        _warn(warnings, f"{kind}/{entity_id} has no value at '{path}'; a reference to it is replaced by the id {entity_id}.")
+        _warn(warnings, f"{kind}/{entity_id} non ha un valore in '{path}'; il riferimento è sostituito con l'id "
+                        f"{entity_id}.")
     return entity_id
 
 
@@ -498,9 +500,9 @@ class _ExportReader:
                     continue   # a placeholder such as {{DateTime.Now}} is not a constant
                 found.setdefault((table.name, field.name, write.value), []).append(activity.key)
         for (table, field, value), keys in found.items():
-            self.warn(f"suspicious pattern: {len(keys)} update contact step(s) write the constant {value!r} into the "
-                      f"primary-key field {table}.{field}, so every contact gets the same key value there "
-                      f"({', '.join(keys)}).")
+            self.warn(f"suspicious pattern: la costante {value!r} è scritta nel campo di chiave primaria "
+                      f"{table}.{field} da {len(keys)} attività Update contact, quindi tutti i contatti hanno lo "
+                      f"stesso valore di chiave in quel campo ({', '.join(keys)}).")
 
     def check_one_to_one_joins(self, relationships: list[Relationship]) -> None:
         """Spec check: "A one-to-one relationship to a table whose primary key is wider than the join"."""
@@ -519,9 +521,9 @@ class _ExportReader:
             pk = [f.name for f in table.fields if f.is_primary_key]
             extra = [f for f in pk if f.lower() not in join_fields]
             if extra:
-                self.warn(f"suspicious pattern: the one-to-one relationship '{name}' joins {table.name} on "
-                          f"{', '.join(sorted(r.right_field for r in rels))}, but its primary key also has "
-                          f"{', '.join(extra)}: several rows can match one contact.")
+                self.warn(f"suspicious pattern: la relazione uno a uno '{name}' collega {table.name} tramite "
+                          f"{', '.join(sorted(r.right_field for r in rels))}, ma la chiave primaria della tabella "
+                          f"comprende anche {', '.join(extra)}: a un contatto possono corrispondere più righe.")
 
     # -- tables -------------------------------------------------------------
 
@@ -531,7 +533,7 @@ class _ExportReader:
             for entity_id, data in self.items(kind):
                 table = self.table_from(entity_id, data)
                 if table.name in self.tables:
-                    self.warn(f"Two tables are named {table.name}; the first one in the export is used.")
+                    self.warn(f"Due tabelle si chiamano {table.name}: si usa la prima dell'export.")
                 else:
                     self.tables[table.name] = table
                 self.table_aliases[entity_id] = table.name
@@ -559,14 +561,14 @@ class _ExportReader:
         name = str(raw["name"])
         field_type = str(raw.get("type") or "")
         if field_type not in FIELD_TYPES:
-            self.warn(f"Field {table_name}.{name} has type {field_type!r}, which the generator does not know.")
+            self.warn(f"Il campo {table_name}.{name} è di tipo {field_type!r}, che il generatore non conosce.")
         is_primary_key = bool(raw.get("isPrimaryKey"))
         nullable = raw.get("isNullable")
         if nullable is None:
             nullable = not is_primary_key
-            self.warn(f"Field {table_name}.{name} does not say whether it accepts null; it is taken as "
-                      f"{'nullable' if nullable else 'not nullable'} because it is "
-                      f"{'not ' if nullable else ''}part of the primary key.")
+            self.warn(f"Il campo {table_name}.{name} non indica se ammette null: si considera che "
+                      f"{'ammetta null' if nullable else 'non ammetta null'} perché "
+                      f"{'non ' if nullable else ''}fa parte della chiave primaria.")
         ordinal = _int_or_none(raw.get("ordinal"))
         return Field(
             name=name,
@@ -591,18 +593,18 @@ class _ExportReader:
         table = self.known_table(value)
         if table is None:
             table = "" if value is None else str(value)
-            self.warn(f"{what} names the table {table!r}, which is not in the export.")
+            self.warn(f"{what}: la tabella {table!r} non è nell'export.")
         return table
 
     def field_spelling(self, table: Table, field_name: str) -> str:
         """The field's spelling in the table schema; a field missing from the schema is kept, with a warning."""
         field = table.field(field_name)
         if field is None:
-            self.warn(f"Field {field_name!r} is not in the schema of table {table.name}.")
+            self.warn(f"Il campo {field_name!r} non è nello schema della tabella {table.name}.")
             return field_name
         if field.name != field_name:
-            self.warn(f"Field {table.name}.{field_name} is spelled {field.name} in the table schema; "
-                      f"the schema spelling is used.")
+            self.warn(f"Il campo {table.name}.{field_name} è scritto {field.name} nello schema della tabella: "
+                      f"si usa la grafia dello schema.")
         return field.name
 
     def schema_field(self, table_name: str, field_name: str) -> str:
@@ -621,7 +623,7 @@ class _ExportReader:
             table = self.known_table(storage) or self.known_table(_dict(data.get("storageReferenceID")).get("value"))
             if table is None:
                 table = str(storage or name)
-                self.warn(f"Attribute set {name} stores its data in {table}, which is not a table in the export.")
+                self.warn(f"L'attribute set {name} salva i dati in {table}, che non è una tabella dell'export.")
             self.set_tables[set_id] = table
             self.set_tables.setdefault(name, table)
 
@@ -633,8 +635,8 @@ class _ExportReader:
         table = self.set_tables.get(set_name)
         if table is None:
             table = set_name
-            known = "" if set_name in self.tables else ", and no table has that name either"
-            self.warn(f"No attribute set is named {set_name}; the name is taken as a table name{known}.")
+            known = "" if set_name in self.tables else ", ma nessuna tabella ha questo nome"
+            self.warn(f"Nessun attribute set si chiama {set_name}: il nome è preso come nome di tabella{known}.")
         return table
 
     def item_table(self, item: dict, relationship_name: str) -> str:
@@ -643,8 +645,8 @@ class _ExportReader:
             if isinstance(ref, str) and ref in self.set_tables:
                 return self.set_tables[ref]
         fallback = str(item.get("name") or item.get("identifier") or "")
-        self.warn(f"Relationship {relationship_name} links {fallback!r}, which is not an attribute set of the "
-                  f"export; it is taken as a table name.")
+        self.warn(f"La relazione {relationship_name} collega {fallback!r}, che non è un attribute set "
+                  f"dell'export: è preso come nome di tabella.")
         return fallback
 
     def read_relationships(self) -> list[Relationship]:
@@ -658,7 +660,7 @@ class _ExportReader:
             right_table = self.item_table(right_item, name)
             pairs = [pair for pair in _list(data.get("relationshipAttributes")) if isinstance(pair, dict)]
             if not pairs:
-                self.warn(f"Relationship {name} names no fields, so it links nothing.")
+                self.warn(f"La relazione {name} non indica alcun campo, quindi non collega nulla.")
             for pair in pairs:
                 left_field = _text_or_none(pair.get("leftAttributeName")) or None
                 if left_field and left_table is not None:
@@ -706,7 +708,7 @@ class _ExportReader:
                     if _int_or_none(_dict(step_activity).get("objectTypeId")) == QUERY_OBJECT_TYPE:
                         names.append(self.step_query_name(step_activity, name))
             if name in automation_queries:
-                self.warn(f"Two automations are named {name}; the queries of the last one are kept.")
+                self.warn(f"Due automation si chiamano {name}: si tengono le query dell'ultima.")
             automation_queries[name] = names
         return automation_queries
 
@@ -715,7 +717,7 @@ class _ExportReader:
         if query is not None:
             return query.name
         name = str(step_activity.get("name") or step_activity.get("activityObjectId") or "")
-        self.warn(f"Automation {automation_name} runs the query {name}, which is not in the export.")
+        self.warn(f"L'automation {automation_name} esegue la query {name}, che non è nell'export.")
         return name
 
     def read_emails(self) -> None:
@@ -743,24 +745,26 @@ class _ExportReader:
         """
         triggers = [trigger for trigger in _list(journey_data.get("triggers")) if isinstance(trigger, dict)]
         if not triggers:
-            raise LoadError("The journey has no entry trigger, so its entry table cannot be found.")
+            raise LoadError("Il journey non ha un trigger di ingresso, quindi non è possibile trovare la sua "
+                            "tabella di ingresso.")
         if len(triggers) > 1:
-            self.warn(f"The journey has {len(triggers)} entry triggers; only the first one is read.")
+            self.warn(f"Il journey ha {len(triggers)} trigger di ingresso: viene letto solo il primo.")
         meta = _dict(triggers[0].get("metaData"))
         event_id, event = self.find_event(meta)
         if event is None:
-            raise LoadError("The journey's entry event is not in the export, so its entry table cannot be found.")
+            raise LoadError("L'entry event del journey non è nell'export, quindi non è possibile trovare la sua "
+                            "tabella di ingresso.")
         event_name = str(event.get("name") or event_id)
         arguments = _dict(event.get("arguments"))
         table_ref = event.get("dataExtensionId") or arguments.get("dataExtensionId")
         table = self.known_table(table_ref)
         if table is None:
-            raise LoadError(f"The entry table of the event {event_name} ({table_ref}) is not in the export.")
+            raise LoadError(f"La tabella di ingresso dell'entry event {event_name} ({table_ref}) non è nell'export.")
         automation_ref = arguments.get("automationId")
         automation_name = self.automation_names.get(str(automation_ref)) if automation_ref else None
         if automation_ref and automation_name is None:
-            self.warn(f"The entry event {event_name} is fed by the automation {automation_ref}, "
-                      f"which is not in the export.")
+            self.warn(f"L'entry event {event_name} è alimentato dall'automation {automation_ref}, "
+                      f"che non è nell'export.")
         return EntryEvent(
             key=str(event.get("eventDefinitionKey") or meta.get("eventDefinitionKey") or ""),
             name=event_name,
@@ -794,8 +798,8 @@ class _ExportReader:
                     continue
                 other_name = self.event_name(event_key)
                 other = f"{event_key} ({other_name})" if other_name else event_key
-                self.warn(f"The journey default {default_name} reads {expression} from the entry event {other}, "
-                          f"not from the journey's entry event {entry.key} ({entry.name}).")
+                self.warn(f"Il valore predefinito {default_name} del journey legge {expression} dall'entry event "
+                          f"{other}, non dall'entry event del journey, {entry.key} ({entry.name}).")
 
     # -- journey ----------------------------------------------------------------
 
@@ -806,9 +810,10 @@ class _ExportReader:
                 continue
             activity = self.read_activity(raw)
             if not activity.key:
-                self.warn(f"An activity named {activity.name!r} has no key, so nothing can lead to it; it is ignored.")
+                self.warn(f"L'attività {activity.name!r} non ha una chiave, quindi nessun branch può portarvi: "
+                          f"è ignorata.")
             elif activity.key in activities:
-                self.warn(f"Two activities have the key {activity.key}; the first one is used.")
+                self.warn(f"Due attività hanno la chiave {activity.key}: si usa la prima.")
             else:
                 activities[activity.key] = activity
         self.check_links(activities)
@@ -832,25 +837,25 @@ class _ExportReader:
         targets = {outcome.next for activity in activities.values() for outcome in activity.outcomes if outcome.next}
         starts = [key for key in activities if key not in targets]
         if not starts:
-            self.warn("Every activity of the journey is the target of another one, so the start activity cannot be "
-                      "found." if activities else "The journey has no activities.")
+            self.warn("Ogni attività del journey è la destinazione di un'altra, quindi non è possibile trovare "
+                      "l'attività iniziale." if activities else "Il journey non ha attività.")
             return None
         if len(starts) > 1:
-            self.warn(f"{len(starts)} activities have no incoming link ({', '.join(starts)}); the first one, "
-                      f"{starts[0]}, is taken as the start.")
+            self.warn(f"{len(starts)} attività non hanno collegamenti in entrata ({', '.join(starts)}): come inizio "
+                      f"si prende la prima, {starts[0]}.")
         return starts[0]
 
     def check_links(self, activities: dict[str, Activity]) -> None:
         for activity in activities.values():
             for outcome in activity.outcomes:
                 if outcome.next and outcome.next not in activities:
-                    self.warn(f"Activity {activity.key}, outcome {outcome.label!r}, leads to {outcome.next}, "
-                              f"which is not in the journey.")
+                    self.warn(f"Il branch {outcome.label!r} dell'attività {activity.key} porta a {outcome.next}, "
+                              f"che non è nel journey.")
             if activity.kind == KIND_ENGAGEMENT and activity.engagement_ref:
                 referenced = activities.get(activity.engagement_ref)
                 if referenced is None or referenced.kind != KIND_EMAIL:
-                    self.warn(f"Engagement split {_named(activity)} refers to "
-                              f"{activity.engagement_ref}, which is not an email activity of the journey.")
+                    self.warn(f"Engagement split {_named(activity)}: fa riferimento a "
+                              f"{activity.engagement_ref}, che non è un'attività Email del journey.")
 
     # -- activities -------------------------------------------------------------
 
@@ -892,8 +897,8 @@ class _ExportReader:
             ui_type = _dict(raw.get("metaData")).get("uiType")
             kind = WAIT_UI_TYPES.get(str(ui_type), KIND_UNSUPPORTED)
             if kind == KIND_UNSUPPORTED:
-                self.warn(f"Activity {_named(activity)} is a wait of kind {ui_type!r}; only waits by "
-                          f"duration and by attribute are supported, so it is reported as unsupported.")
+                self.warn(f"Attività {_named(activity)}: è un wait di tipo {ui_type!r}; sono supportati solo "
+                          f"Wait by duration e Wait by attribute, quindi è segnalata come non supportata.")
         return kind
 
     def make_unsupported(self, activity: Activity, reason: str) -> None:
@@ -904,7 +909,7 @@ class _ExportReader:
         for outcome in activity.outcomes:
             outcome.formula = None
             outcome.is_remainder = False
-        self.warn(f"Activity {_named(activity)} is reported as unsupported: {reason}.")
+        self.warn(f"Attività {_named(activity)}: è segnalata come non supportata, perché {reason}.")
 
     def read_decision(self, activity: Activity, raw: dict) -> None:
         """Plan: ``configurationArguments.criteria[outcome.key]`` is parsed; the outcome without criteria is the
@@ -920,7 +925,7 @@ class _ExportReader:
             try:
                 formula = parse_criteria(xml)
             except CriteriaError as error:
-                self.make_unsupported(activity, f"the criteria of its outcome {outcome.label!r} cannot be read "
+                self.make_unsupported(activity, f"i criteri del branch {outcome.label!r} non si possono leggere "
                                                 f"({error})")
                 return
             outcome.formula = self.map_formula(formula)
@@ -929,13 +934,13 @@ class _ExportReader:
                 # Spec: outcomes are tried in order, so the outcomes before this one can still be
                 # covered; this one and the ones after it are reported as not covered.
                 outcome.unsupported_reason = problem
-                self.warn(f"Decision split {_named(activity)}: {problem}; this outcome and the ones after it "
-                          "are reported as not covered.")
+                self.warn(f"Decision split {_named(activity)}: {problem}; questo branch e quelli successivi "
+                          "sono segnalati come non coperti.")
         remainders = [position for position, outcome in enumerate(activity.outcomes, 1) if outcome.is_remainder]
         if remainders != [len(activity.outcomes)]:
-            self.warn(f"Decision split {_named(activity)} should have one outcome without criteria "
-                      f"(the remainder), in last position; outcomes without criteria: "
-                      f"{remainders or 'none'} of {len(activity.outcomes)}.")
+            self.warn(f"Decision split {_named(activity)}: dovrebbe avere un solo branch senza criteri "
+                      f"(il remainder), in ultima posizione; branch senza criteri: "
+                      f"{remainders or 'nessuno'} su {len(activity.outcomes)}.")
 
     def map_formula(self, formula: Formula) -> Formula:
         """Condition tables: attribute-set name -> table name; fields in the schema's spelling."""
@@ -953,15 +958,15 @@ class _ExportReader:
         """
         for condition in formula_conditions(outcome.formula):
             if condition.operator not in OPERATORS:
-                return (f"outcome {outcome.label!r} uses the operator {condition.operator!r}, which the PoC does "
-                        f"not support")
+                return (f"il branch {outcome.label!r} usa l'operatore {condition.operator!r}, che il PoC non "
+                        f"supporta")
             table = self.tables.get(condition.table)
             if table is None:
-                return (f"outcome {outcome.label!r} reads {condition.table}.{condition.field}, and the table "
-                        f"{condition.table!r} is not in the export")
+                return (f"il branch {outcome.label!r} legge {condition.table}.{condition.field}, ma la tabella "
+                        f"{condition.table!r} non è nell'export")
             if table.field(condition.field) is None:
-                return (f"outcome {outcome.label!r} reads {condition.table}.{condition.field}, and the field "
-                        f"{condition.field!r} is not in the schema of {table.name}")
+                return (f"il branch {outcome.label!r} legge {condition.table}.{condition.field}, ma il campo "
+                        f"{condition.field!r} non è nello schema di {table.name}")
         return None
 
     def read_engagement(self, activity: Activity, raw: dict, raw_outcomes: list[dict]) -> None:
@@ -971,22 +976,22 @@ class _ExportReader:
         activity.engagement_ref = _text_or_none(config.get("refActivityCustomerKey")) or None
         activity.engagement_kind = ENGAGEMENT_KINDS.get(_int_or_none(config.get("statsTypeId")))
         if activity.engagement_kind is None:
-            self.warn(f"Engagement split {_named(activity)} measures the statistics type "
-                      f"{config.get('statsTypeId')!r}, which is neither an open (2) nor a click (3); its branches "
-                      f"will be reported as not covered.")
+            self.warn(f"Engagement split {_named(activity)}: misura il tipo di statistica "
+                      f"{config.get('statsTypeId')!r}, che non è né un open (2) né un click (3); i suoi branch "
+                      f"saranno segnalati come non coperti.")
         for outcome, raw_outcome in zip(activity.outcomes, raw_outcomes):
             when = _dict(raw_outcome.get("arguments")).get("when")
             outcome.when = when if isinstance(when, bool) else None
         if activity.outcomes and all(o.when is None for o in activity.outcomes):
-            self.make_unsupported(activity, "its outcomes do not say which one is the Yes branch and which the No branch")
+            self.make_unsupported(activity, "nessuno dei suoi branch indica se è il branch Yes o il branch No")
             return
         for outcome in activity.outcomes:
             if outcome.when is None:
-                self.warn(f"Engagement split {_named(activity)}, outcome {outcome.label!r}, does not "
-                          f"say whether it is the Yes or the No branch.")
+                self.warn(f"Engagement split {_named(activity)}: il branch {outcome.label!r} non indica "
+                          f"se è il branch Yes o il branch No.")
         urls = _list(_dict(config.get("engagementUrls")).get("urls"))
         if urls:
-            self.warn(f"Engagement split {_named(activity)} counts only clicks on these links: "
+            self.warn(f"Engagement split {_named(activity)}: conta solo i click su questi link: "
                       f"{', '.join(str(url) for url in urls)}.")
 
     def read_random(self, activity: Activity, raw_outcomes: list[dict]) -> None:
@@ -995,8 +1000,8 @@ class _ExportReader:
             outcome.percentage = _int_or_none(_dict(raw_outcome.get("arguments")).get("percentage"))
         percentages = [outcome.percentage for outcome in activity.outcomes]
         if None in percentages or sum(p for p in percentages if p is not None) != 100:
-            self.warn(f"Random split {_named(activity)} has the percentages {percentages}, "
-                      f"which do not add up to 100.")
+            self.warn(f"Random split {_named(activity)}: la somma delle percentuali {percentages} "
+                      f"non è 100.")
 
     def read_wait_duration(self, activity: Activity, raw: dict) -> None:
         config = _dict(raw.get("configurationArguments"))
@@ -1014,15 +1019,16 @@ class _ExportReader:
         if found is None:
             found = _key_field(_dict(_dict(raw.get("metaData")).get("attribute")).get("id"))
         if found is None:
-            self.warn(f"Wait {_named(activity)} waits on a date attribute that cannot be identified.")
+            self.warn(f"Wait {_named(activity)}: non è possibile identificare l'attributo data che il wait attende.")
             return
         set_name, field_name = found
         table = self.table_for_set(set_name)
         activity.wait_field = (table, self.schema_field(table, field_name))
         offset = _int_or_none(config.get("waitDuration"))
         if offset:
-            self.warn(f"Wait {_named(activity)} has a waitDuration of {offset} {config.get('waitUnit')} "
-                      f"on top of the date in {table}.{activity.wait_field[1]}; this offset is not modelled.")
+            self.warn(f"Wait {_named(activity)}: ha una waitDuration di {offset} {config.get('waitUnit')} "
+                      f"in aggiunta alla data in {table}.{activity.wait_field[1]}; il generatore non tiene conto "
+                      f"di questo scarto.")
 
     def read_wait_sto(self, activity: Activity, raw: dict) -> None:
         """Send-time wait: the email goes out within ``params.slidingWindowHours``.
@@ -1048,8 +1054,8 @@ class _ExportReader:
         asset = self.emails.get(asset_id) if asset_id else None
         activity.email_name = asset.name if asset else activity.name
         if asset is None:
-            self.warn(f"Email activity {_named(activity)} sends the email {asset_id!r}, which is not "
-                      f"in the export; whether it holds a link is unknown.")
+            self.warn(f"Email {_named(activity)}: invia l'email {asset_id!r}, che non è nell'export; "
+                      f"non si sa se contiene un link.")
 
     def read_update(self, activity: Activity, raw: dict) -> None:
         """Plan: ``arguments.activityData.updateContactFields[*]`` -> Write(table, field, value); the value is
@@ -1062,4 +1068,4 @@ class _ExportReader:
             field_name = self.schema_field(table, str(item.get("field") or ""))
             activity.writes.append(Write(table=table, field=field_name, value=_written_value(item.get("value"))))
         if not activity.writes:
-            self.warn(f"Update contact {_named(activity)} writes no field.")
+            self.warn(f"Update contact {_named(activity)}: non scrive alcun campo.")

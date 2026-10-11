@@ -135,7 +135,7 @@ def parse_query(query: Query, tables: dict[str, Table]) -> ParsedQuery:
         _read_select(select, context, result)
     except Exception as error:  # plan: never raise on odd SQL; keep what was read so far
         context.warn(
-            f"the SQL was only partly read because of an unexpected error "
+            f"il codice SQL è stato letto solo in parte a causa di un errore imprevisto "
             f"({type(error).__name__}: {error})"
         )
     return result
@@ -267,13 +267,13 @@ class _Context:
         table = self._table_for_qualifier(qualifier)
         if table is None:
             self.warn(
-                f"column {qualifier}.{name}: {qualifier} is not a table or alias of the "
-                f"FROM/JOIN, so the column's table is unknown"
+                f"colonna {qualifier}.{name}: {qualifier} non è una tabella né un alias del "
+                f"FROM/JOIN, quindi la tabella della colonna è sconosciuta"
             )
             return ColumnRef("", name)
         schema = self.tables.get(table)
         if schema is not None and schema.field(name) is None:
-            self.warn(f"column {qualifier}.{name}: table {table} has no field named {name}")
+            self.warn(f"colonna {qualifier}.{name}: la tabella {table} non ha un campo {name}")
         return ColumnRef(table, name)
 
     def _table_for_qualifier(self, qualifier: str) -> Optional[str]:
@@ -297,13 +297,13 @@ class _Context:
             return ColumnRef(owners[0], name)
         if owners:
             self.warn(
-                f"column {name}: several tables of the FROM/JOIN have it "
-                f"({', '.join(owners)}), so its table is unknown"
+                f"colonna {name}: è presente in più tabelle del FROM/JOIN "
+                f"({', '.join(owners)}), quindi la sua tabella è sconosciuta"
             )
         else:
             self.warn(
-                f"column {name}: no table of the FROM/JOIN is known to have it, "
-                f"so its table is unknown"
+                f"colonna {name}: nessuna tabella nota del FROM/JOIN la contiene, "
+                f"quindi la sua tabella è sconosciuta"
             )
         return ColumnRef("", name)
 
@@ -317,22 +317,22 @@ def _parse_select(sql: str, context: _Context) -> Optional[exp.Select]:
     try:
         statements = [s for s in sqlglot.parse(sql or "", read=_TSQLKeepingFormat) if s is not None]
     except Exception as error:  # sqlglot raises ParseError or TokenError; any failure means the same
-        context.warn(f"the SQL could not be parsed: {_parse_error_text(error)}")
+        context.warn(f"non è stato possibile analizzare il codice SQL: {_parse_error_text(error)}")
         return None
     if not statements:
-        context.warn("the SQL is empty")
+        context.warn("il codice SQL è vuoto")
         return None
     if len(statements) > 1:
-        context.warn(f"the SQL holds {len(statements)} statements; only the first one is read")
+        context.warn(f"il codice SQL contiene {len(statements)} istruzioni; viene letta solo la prima")
     statement = statements[0]
     if isinstance(statement, (exp.Union, exp.Intersect, exp.Except)):
         context.warn(
-            f"the query combines several SELECTs with {statement.key.upper()}; "
-            f"only the first SELECT is read"
+            f"la query combina più SELECT con {statement.key.upper()}; "
+            f"viene letta solo la prima SELECT"
         )
         statement = _first_select(statement)
     if not isinstance(statement, exp.Select):
-        context.warn(f"the SQL is not a SELECT ({statement.key.upper()} statement); nothing was read")
+        context.warn(f"il codice SQL non è una SELECT (istruzione {statement.key.upper()}); non è stato letto nulla")
         return None
     return statement
 
@@ -348,8 +348,8 @@ def _parse_error_text(error: Exception) -> str:
         first = details[0]
         description = _TOKEN_IN_MESSAGE.sub(r"'\1'", str(first.get("description")))
         return (
-            f"{description}, near '{first.get('highlight')}' "
-            f"at line {first.get('line')}, column {first.get('col')}"
+            f"{description}, vicino a '{first.get('highlight')}' "
+            f"alla riga {first.get('line')}, colonna {first.get('col')}"
         )
     text = str(error).strip()
     return text.splitlines()[0] if text else type(error).__name__
@@ -372,9 +372,9 @@ def _read_select(select: exp.Select, context: _Context, result: ParsedQuery) -> 
         _read_filters(where.this, context, result)
     for table in _exclusion_joins(select, context, result):
         context.warn(
-            f"{table} is excluded with a LEFT JOIN and an IS NULL filter: only contacts with no row in "
-            f"{table} enter. The filter is read as written, which no inner-joined row can meet; the "
-            f"generated contacts are new, so they are taken to meet it"
+            f"la tabella {table} è esclusa con un LEFT JOIN e un filtro IS NULL: entrano solo i contatti che "
+            f"non hanno righe in {table}. Il filtro è letto com'è scritto, e nessuna riga in inner join può "
+            f"soddisfarlo; i contatti generati sono nuovi, quindi si considera che lo soddisfino"
         )
     _read_select_list(select, context, result)
 
@@ -383,7 +383,7 @@ def _warn_ignored_parts(select: exp.Select, context: _Context) -> None:
     """Report every part of the SELECT that is not read (TOP, DISTINCT, GROUP BY, ...)."""
     for key, value in select.args.items():
         if value and key not in _READ_PARTS:
-            context.warn(f"the {_PART_NAMES.get(key, key.upper())} part of the query is ignored")
+            context.warn(f"la parte {_PART_NAMES.get(key, key.upper())} della query è ignorata")
 
 
 # ---------------------------------------------------------------------------
@@ -401,16 +401,16 @@ def _read_sources(select: exp.Select, context: _Context) -> None:
 
 def _add_source(node: exp.Expression, context: _Context) -> None:
     if not _is_table(node):
-        context.warn(f"{_sql(node)} in the FROM/JOIN is not a table and was not read")
+        context.warn(f"{_sql(node)} nel FROM/JOIN non è una tabella e non è stato letto")
         return
     name = _canonical_table_name(node.name, context.tables)
     context.sources.append(TableRef(name, node.alias or None))
     if node.catalog or (node.db and node.db.upper() != _SHARED_PREFIX):
-        context.warn(f"the prefix of table {name} is ignored: {_sql(node)}")
+        context.warn(f"il prefisso della tabella {name} è ignorato: {_sql(node)}")
     if node.args.get("pivots"):
-        context.warn(f"the PIVOT on table {name} is ignored")
+        context.warn(f"il PIVOT sulla tabella {name} è ignorato")
     if name not in context.tables:
-        context.warn(f"table {name} is not in the export, so its columns cannot be checked")
+        context.warn(f"la tabella {name} non è nell'export, quindi non è possibile controllarne le colonne")
 
 
 def _canonical_table_name(name: str, tables: dict[str, Table]) -> str:
@@ -430,10 +430,11 @@ def _read_joins(select: exp.Select, context: _Context, result: ParsedQuery) -> N
             continue  # a subquery or APPLY: already reported by _read_sources
         label = join.this.name
         if join.side:
-            context.warn(f"{label} is joined with a {join.side} JOIN; it is read as an inner join")
+            context.warn(f"la tabella {label} è unita con un {join.side} JOIN; viene letta come inner join")
         condition = join.args.get("on")
         if condition is None:
-            context.warn(f"{label} is joined without an ON condition, so no join field is known")
+            context.warn(f"la tabella {label} è unita senza una condizione ON, quindi non si conosce alcun "
+                         f"campo di join")
             continue
         for part in _and_parts(condition):
             _read_join_part(part, context, result)
@@ -467,13 +468,13 @@ def exclusion_joins(query: Query, tables: dict[str, Table]) -> list[str]:
 def _read_join_part(part: exp.Expression, context: _Context, result: ParsedQuery) -> None:
     columns = _match_join_equality(part)
     if columns is None:
-        context.warn(f"join condition not understood, ignored: {_sql(part)}")
+        context.warn(f"condizione di join non compresa, ignorata: {_sql(part)}")
         return
     left_column, right_column = columns
     left, right = context.resolve(left_column), context.resolve(right_column)
     if not left.table or not right.table:
         # An unknown table would link unrelated fields that only share a name.
-        context.warn(f"join condition ignored because a column's table is unknown: {_sql(part)}")
+        context.warn(f"condizione di join ignorata perché la tabella di una colonna è sconosciuta: {_sql(part)}")
         return
     result.joins.append(JoinEquality(left, right))
 
@@ -525,7 +526,7 @@ def _read_filter(part: exp.Expression, context: _Context) -> list[Filter]:
             DateBoundFilter(context.resolve(end), "end"),
         ]
     text = _sql(part)
-    context.warn(f"filter not understood: {text}")
+    context.warn(f"filtro non compreso: {text}")
     return [UnsupportedFilter(text)]
 
 
@@ -611,17 +612,17 @@ def _and_parts(condition: exp.Expression) -> list[exp.Expression]:
 def _read_select_list(select: exp.Select, context: _Context, result: ParsedQuery) -> None:
     """Plan: "``target_column`` = alias, else column name. ``SELECT *`` -> ``select_all=True``"."""
     if not select.expressions:
-        context.warn("the SELECT lists no columns")
+        context.warn("la SELECT non elenca alcuna colonna")
     for item in select.expressions:
         if isinstance(item, exp.Star):
             result.select_all = True
         elif isinstance(item, exp.Column) and isinstance(item.this, exp.Star):
             result.select_all = True
-            context.warn(f"{_sql(item)} is read as SELECT * (the table restriction is not kept)")
+            context.warn(f"{_sql(item)} è letto come SELECT * (la limitazione alla tabella non viene mantenuta)")
         else:
             target, node = _target_and_expression(item)
             if not target:
-                context.warn(f"select item {_sql(item)} has no column name")
+                context.warn(f"l'elemento della SELECT {_sql(item)} non ha un nome di colonna")
             result.select.append(SelectItem(target, _select_expr(node, target, context)))
 
 
@@ -654,15 +655,15 @@ def _select_expr(node: exp.Expression, target: str, context: _Context) -> Select
         bad = unsupported_dotnet_tokens(date_format)
         if bad:
             text = _sql(node)
-            context.warn(f"column {target}: the date format {date_format!r} uses tokens the PoC cannot write "
-                         f"({', '.join(bad)}); the column gets a placeholder")
+            context.warn(f"colonna {target}: il formato data {date_format!r} usa token che il PoC non sa scrivere "
+                         f"({', '.join(bad)}); la colonna riceve un placeholder")
             return SelectUnsupported(text)
         return SelectCurrentDate(date_format)
     if isinstance(node, exp.Concat):
         return SelectConcat(tuple(_select_expr(part, target, context) for part in node.expressions))
     text = _sql(node)
-    label = f"column {target}" if target else "a select item"
-    context.warn(f"{label}: expression not understood: {text}")
+    label = f"colonna {target}" if target else "un elemento della SELECT"
+    context.warn(f"{label}: espressione non compresa: {text}")
     return SelectUnsupported(text)
 
 
