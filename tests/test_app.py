@@ -116,7 +116,7 @@ def test_page_without_file_shows_the_upload_step_and_no_error():
     assert not at.exception
     html = _html_bodies(at)
     assert f'<span class="cj-name">{app.TITLE}</span>' in html and 'alt="Lutech"' in html   # the header
-    assert '<div class="now"><b>1 · Carica</b>' in html                                      # the stepper
+    assert '<div class="now"><span class="cj-num">01</span><b>Carica</b>' in html         # the stepper
     assert _cards(at) == [f"**{app.STEP_UPLOAD}** il file JSON che Package Manager esporta per il journey"]
     assert _card(at, app.STEP_UPLOAD).proto.expanded is True
     uploaders = at.get("file_uploader")

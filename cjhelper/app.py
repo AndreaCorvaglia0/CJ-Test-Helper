@@ -79,8 +79,8 @@ STEP_UPLOAD = "Carica l'export"
 STEP_REVIEW = "Verifica il rilevamento"
 STEP_SETTINGS = "Impostazioni"
 STEP_GENERATE = "Genera e scarica"
-STEPPER = (("1 · Carica", "Export del package"), ("2 · Verifica", "Cosa è stato rilevato"),
-           ("3 · Imposta", "Valori modificabili"), ("4 · Genera e scarica", ""))
+STEPPER = (("Carica", "Export del package"), ("Verifica", "Cosa è stato rilevato"),
+           ("Imposta", "Valori modificabili"), ("Genera e scarica", ""))
 UPLOAD_LABEL = "Export del package (JSON)"
 UPLOAD_NOTE = ("Il file JSON che Package Manager esporta per il journey. Viene letto in memoria e poi scartato: "
                "non viene salvato nulla.")
@@ -947,8 +947,9 @@ def _stepper_html(phase: str) -> str:
         states = ["done", "done", "done", "now"]
     last = {PHASE_RUNNING: "In corso", PHASE_DONE: "Completato", PHASE_FAILED: "Non riuscita"}.get(phase, "Da avviare")
     cells = []
-    for (name, note), state in zip(STEPPER, states):
-        cells.append(f'<div class="{state}"><b>{_html(name)}</b>{_html(note or last)}</div>')
+    for number, ((name, note), state) in enumerate(zip(STEPPER, states), start=1):
+        cells.append(f'<div class="{state}"><span class="cj-num">{number:02d}</span>'
+                     f'<b>{_html(name)}</b>{_html(note or last)}</div>')
     return f'<div class="cj-stepper">{"".join(cells)}</div>'
 
 
