@@ -32,9 +32,11 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
 ## In progress
 
 - Review loop, part 2 (trust checks, export robustness, spec compliance) with skeptic verification: running.
-- UX review done (docs/ux-review.md: three criteria pass with changes); the page developer is applying changes 1 to 7 and the rest where they fit.
-- A fresh test engineer attacks the output black-box: independent simulator on the pilot, at least 8 new examples, edge cases.
-- Regression tests for the batch-3 behaviours and warning wording tidy-up (Sonnet).
+- UX review done (docs/ux-review.md: three criteria pass with changes); the page developer applied changes 1 to 7 and 13 of the
+  other 13 in full or in part (.streamlit/config.toml holds the two theme departures). 28 page tests pass.
+- Regression tests for the batch-3 behaviours (17, Sonnet) and warning wording tidy-up: done.
+- Fresh test engineer: 22 new examples so far, all passing after one fix (a split that reads the address field fixes the
+  address, so its open cannot be done: reported as not covered, the case still exists). Final report pending.
 - Then: fix confirmed findings, re-run every example and the pilot, final report.
 
 ## Working rules from the user
