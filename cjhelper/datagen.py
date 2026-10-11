@@ -162,27 +162,27 @@ def activation_setting(
     if ref is None:
         warnings.append(
             "One active scenario at a time is switched on, but no activation field was given or "
-            "detected, so every scenario is active in the CSV."
+            "detected. Every scenario is active in the CSV."
         )
         return False, None, warnings
     table = _find_table(package.tables, ref[0])
     field = table.field(ref[1]) if table is not None else None
     if table is None or field is None:
         warnings.append(
-            f"The activation field {ref[0]}.{ref[1]} does not exist in the export, so one active "
-            "scenario at a time is switched off and every scenario is active in the CSV."
+            f"The activation field {ref[0]}.{ref[1]} does not exist in the export. One active "
+            "scenario at a time is switched off, so every scenario is active in the CSV."
         )
         return False, None, warnings
     if table.name.lower() not in {name.lower() for name in model.selected_tables}:
         warnings.append(
-            f"The activation field {table.name}.{field.name} is in a table that gets no CSV, so one "
-            "active scenario at a time is switched off and every scenario is active in the CSV."
+            f"The activation field {table.name}.{field.name} is in a table that gets no CSV. One "
+            "active scenario at a time is switched off, so every scenario is active in the CSV."
         )
         return False, None, warnings
     if _field_type(field) != "boolean":
         warnings.append(
-            f"The activation field {table.name}.{field.name} is of type {field.type}, not Boolean, so "
-            "one active scenario at a time is switched off and every scenario is active in the CSV."
+            f"The activation field {table.name}.{field.name} is of type {field.type}, not Boolean. "
+            "One active scenario at a time is switched off, so every scenario is active in the CSV."
         )
         return False, None, warnings
     return True, (table.name, field.name), warnings
@@ -248,6 +248,11 @@ def _as_text(value) -> Value:
     if value is None or isinstance(value, str):
         return value
     return str(value)
+
+
+def _count(number: int, noun: str) -> str:
+    """A number with its noun in the right form for the warnings: "1 case", "2 cases"."""
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
 
 
 _DOTNET_TOKENS = {"yyyy": "%Y", "MM": "%m", "dd": "%d", "HH": "%H", "mm": "%M", "ss": "%S"}
@@ -398,7 +403,7 @@ class _Generator:
         key = (table.name, field.name)
         if key not in self._placeholder_columns:
             self._placeholder_columns.add(key)
-            self.placeholders.append(f"{table.name}.{field.name}: {reason}, so a placeholder is written.")
+            self.placeholders.append(f"{table.name}.{field.name}: {reason}. A placeholder is written.")
 
     def _table(self, name: str) -> Optional[Table]:
         return _find_table(self.package.tables, name)
@@ -412,8 +417,8 @@ class _Generator:
     def _check_settings(self) -> None:
         if "%" not in self.settings.date_format:
             self._warn(
-                f"The date format {self.settings.date_format!r} has no strftime directive (such as %Y), "
-                "so every date is written as that literal text."
+                f"The date format {self.settings.date_format!r} has no strftime directive, such as %Y. "
+                "Every date is written as that literal text."
             )
 
     def _plan_tables(self) -> list[tuple[Table, str]]:
@@ -491,8 +496,8 @@ class _Generator:
                 key = _norm(ref)
                 if key in self._wait_fields and key not in condition_fields:
                     self._warn(
-                        f"{ref[0]}.{ref[1]} is listed by the coverage but only a wait by attribute reads it, "
-                        "so it is filled as a wait date."
+                        f"{ref[0]}.{ref[1]} is listed by the coverage, but only a wait by attribute reads it. "
+                        "It is filled as a wait date."
                     )
                     continue
                 sources.setdefault(key, (level, ref))
@@ -516,28 +521,28 @@ class _Generator:
             for flt in query.filters:
                 if isinstance(flt, UnsupportedFilter):
                     self._warn(
-                        f"{label} filter {flt.text!r} is not supported, so the generated rows may not "
-                        "pass it and the contacts may not enter the journey."
+                        f"{label} filter {flt.text!r} is not supported. The generated rows may not "
+                        "pass it, so the contacts may not enter the journey."
                     )
                     continue
                 resolved = self._resolve_column(flt.column, query)
                 if resolved is None:
                     self._warn(
                         f"{label} filters on {flt.column.table or '?'}.{flt.column.column}, which matches "
-                        "no field of a source table, so the filter is not applied to the generated rows."
+                        "no field of a source table. The filter is not applied to the generated rows."
                     )
                     continue
                 table, field = resolved
                 if table is self._entry:
                     self._warn(
-                        f"{label} filters on the entry table itself ({table.name}.{field.name}); the generated "
-                        "contacts are new, so the filter is not applied to the generated rows."
+                        f"{label} filters on the entry table itself, on the column {table.name}.{field.name}. "
+                        "The generated contacts are new, so the filter is not applied to the generated rows."
                     )
                     continue
                 if table.name.lower() not in self._levels:
                     self._warn(
-                        f"{label} filters on {table.name}.{field.name}, but {table.name} gets no CSV, "
-                        "so the filter is not applied to the generated rows."
+                        f"{label} filters on {table.name}.{field.name}, but {table.name} gets no CSV. "
+                        "The filter is not applied to the generated rows."
                     )
                     continue
                 key = _norm((table.name, field.name))
@@ -545,12 +550,12 @@ class _Generator:
                 if same_field and same_field[0] != flt:
                     if filter_source[key] == label:
                         self._warn(
-                            f"{label} has several filters on {table.name}.{field.name}; only the first one "
+                            f"{label} has several filters on {table.name}.{field.name}. Only the first one "
                             "is used to choose its value."
                         )
                     else:
                         self._warn(
-                            f"{label} also filters on {table.name}.{field.name}; the filter of "
+                            f"{label} also filters on {table.name}.{field.name}. The filter of "
                             f"{filter_source[key][0].lower() + filter_source[key][1:]} is used to choose its value."
                         )
                     continue
@@ -558,8 +563,9 @@ class _Generator:
                 same_field.append(flt)
                 if query is not self.model.entry_query:
                     self._warn(
-                        f"{label}, which the automation runs on {table.name}, filters {table.name}.{field.name}; the "
-                        "generated rows pass that filter too (assumption: the automation's own queries must find them)."
+                        f"{label} filters {table.name}.{field.name}, and the automation runs it on {table.name}. "
+                        "The generated rows pass that filter too. This is an assumption: the automation's own "
+                        "queries must find them."
                     )
         return filters
 
@@ -609,14 +615,14 @@ class _Generator:
                     continue
                 if field.name in explicit:
                     self._warn(
-                        f"The entry query fills {entry.name}.{field.name} twice; the first expression is used."
+                        f"The entry query fills {entry.name}.{field.name} twice. The first expression is used."
                     )
                     continue
                 explicit.add(field.name)
                 self._entry_plan[field.name] = item.expr   # an explicit item wins over a column copied by *
             if ignored:
                 self._warn(
-                    f"The entry query selects columns that {entry.name} does not have, so they are ignored: "
+                    f"The entry query selects columns that {entry.name} does not have. These columns are ignored: "
                     + ", ".join(ignored) + "."
                 )
         for column, expr in self._entry_plan.items():
@@ -685,8 +691,9 @@ class _Generator:
             value = self._normalise(_as_text(value), table, field)
             if rule.kind == "key" and field.length and value and len(value) > field.length:
                 self._warn(
-                    f"The generated keys ({len(value)} characters) are longer than {table.name}.{field.name} "
-                    f"({field.length} characters); they are not cut, so that the tables still join."
+                    f"The generated keys are {_count(len(value), 'character')} long, but {table.name}.{field.name} "
+                    f"holds only {_count(field.length, 'character')}. The keys are not cut, so that the tables "
+                    "still join."
                 )
             self._report_overridden(table, field, row, rule, value, rules[position + 1:])
             return value
@@ -703,8 +710,9 @@ class _Generator:
             if isinstance(rule.detail, IsNullFilter) and rule.detail.negated:
                 if value is None or value == "":
                     self._warn(
-                        f"{table.name}.{field.name} gets the {chosen.describe()} (empty on some rows), so the "
-                        "entry query filter IS NOT NULL on it is not met, following the spec's priority order."
+                        f"{table.name}.{field.name} gets the {chosen.describe()}, which is empty on some rows. "
+                        "The IS NOT NULL filter of the entry query on this field is not met, following the "
+                        "spec's priority order."
                     )
                 continue
             other = self._rule_value(rule, table, field, row)
@@ -714,7 +722,8 @@ class _Generator:
             if other != value:
                 self._warn(
                     f"{table.name}.{field.name} gets the {chosen.describe()} "
-                    f"instead of the {rule.describe()} ({other!r}), following the spec's priority order."
+                    f"instead of the {rule.describe()}, following the spec's priority order. "
+                    f"The {rule.describe()} would have been {other!r}."
                 )
 
     def _rule_value(self, rule: _Rule, table: Table, field: Field, row: _Row) -> object:
@@ -760,7 +769,7 @@ class _Generator:
             if row.contact_key is None:
                 self._warn(
                     f"{table.name}.{field.name} should hold the contact key, but {table.name} has one row per "
-                    "scenario, so it is filled by the lower-priority rules."
+                    "scenario. It is filled by the lower-priority rules."
                 )
                 return _SKIP
             return row.contact_key
@@ -805,7 +814,7 @@ class _Generator:
         if len(set(values)) > 1:
             self._warn(
                 f"{ref[0]}.{ref[1]} is read per contact, but its row is shared by scenario {row.scenario.id}, "
-                f"whose cases need different values; the value of the first case ({values[0]!r}) is written."
+                f"whose cases need different values. The value of the first case is written: {values[0]!r}."
             )
         return values[0]
 
@@ -878,7 +887,7 @@ class _Generator:
             self._warn(f"{table.name}.{field.name} has the unknown type {field.type!r}, so it gets a text placeholder.")
         if field_type == "text" and field.name.lower().startswith("email"):
             self._warn(
-                f"{table.name}.{field.name} is a Text field named like an email address; only EmailAddress fields get "
+                f"{table.name}.{field.name} is a Text field named like an email address. Only EmailAddress fields get "
                 "addresses, so it gets a text placeholder."
             )
         if field.is_primary_key:
@@ -888,11 +897,12 @@ class _Generator:
             for text in (f"TST_{run}_P{number:04d}", f"{run}_P{number:04d}", f"P{number:04d}", str(number)):
                 if not field.length or len(text) <= field.length:
                     if not text.startswith("TST_"):
-                        self._warn(f"{table.name}.{field.name} is a primary key of {field.length} characters, too "
-                                   f"short for TST_{run}_P keys; shorter unique values such as {text!r} are written.")
+                        self._warn(f"{table.name}.{field.name} is a primary key of "
+                                   f"{_count(field.length, 'character')}, which is too short for TST_{run}_P keys. "
+                                   f"Shorter unique values are written, such as {text!r}.")
                     return text
-            self._warn(f"{table.name}.{field.name} is a primary key of {field.length} characters, too short "
-                       "for unique generated keys; its values are cut and may repeat.")
+            self._warn(f"{table.name}.{field.name} is a primary key of {_count(field.length, 'character')}, "
+                       "which is too short for unique generated keys. Its values are cut and may repeat.")
             return str(number)[:field.length]
         text = f"TST_{field.name}_{number}"
         return text[:field.length] if field.length else text
@@ -958,7 +968,7 @@ class _Generator:
         local, at, domain = inbox.rpartition("@")
         if not at or not local or not domain or " " in inbox:
             self._warn(
-                f"The real inbox {inbox!r} is not an address of the form name@domain, so it is not used and "
+                f"The real inbox {inbox!r} is not an address of the form name@domain. It is not used, so "
                 "every contact gets an undeliverable address."
             )
             return None
@@ -994,8 +1004,8 @@ class _Generator:
                                             email=email))
         if manual_without_inbox:
             self._warn(
-                f"No real inbox is set, so the contacts of the {manual_without_inbox} case(s) that need an open "
-                f"or a click get undeliverable addresses (@{UNDELIVERABLE_DOMAIN})."
+                f"No real inbox is set. The contacts of {_count(manual_without_inbox, 'case')} with a manual "
+                f"open or click get undeliverable addresses ending in @{UNDELIVERABLE_DOMAIN}."
             )
         return contacts
 
@@ -1008,8 +1018,8 @@ class _Generator:
                 for action in case.manual_actions:
                     if not self._has_wait_before(case, action, activities):
                         self._warn(
-                            f"Case {case.id}: no wait lies between the email {action.email_name!r} "
-                            f"and the engagement split {action.activity_key}, so the tester may not have time to "
+                            f"Case {case.id} has no wait between the email {action.email_name!r} "
+                            f"and the engagement split {action.activity_key}. The tester may not have time to "
                             f"{action.kind} the email before the split is evaluated."
                         )
 
@@ -1115,8 +1125,8 @@ class _Generator:
                 key = self._rule_value(rules[0], entry, field, row)
                 if key is not _SKIP:
                     self._warn(
-                        f"{entry.name}.{field.name} is a key field filled by an expression the PoC does not read "
-                        f"({problem}); the generated key is written so that the tables join."
+                        f"{entry.name}.{field.name} is a key field, but {problem}. "
+                        "The generated key is written so that the tables join."
                     )
                     return _as_text(key)
             self._note_placeholder(entry, field, problem)
@@ -1145,7 +1155,7 @@ class _Generator:
             return "".join(parts), None
         if isinstance(expr, SelectUnsupported):
             return None, f"the entry query fills it with the unsupported expression {expr.text!r}"
-        return None, f"the entry query fills it with an expression the generator does not know ({expr!r})"
+        return None, f"the entry query fills it with an expression the generator does not know: {expr!r}"
 
     def _column_value(self, column: ColumnRef, sources: dict[str, dict[str, Value]]) -> tuple[Value, Optional[str]]:
         resolved = self._resolve_column(column)
@@ -1154,7 +1164,7 @@ class _Generator:
                           "of a source table")
         table, field = resolved
         if table is self._entry:
-            return None, f"the entry query reads the entry table itself ({table.name}.{field.name})"
+            return None, f"the entry query reads the entry table itself, through {table.name}.{field.name}"
         source_row = sources.get(table.name.lower())
         if source_row is None:
             return None, f"the entry query copies {table.name}.{field.name}, but {table.name} has no generated row"
@@ -1168,7 +1178,7 @@ class _Generator:
         try:
             pattern = _dotnet_to_strftime(dotnet_format)
         except (ValueError, KeyError) as error:
-            return None, f"the date format {dotnet_format!r} of the entry query cannot be converted ({error})"
+            return None, f"the date format {dotnet_format!r} of the entry query cannot be converted: {error}"
         return self.generation_time.strftime(pattern), None
 
     def _entry_absent_value(self, entry: Table, field: Field, row: _Row) -> Value:
@@ -1180,20 +1190,20 @@ class _Generator:
             value = self._rule_value(rules[0], entry, field, row)
             if value is not _SKIP:
                 self._warn(
-                    f"{entry.name}.{field.name} is a key field but the entry query does not fill it; the generated "
+                    f"{entry.name}.{field.name} is a key field, but the entry query does not fill it. The generated "
                     "key is written so that the tables join."
                 )
                 return _as_text(value)
         if any(rule.kind == "split" for rule in rules):
             self._warn(
-                f"{entry.name}.{field.name} is read by a split but the entry query does not fill it, so the entry "
-                "row gets what the query would produce (its default or an empty cell), not the case's value."
+                f"{entry.name}.{field.name} is read by a split, but the entry query does not fill it. The entry "
+                "row gets what the query would produce, which is its default or an empty cell, not the case's value."
             )
         for rule in rules:
             if rule.kind == "wait":
                 self._warn(
-                    f"{entry.name}.{field.name} is the date of a wait by attribute but the entry query does not fill "
-                    "it; the wait date is written so that the contacts can pass the wait (the entry check allows it)."
+                    f"{entry.name}.{field.name} is the date of a wait by attribute, but the entry query does not fill "
+                    "it. The wait date is written so that the contacts can pass the wait. The entry check allows this."
                 )
                 return self._normalise(_as_text(self._rule_value(rule, entry, field, row)), entry, field)
         default = self._default_value(entry, field)
@@ -1201,7 +1211,8 @@ class _Generator:
             return default
         if field.is_nullable:
             return None
-        self._note_placeholder(entry, field, "the entry query does not fill it, it is not nullable and has no default")
+        self._note_placeholder(
+            entry, field, "the entry query does not fill it, and it is not nullable and has no default")
         return self._fallback_value(entry, field, row)
 
     def _default_value(self, table: Table, field: Field) -> Value:
@@ -1225,7 +1236,7 @@ class _Generator:
             if required != value:
                 self._warn(
                     f"The entry query fills {entry.name}.{field.name} with another value than the "
-                    f"{rule.describe()} ({required!r}); the entry row keeps what the query produces."
+                    f"{rule.describe()}, which would be {required!r}. The entry row keeps what the query produces."
                 )
             return   # only the highest requirement counts
 

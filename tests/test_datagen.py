@@ -8,8 +8,10 @@ three cases: one needing a manual open, one plain, and one statistical case of 5
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
+
+import pytest
 
 from cjhelper.datagen import (
     SCENARIO_COLUMNS,
@@ -855,3 +857,248 @@ def test_entry_dates_use_the_local_converter_when_sqlparse_lite_is_missing(monke
     monkeypatch.setitem(sys.modules, "cjhelper.sqlparse_lite", None)   # any import of it now fails
     data = run(build_world())
     assert rows_of(data, ENTRY)[0]["ActionId"] == "TST_R01_C0001_TST_R01_S01_20261011_0930"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for behaviour fixed after the first review
+# ---------------------------------------------------------------------------
+
+def all_contact_keys(world: World) -> list[str]:
+    """Contact keys in the order of the rows: scenarios in run order, cases in the order given."""
+    return [key for s in sorted(world.coverage.scenarios, key=lambda s: s.run_order)
+            for case in s.cases for key in case.contact_keys]
+
+
+def test_entry_key_column_filled_by_an_unsupported_expression_still_gets_the_key():
+    world = build_world()
+    query = world.model.entry_query
+    query.select = [SelectItem("ContactId", SelectUnsupported("CAST(M.ContactId AS VARCHAR(50))"))
+                    if item.target_column == "ContactId" else item for item in query.select]
+    data = run(world)
+    entry_keys = [r["ContactId"] for r in rows_of(data, ENTRY)]
+    assert entry_keys == [r["ContactId"] for r in rows_of(data, MASTER)] == all_contact_keys(world)
+    assert entry_keys[:2] == ["TST_R01_C0001", "TST_R01_C0002"]
+    assert any(f"{ENTRY}.ContactId" in w and "key field" in w and "CAST(M.ContactId AS VARCHAR(50))" in w
+               for w in data.warnings)
+    assert not any(p.startswith(f"{ENTRY}.ContactId:") for p in data.placeholders)   # a key is not a placeholder
+
+
+def test_email_field_read_with_the_other_value_gets_the_normal_address():
+    other = "other@example.invalid"
+    world = build_world()
+    world.package.tables[MASTER].fields.append(Field("Emailaddress", "EmailAddress", 254, False, True, None, 13))
+    ref = (MASTER, "Emailaddress")
+    world.coverage.other_values[ref] = other
+    world.coverage.contact_fields.append(ref)
+    for case in world.coverage.cases:
+        case.contact_values[ref] = other
+    next(c for c in world.coverage.cases if c.id == "S02-C01").contact_values[ref] = "vip@example.com"
+    data = run(world)
+    masters = by_key(rows_of(data, MASTER), "ContactId")
+    for key in case_keys(world, "S01-C01"):                          # manual action: the real inbox
+        assert masters[key]["Emailaddress"] == f"tester+{key}@example.com"
+    for key in case_keys(world, "S01-C02"):
+        assert masters[key]["Emailaddress"] == f"{key}@example.invalid"
+    assert {masters[k]["Emailaddress"] for k in case_keys(world, "S02-C01")} == {"vip@example.com"}   # a real condition value
+    assert other not in {row["Emailaddress"] for row in masters.values()}
+
+
+def test_phone_field_read_with_the_other_value_gets_the_fake_phone():
+    other = "000000000000"
+    world = build_world()
+    ref = (MASTER, "Mobile")
+    world.coverage.other_values[ref] = other
+    world.coverage.contact_fields.append(ref)
+    for case in world.coverage.cases:
+        case.contact_values[ref] = other
+    next(c for c in world.coverage.cases if c.id == "S02-C01").contact_values[ref] = "+390212345678"
+    data = run(world)
+    masters = by_key(rows_of(data, MASTER), "ContactId")
+    entries = by_key(rows_of(data, ENTRY), "ContactId")
+    for key in case_keys(world, "S01-C01") + case_keys(world, "S01-C02"):
+        assert masters[key]["Mobile"] == entries[key]["Mobile"] == "333333333333"
+    for key in case_keys(world, "S02-C01"):                          # a real condition value is written as given
+        assert masters[key]["Mobile"] == entries[key]["Mobile"] == "+390212345678"
+    assert other not in {row["Mobile"] for row in masters.values()}
+
+
+def test_select_star_with_an_explicit_literal_item():
+    world = build_world()
+    query = world.model.entry_query
+    query.select = [SelectItem("Source", SelectLiteral("FROM_ITEM"))]   # no source table has a Source column
+    query.select_all = True
+    data = run(world)
+    masters = by_key(rows_of(data, MASTER), "ContactId")
+    rows = rows_of(data, ENTRY)
+    assert {r["Source"] for r in rows} == {"FROM_ITEM"}
+    for row in rows:
+        master_row = masters[row["ContactId"]]
+        for column in ("ContactId", "Email", "AccountId", "CampaignName", "Mobile"):
+            assert row[column] == master_row[column], column
+    assert rows[0]["ContactId"] == "TST_R01_C0001"
+    assert rows[0]["CampaignName"] == "TST_R01_S01"
+
+
+def entry_world_with_a_text_column_for_the_default_email() -> World:
+    """An entry Text column SendTo, copied by the entry query from the Text column MailTo of the master table."""
+    world = build_world()
+    world.package.tables[ENTRY].fields.append(Field("SendTo", "Text", 254, False, True, None, 12))
+    world.package.tables[MASTER].fields.append(Field("MailTo", "Text", 254, False, True, None, 13))
+    world.model.entry_query.select.append(SelectItem("SendTo", SelectColumn(ColumnRef(MASTER, "MailTo"))))
+    return world
+
+
+def test_default_email_field_of_the_journey_gets_addresses():
+    world = entry_world_with_a_text_column_for_the_default_email()
+    world.package.journey.default_email_field = "SendTo"
+    data = run(world)
+    masters = by_key(rows_of(data, MASTER), "ContactId")
+    entries = by_key(rows_of(data, ENTRY), "ContactId")
+    for key in case_keys(world, "S01-C01"):
+        assert entries[key]["SendTo"] == masters[key]["MailTo"] == f"tester+{key}@example.com"
+    for key in case_keys(world, "S01-C02") + case_keys(world, "S02-C01"):
+        assert entries[key]["SendTo"] == masters[key]["MailTo"] == f"{key}@example.invalid"
+    # Without the setting the same Text column is only a placeholder.
+    plain = entry_world_with_a_text_column_for_the_default_email()
+    assert rows_of(run(plain), ENTRY)[0]["SendTo"] == "TST_MailTo_1"
+
+
+def test_default_email_field_gets_addresses_without_an_entry_query_too():
+    world = entry_world_with_a_text_column_for_the_default_email()
+    world.package.journey.default_email_field = "sendto"                 # the spelling of the export may differ
+    world.model.entry_query = None
+    data = run(world)
+    entries = by_key(rows_of(data, ENTRY), "ContactId")
+    assert entries["TST_R01_C0001"]["SendTo"] == "tester+TST_R01_C0001@example.com"
+    assert entries["TST_R01_C0004"]["SendTo"] == "TST_R01_C0004@example.invalid"
+
+
+def test_wait_before_the_email_gets_the_plain_offset_and_the_wait_before_the_engagement_split_gets_24_hours():
+    world = build_world()
+    world.package.tables[CONFIG].fields.append(Field("WAIT0", "Date", None, False, False, "GETDATE()", 10))
+    activities = world.package.journey.activities
+    activities["WAIT-0"] = Activity(
+        key="WAIT-0", raw_type="WAIT", kind=KIND_WAIT_ATTRIBUTE, name="Wait before the email",
+        outcomes=[Outcome("w0", "", "EMAIL-1")], wait_field=(CONFIG, "WAIT0"))
+    activities["DEC-1"].outcomes[0].next = "WAIT-0"
+    case_open = next(c for c in world.coverage.cases if c.id == "S01-C01")
+    case_open.steps = [Step("DEC-1", "email"), Step("WAIT-0", "w0"), Step("EMAIL-1", "e1"), Step("WAIT-1", "w1"),
+                       Step("ENG-1", "yes"), Step("UPD-1", None)]
+    case_open.waits = ["WAIT-0", "WAIT-1"]
+    data = run(world)
+    configs = by_key(rows_of(data, CONFIG), "CampaignName")
+    assert configs["TST_R01_S01"]["WAIT0"] == NOW            # before the email: it would only delay the send
+    assert configs["TST_R01_S01"]["WAIT1"] == PLUS_24H       # between the email and ENG-1: time to open it
+    assert configs["TST_R01_S02"]["WAIT0"] == configs["TST_R01_S02"]["WAIT1"] == NOW
+    assert not any("S01-C01" in w and "may not have time" in w for w in data.warnings)
+
+
+@pytest.mark.parametrize("length, expected, shortened", [
+    (50, ["TST_R01_P0001", "TST_R01_P0002"], False),   # the full form fits
+    (10, ["R01_P0001", "R01_P0002"], True),            # run identifier kept, prefix dropped
+    (5, ["P0001", "P0002"], True),                     # only the row number
+    (4, ["1", "2"], True),                             # P0001 needs 5 characters: the bare row number
+])
+def test_primary_key_text_field_that_is_not_a_join_field_gets_unique_values_that_fit(length, expected, shortened):
+    world = build_world()
+    world.package.tables[CONFIG].fields.append(Field("ConfigId", "Text", length, True, False, None, 10))
+    data = run(world)
+    values = [r["ConfigId"] for r in rows_of(data, CONFIG)]
+    assert values == expected
+    assert len(set(values)) == len(values) and all(len(v) <= length for v in values)
+    warned = [w for w in data.warnings if f"{CONFIG}.ConfigId" in w]
+    assert bool(warned) == shortened
+    assert all("primary key" in w for w in warned)
+
+
+def build_email_key_world(**settings) -> World:
+    """The world where the contact key is an EmailAddress field: ContactId becomes Emailaddress in the entry
+    and master tables, in the contact key group and in the entry query."""
+    world = build_world(**settings)
+    for name in (ENTRY, MASTER):
+        table = world.package.tables[name]
+        table.fields = [replace(f, name="Emailaddress", type="EmailAddress", length=254) if f.name == "ContactId" else f
+                        for f in table.fields]
+        table.sendable_field = "Emailaddress"
+    world.model.contact_key_field = (ENTRY, "Emailaddress")
+    world.model.key_groups[0] = KeyGroup("contact", [(ENTRY, "Emailaddress"), (MASTER, "Emailaddress")])
+    master_key = ColumnRef(MASTER, "Emailaddress")
+    campaign = ColumnRef(CONFIG, "CampaignName")
+    new_items = {
+        "ContactId": SelectItem("Emailaddress", SelectColumn(master_key)),
+        "ActionId": SelectItem("ActionId", SelectConcat((SelectColumn(master_key), SelectLiteral("_"),
+                                                         SelectColumn(campaign)))),
+    }
+    query = world.model.entry_query
+    query.select = [new_items.get(item.target_column, item) for item in query.select]
+    return world
+
+
+def test_email_contact_keys_are_addresses_identical_in_every_table_of_the_contact_group():
+    world = build_email_key_world()
+    data = run(world)
+    first, second, third = (f"TST_R01_C{n:04d}" for n in (1, 2, 3))
+    assert case_keys(world, "S01-C01") == [f"tester+{k}@example.com" for k in (first, second, third)]
+    assert case_keys(world, "S01-C02") == [f"TST_R01_C{n:04d}@example.invalid" for n in (4, 5, 6)]
+    random_keys = case_keys(world, "S02-C01")
+    assert len(random_keys) == 50 and all(k.endswith("@example.invalid") for k in random_keys)
+    expected = all_contact_keys(world)
+    assert [r["Emailaddress"] for r in rows_of(data, MASTER)] == expected
+    assert [r["Emailaddress"] for r in rows_of(data, ENTRY)] == expected
+    assert [r["Email"] for r in rows_of(data, MASTER)] == [r["Email"] for r in rows_of(data, ENTRY)] == expected
+    assert [c.key for c in data.contacts] == [c.email for c in data.contacts] == expected
+    assert rows_of(data, ENTRY)[0]["ActionId"] == f"tester+{first}@example.com_TST_R01_S01"
+    assert data.scenarios_rows[0]["first_contact_key"] == expected[0]
+    assert data.scenarios_rows[1]["last_contact_key"] == expected[-1]
+
+
+def test_scenarios_rows_name_the_activation_field_under_one_active_mode():
+    data = run(build_world())
+    assert [r["active_at_start"] for r in data.scenarios_rows] == ["yes", "no"]
+    assert [r["activation_field"] for r in data.scenarios_rows] == [f"{CONFIG}.ACTIVE", f"{CONFIG}.ACTIVE"]
+
+
+def test_scenarios_rows_leave_the_activation_field_empty_when_the_mode_is_off():
+    data = run(build_world(one_active_scenario=False))
+    assert [r["active_at_start"] for r in data.scenarios_rows] == ["yes", "yes"]
+    assert [r["activation_field"] for r in data.scenarios_rows] == [None, None]
+
+
+def test_scenarios_rows_leave_the_activation_field_empty_when_no_field_is_known():
+    world = build_world(one_active_scenario=True)
+    world.model.activation_field = None
+    data = run(world)
+    assert [r["active_at_start"] for r in data.scenarios_rows] == ["yes", "yes"]
+    assert [r["activation_field"] for r in data.scenarios_rows] == [None, None]
+    assert any("no activation field" in w for w in data.warnings)
+
+
+def test_filter_of_a_followed_query_leaves_its_column_empty_and_is_warned():
+    def world_with_a_date_column() -> World:
+        world = build_world()
+        world.package.tables[CONFIG].fields.append(Field("CLOSED_ON", "Date", None, False, True, None, 10))
+        return world
+
+    assert {r["CLOSED_ON"] for r in rows_of(run(world_with_a_date_column()), CONFIG)} == {NOW}   # no filter: a date
+
+    world = world_with_a_date_column()
+    world.model.source_queries.append(ParsedQuery(
+        name="Q_Reset", target_table=CONFIG, sources=[TableRef(CONFIG, "C")], joins=[],
+        filters=[IsNullFilter(ColumnRef(CONFIG, "CLOSED_ON"))], select=[]))
+    data = run(world)
+    assert [r["CLOSED_ON"] for r in rows_of(data, CONFIG)] == [None, None]
+    assert [w for w in data.warnings if "CLOSED_ON" in w and "Q_Reset" in w]
+
+
+def test_contact_level_field_in_a_scenario_row_with_different_case_values_is_warned_once():
+    world = build_world()
+    ref = (CONFIG, "Label")
+    world.coverage.contact_fields.append(ref)
+    cases = {c.id: c for c in world.coverage.cases}
+    cases["S01-C01"].contact_values[ref] = "Aaa"
+    cases["S01-C02"].contact_values[ref] = "Bbb"
+    data = run(world)
+    assert rows_of(data, CONFIG)[0]["Label"] == "Aaa"                    # the value of the first case
+    warned = [w for w in data.warnings if f"{CONFIG}.Label" in w]
+    assert len(warned) == 1
+    assert "S01" in warned[0] and "'Aaa'" in warned[0]
