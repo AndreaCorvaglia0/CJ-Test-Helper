@@ -6,3 +6,11 @@
 - Pilot input: fixtures/CJ template complesso-v1.json. The acceptance criteria in the spec are the definition of done.
 - The old tool (github.com/carolagalloni/CJ-Test-Helper) is reference only. Where it differs from the spec, the spec wins.
 - Python 3.11+, tests with pytest, one commit per completed step.
+
+## Look and language of the app (UI work only)
+
+- Any change to how the Streamlit page looks follows docs/brand.md (Lutech brand: colours, Montserrat, logo use, page structure, tone of the texts). Read it before touching cjhelper/app.css, .streamlit/config.toml, cjhelper/static/ or the texts in cjhelper/app.py.
+- The page is in Italian; Salesforce terms and words the team uses in English (journey, split, branch, trust check, warning, inbox...) stay in English. The generator's own messages and the downloaded files are still in English: translating them is a separate, later step.
+- Styling is presentation only: never change generation logic, settings or outputs to make the page look different.
+- cjhelper/app.css must never contain a less-than sign, even in a comment: Streamlit's HTML sanitizer drops the whole stylesheet without an error.
+- Check a visual change in a real browser (streamlit run cjhelper/app.py from the repository root) and keep tests/test_app.py in step with the page.

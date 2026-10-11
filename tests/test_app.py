@@ -74,11 +74,32 @@ def _expander(at, label: str):
     return found[0]
 
 
+def _cards(at) -> list[str]:
+    """The labels of the step cards, which open with the step's title in bold."""
+    return [_plain(e.label) for e in at.expander if e.label.startswith("**")]
+
+
+def _card(at, title: str):
+    found = [e for e in at.expander if _plain(e.label).startswith(f"**{title}**")]
+    assert len(found) == 1, (title, _cards(at))
+    return found[0]
+
+
+def _labels(at) -> list[str]:
+    """The small section labels inside the cards."""
+    return re.findall(r'<p class="cj-label">(.+?)</p>', "\n".join(m.value for m in at.markdown))
+
+
+def _html_bodies(at) -> str:
+    return "\n".join(element.proto.body for element in at.get("html"))
+
+
 def _step_content(at) -> list:
     """Everything a step after the upload would show."""
-    return (list(at.header[1:]) + list(at.subheader) + list(at.get("dataframe")) + list(at.table)
+    cards = [e for e in at.expander if not _plain(e.label).startswith(f"**{app.STEP_UPLOAD}**")]
+    return (list(at.header) + list(at.subheader) + list(at.get("dataframe")) + list(at.table)
             + list(at.button) + list(at.checkbox) + list(at.number_input) + list(at.text_input)
-            + list(at.selectbox) + list(at.expander) + list(at.get("download_button")))
+            + list(at.selectbox) + cards + list(at.get("download_button")))
 
 
 @pytest.fixture(scope="module")
@@ -93,8 +114,11 @@ def pilot_bytes() -> bytes:
 def test_page_without_file_shows_the_upload_step_and_no_error():
     at = AppTest.from_file(str(APP_FILE)).run(timeout=TIMEOUT)
     assert not at.exception
-    assert [t.value for t in at.title] == [app.TITLE]
-    assert [h.value for h in at.header] == [app.STEP_UPLOAD]
+    html = _html_bodies(at)
+    assert f'<span class="cj-name">{app.TITLE}</span>' in html and 'alt="Lutech"' in html   # the header
+    assert '<div class="now"><b>1 · Carica</b>' in html                                      # the stepper
+    assert _cards(at) == [f"**{app.STEP_UPLOAD}** il file JSON che Package Manager esporta per il journey"]
+    assert _card(at, app.STEP_UPLOAD).proto.expanded is True
     uploaders = at.get("file_uploader")
     assert len(uploaders) == 1 and uploaders[0].label == app.UPLOAD_LABEL
     assert _captions(at) == [app.UPLOAD_NOTE]          # visible, says where the file comes from
@@ -110,18 +134,19 @@ def test_the_uploader_takes_any_file_and_the_page_answers_with_one_sentence():
     uploader.set_value(("export.txt", b"just some notes", "text/plain")).run(timeout=TIMEOUT)
     assert not at.exception
     assert [_plain(e.value) for e in at.error] == [
-        "The file is not valid JSON: there is a problem at line 1, column 1. " + app.NEXT_STEP]
-    assert [h.value for h in at.header] == [app.STEP_UPLOAD]
+        "Il file non è un JSON valido: c'è un problema alla riga 1, colonna 1. " + app.NEXT_STEP]
+    assert _cards(at) == [f"**{app.STEP_UPLOAD}** export.txt · 15 byte"]
+    assert _card(at, app.STEP_UPLOAD).proto.expanded is True      # open, to choose another file
     assert not _step_content(at)
 
 
 @pytest.mark.parametrize("data, words", [
-    (b"{not json", "The file is not valid JSON: there is a problem at line 1, column 2."),
-    (b"", "The file is not valid JSON: there is a problem at line 1, column 1."),
+    (b"{not json", "Il file non è un JSON valido: c'è un problema alla riga 1, colonna 2."),
+    (b"", "Il file non è un JSON valido: c'è un problema alla riga 1, colonna 1."),
     (b"[1, 2]", "a JSON object is expected."),
     (b'{"entities": {"dataExtensions": {}}}', "The export holds no journey."),
     (b'{"name": "x"}', "so it holds no journey."),
-    (b"\xff\xfe\x00{", "The file is not UTF-8 text"),
+    (b"\xff\xfe\x00{", "The file is not UTF-8 text"),   # the loader's own words
 ])
 def test_unreadable_file_shows_one_plain_error_and_nothing_else(data, words):
     at = AppTest.from_function(_render_page, args=(data,)).run(timeout=TIMEOUT)
@@ -147,20 +172,20 @@ def test_without_a_file_nothing_is_kept():
 
 def test_error_messages_are_plain_and_end_with_the_next_step():
     assert app.error_message(LoadError("The export holds no journey.")) == (
-        "The export holds no journey. Choose the JSON file that Package Manager produces.")
+        "The export holds no journey. Scegli il file JSON prodotto da Package Manager.")
     with pytest.raises(LoadError) as not_json:
         from cjhelper import loader
         loader.load_package(b"{oops")
-    assert app.error_message(not_json.value) == ("The file is not valid JSON: there is a problem at line 1, "
-                                                 "column 2. " + app.NEXT_STEP)
+    assert app.error_message(not_json.value) == ("Il file non è un JSON valido: c'è un problema alla riga 1, "
+                                                 "colonna 2. " + app.NEXT_STEP)
     with pytest.raises(json.JSONDecodeError) as raw_json:
         json.loads("\n\n  ]")
-    assert app.error_message(raw_json.value).startswith("The file is not valid JSON: there is a problem at line 3, "
-                                                        "column 3.")
+    assert app.error_message(raw_json.value).startswith("Il file non è un JSON valido: c'è un problema alla riga 3, "
+                                                        "colonna 3.")
     with pytest.raises(UnicodeDecodeError) as not_text:
         b"\xff".decode("utf-8")
-    assert app.error_message(not_text.value) == ("The file is not UTF-8 text, so it is not a valid JSON package "
-                                                 "export. " + app.NEXT_STEP)
+    assert app.error_message(not_text.value) == ("Il file non è testo UTF-8, quindi non è un export JSON "
+                                                 "valido. " + app.NEXT_STEP)
     assert app.is_file_error(LoadError("x")) and not app.is_file_error(KeyError("name"))
     assert app.error_message(KeyError("name")) == app.UNEXPECTED_READ
     try:
@@ -219,19 +244,30 @@ def test_detection_summary_on_pilot(pilot_bytes):
 def test_detection_step_on_pilot_shows_journey_activities_and_the_four_csv_tables(pilot_bytes):
     at = AppTest.from_function(_render_page, args=(pilot_bytes,)).run(timeout=TIMEOUT)
     assert not at.exception and not at.error
-    assert [h.value for h in at.header] == [app.STEP_REVIEW, app.STEP_SETTINGS, app.STEP_GENERATE]
-    assert not at.subheader                              # the numbered steps are the only headings
+    assert [card.split("**")[1] for card in _cards(at)] == [app.STEP_REVIEW, app.STEP_SETTINGS, app.STEP_GENERATE]
+    assert not at.header and not at.subheader           # the cards are the only titles
+    review = _card(at, app.STEP_REVIEW)
+    assert _plain(review.label) == (f"**{app.STEP_REVIEW}** {PILOT_JOURNEY} · 178 attività · 4 tabelle con CSV · "
+                                    ":yellow-badge[5 warning]")
+    assert review.proto.expanded is True
+    assert _card(at, app.STEP_SETTINGS).proto.expanded is True
+    assert _card(at, app.STEP_GENERATE).proto.expanded is False
+    assert _plain(_card(at, app.STEP_GENERATE).label).endswith(" da avviare")
+    assert _labels(at)[:2] == ["Attività per tipo", "Tabelle con CSV"]
     text = _markdown(at)
-    assert f"The export holds the journey {PILOT_JOURNEY}, with 178 activities." in text
-    for label in ("Activities by type", "Tables", "Warnings found in the export"):
-        assert f"**{label}**" in text
-    assert "| Decision split | 106 |" in text and "| Unsupported |" not in text
-    assert re.search(r"^4 tables get a CSV: \S+\.csv, \S+\.csv, \S+\.csv and \S+\.csv\.$", text, flags=re.MULTILINE)
-    rows = re.findall(r"^\| (\S+) \| ([^|]+) \| ([^|]+) \| (yes|no) \|$", text, flags=re.MULTILINE)
-    assert sorted(name for name, _, _, csv in rows[:4] if csv == "yes") == sorted(PILOT_CSV_TABLES)
-    assert ("DE_Check_Active_Campaigns", "written", "-", "no") in rows
+    assert "| Decision split | 106 |" in text and "| Non supportata |" not in text
+    rows = re.findall(r"^\| (\S+) \| ([^|]+) \| ([^|]+) \|$", text, flags=re.MULTILINE)
+    assert sorted(name for name, _, _ in rows if name not in ("Tabella", "---")) == sorted(PILOT_CSV_TABLES)
+    assert ("DE_NCRM_AD_HOC_CONFIG", "source, split", "scenario") in rows
+    assert ("DE_NCM_AdHoc_Entry", "entry", "contatto") in rows
+    captions = _captions(at)
+    assert ("Senza CSV: DE_Check_Active_Campaigns (written), DE_NCRM_AdHoc_Entry_Backup (written) e "
+            "DE_SkyDE_AdHoc_Log_partial (written).") in captions
+    warnings = _expander(at, "Warning trovati nell'export (5)")
+    assert warnings.proto.expanded is False
     assert "- Suspicious pattern: 23 update contact step(s) write the constant 'DemoSKY'" in text
-    assert "UPDATECONTACTDATAV2" not in text and "report.md lists the activities concerned" in text
+    assert "UPDATECONTACTDATAV2" not in text
+    assert any(c.startswith("report.md elenca le attività coinvolte") for c in captions)
     assert [b.label for b in at.button] == [app.GENERATE_LABEL]
     assert not at.get("download_button")      # nothing generated yet
 
@@ -240,7 +276,7 @@ def test_activity_counts_and_roles_use_plain_names():
     activities = {key: SimpleNamespace(kind=kind) for key, kind in
                   [("a", "decision"), ("b", "unsupported"), ("c", "decision"), ("d", "wait_sto"), ("e", "new_kind")]}
     journey = SimpleNamespace(activities=activities)
-    assert app.activity_counts(journey) == [("Decision split", 2), ("Send-time wait", 1), ("Unsupported", 1),
+    assert app.activity_counts(journey) == [("Decision split", 2), ("Send-time wait", 1), ("Non supportata", 1),
                                             ("new_kind", 1)]
     assert app.role_text({"source", "split"}) == "source, split"      # as report.md writes it
     assert app.role_text({"written"}) == "written"
@@ -310,11 +346,11 @@ def test_settings_mapping_reads_the_changed_values():
 
 
 def test_settings_notes_in_words():
-    assert app.days_text(-1) == "1 day before the generation time."
-    assert app.days_text(7) == "7 days after the generation time."
-    assert app.days_text(0) == "At the generation time."
+    assert app.days_text(-1) == "1 giorno prima della generazione."
+    assert app.days_text(7) == "7 giorni dopo la generazione."
+    assert app.days_text(0) == "Al momento della generazione."
     assert app.date_format_note(datetime(2026, 10, 11, 13, 45)) == (
-        "By default, dates are written as YYYY-MM-DD HH:MM, for example 2026-10-11 13:45.")
+        "Di default le date sono scritte come YYYY-MM-DD HH:MM, per esempio 2026-10-11 13:45.")
 
 
 @needs_pilot
@@ -334,12 +370,12 @@ def test_settings_start_at_the_spec_defaults_with_inbox_and_run_identifier_first
                      "date_format": "%Y-%m-%d %H:%M", "run_id": "R01"}
     captions = _captions(at)
     for note in (app.SETTING_NOTES["real_inbox"], app.SETTING_NOTES["run_id"], app.SETTING_NOTES["real_phone"],
-                 "1 day before the generation time.", "7 days after the generation time.", app.GENERATE_NOTE):
+                 "1 giorno prima della generazione.", "7 giorni dopo la generazione.", app.GENERATE_NOTE):
         assert note in captions
-    assert any(c.startswith("By default, dates are written as YYYY-MM-DD HH:MM, for example ") for c in captions)
+    assert any(c.startswith("Di default le date sono scritte come YYYY-MM-DD HH:MM, per esempio ") for c in captions)
     one_active = _widget(at.checkbox, labels["one_active_scenario"])
     assert one_active.value is True and not one_active.disabled
-    assert any("detected in the entry query filters: DE_NCRM_AD_HOC_CONFIG.ACTIVE." in c for c in captions)
+    assert any("rilevato nei filtri della entry query: DE_NCRM_AD_HOC_CONFIG.ACTIVE." in c for c in captions)
     activation = _widget(at.selectbox, labels["activation_field"])
     assert activation.value == PILOT_ACTIVATION
     assert "DE_NCRM_AD_HOC_CONFIG.HAS_RUN" in activation.options
@@ -387,28 +423,33 @@ def _stub_result(checks=None, files=None, journey_name="CJ demo", real_inbox="",
 
 def test_summary_import_and_download_notes():
     result = _stub_result()
-    assert app.done_line(result) == "Done at 13:45, run identifier R01. 1 of 1 trust check passed."
+    assert app.done_summary(result) == "Completato alle 13:45 · run R01"
+    assert app.checks_banner(result) == ("1 di 1", "Tutti i trust check sono superati.", True)
     failing = _stub_result([CheckResult("A", True, []), CheckResult("B", False, ["why"])])
-    assert app.done_line(failing) == ("Done at 13:45, run identifier R01. 1 of 2 trust checks failed: read Trust "
-                                      "checks below before you import.")
+    assert app.checks_banner(failing) == (
+        "1 di 2", "1 trust check non superato: leggi i dettagli qui sotto prima di importare.", False)
+    assert app.checks_banner(_stub_result([]))[2] is False
+    assert app.summary_cells(result) == [("2", "", "Scenari"), ("3", "", "Casi"), ("9", "", "Contatti"),
+                                         ("5", "/ 9", "Branch coperti, 1 con azione manuale"),
+                                         ("4", "", "Branch non coperti")]
     assert app.summary_notes(result) == [
-        "3 of the 4 branches not covered lie behind 2 branches that no contact can reach (see report.md).",
-        "No real inbox was given, so the contacts that must open an email get undeliverable addresses and those "
-        "branches are reported as not covered."]
+        "3 dei 4 branch non coperti stanno dietro a 2 branch che nessun contatto può raggiungere (vedi report.md).",
+        "Non è stata indicata un'inbox reale: i contatti che devono aprire un'email ricevono indirizzi non "
+        "recapitabili e i branch relativi risultano non coperti."]
     assert app.summary_notes(_stub_result(real_inbox="tester@example.com"))[1:] == []
     assert app.import_notes(result) == [
-        "Open report.md first: its How to run section gives the import order.",
-        "Only TST_R01_S01, the first scenario in run order, is active in the CSVs.",
-        "Run the scenarios one at a time, in run order. When the contacts of a scenario have left the journey, "
-        "make the next one active: set DE_Config.ACTIVE to True on its row and to False on every other row. Change "
-        "nothing else and import nothing again."]
+        "Apri prima report.md: la sezione How to run indica l'ordine di import.",
+        "Nei CSV è attivo solo TST_R01_S01, il primo scenario in ordine di esecuzione.",
+        "Esegui gli scenari uno alla volta, in ordine di esecuzione. Quando i contatti di uno scenario sono usciti "
+        "dal journey, attiva il successivo: imposta DE_Config.ACTIVE a True sulla sua riga e a False su tutte le "
+        "altre. Non cambiare altro e non reimportare nulla."]
     assert app.import_notes(_stub_result(one_active=False))[1:] == [
-        "Every scenario is active in the CSVs, so the scenarios run together."]
+        "Nei CSV tutti gli scenari sono attivi, quindi vengono eseguiti insieme."]
     assert app.download_lines(result) == [
-        "DE_Entry.csv: the data to import.",
-        "scenarios.csv: the scenarios in run order, with the one active at the start.",
-        "testbook.xlsx: the tests and their expected results.",
-        "report.md: what is covered, what is not and why, and how to run the tests."]
+        "DE_Entry.csv: i dati da importare.",
+        "scenarios.csv: gli scenari in ordine di esecuzione, con quello attivo all'inizio.",
+        "testbook.xlsx: i test e i risultati attesi.",
+        "report.md: cosa è coperto, cosa no e perché, e come eseguire i test."]
     assert app.preview_files(result) == ["scenarios.csv", "DE_Entry.csv"]
     warnings, left_out = app.generation_warnings(result)
     assert warnings == ["Suspicious pattern: T.F is compared with 'Email' and 'EMAIL'",
@@ -420,35 +461,36 @@ def test_result_step_shows_summary_import_previews_download_checks_and_warnings(
               CheckResult("Values respect the schema", False, [f"problem {n}" for n in range(1, 24)])]
     at = AppTest.from_function(_result_page, args=(_stub_result(checks), b"zip bytes")).run(timeout=TIMEOUT)
     assert not at.exception and not at.error and not at.subheader
+    assert _labels(at) == ["Prima di importare", "Trust check", "Anteprima dei CSV"]
     text = _markdown(at)
-    labels = re.findall(r"^\*\*(.+)\*\*$", text, flags=re.MULTILINE)
-    assert labels == ["Summary", "Before you import", "Preview of the CSVs", "Download", "Trust checks",
-                      "Warnings from the generation"]
-    assert text.startswith("Done at 13:45, run identifier R01. 1 of 2 trust checks failed: read Trust checks below "
-                           "before you import.")
-    for label, count in [("Scenarios", 2), ("Cases", 3), ("Contacts", 9), ("Branches covered", 4),
-                         ("Branches covered with manual action", 1), ("Branches not covered", 4)]:
-        assert f"| {label} | {count} |" in text
-    assert "3 of the 4 branches not covered lie behind 2 branches that no contact can reach (see report.md)." in text
-    assert "No real inbox was given, so the contacts that must open an email" in text
-    assert "- Only TST_R01_S01, the first scenario in run order, is active in the CSVs." in text
-    assert "1 of 2 trust checks passed." in text
-    assert "- Passed: Every key joins" in text and "a note on a passed check" not in text
-    assert "- Failed: Values respect the schema" in text
-    assert "    - problem 20" in text and "problem 21" not in text and "    - and 3 more" in text
-    previews = [_plain(e.label) for e in at.expander]
-    assert previews == ["scenarios.csv: the run plan (2 rows)", "DE_Entry.csv (12 rows)"]
-    assert all(e.proto.expanded is False for e in at.expander)
-    assert not at.get("dataframe") and not at.table     # the file's own lines: no CSV download of a preview
-    entry = _expander(at, "DE_Entry.csv (12 rows)")
-    assert [_plain(c.value) for c in entry.caption] == ["The first 10 of 12 rows."]
-    lines = entry.code[0].value.splitlines()
-    assert lines[0] == "ContactId,Email,Note" and lines[1] == "TST_R01_C0001,,x_1" and len(lines) == 11
-    assert "CJ demo_test_data.zip holds 4 files:" in text
-    assert "- DE_Entry.csv: the data to import." in text
+    assert ('<div class="cj-banner failed"><span class="cj-chip">1 di 2</span><span>1 trust check non superato: '
+            'leggi i dettagli qui sotto prima di importare.</span></div>') in text
+    for value, label in [("2", "Scenari"), ("3", "Casi"), ("9", "Contatti"), ("4", "Branch non coperti")]:
+        assert f"<b>{value}</b><span>{label}</span>" in text
+    assert "<b>5 <small>/ 9</small></b><span>Branch coperti, 1 con azione manuale</span>" in text
+    captions = _captions(at)
+    assert "3 dei 4 branch non coperti stanno dietro a 2 branch che nessun contatto può raggiungere (vedi report.md)." in captions
+    assert any(c.startswith("Non è stata indicata un'inbox reale: i contatti che devono aprire un'email") for c in captions)
+    assert "1. Apri prima report.md: la sezione How to run indica l'ordine di import." in text
+    assert "2. Nei CSV è attivo solo TST_R01_S01, il primo scenario in ordine di esecuzione." in text
+    assert "- :green-badge[Superato] Every key joins" in text and "a note on a passed check" not in text
+    assert "- :red-badge[Non superato] Values respect the schema" in text
+    assert "    - problem 20" in text and "problem 21" not in text and "    - e altri 3" in text
+    assert [tab.label for tab in at.tabs] == ["scenarios.csv", "DE_Entry.csv"]
+    frames = [frame.value for frame in at.dataframe]
+    assert list(frames[0].columns) == ["scenario_key", "run_order"] and len(frames[0]) == 2
+    entry = frames[1]
+    assert list(entry.columns) == ["ContactId", "Email", "Note"] and len(entry) == app.PREVIEW_ROWS
+    assert list(entry.iloc[0]) == ["TST_R01_C0001", "", "x_1"]          # the values as the file writes them
+    assert "2 righe · 2 colonne. Il file completo è nello zip." in captions
+    assert "Prime 10 di 12 righe · 3 colonne. Il file completo è nello zip." in captions
+    assert "CJ demo_test_data.zip contiene 4 file:" in text
+    assert "- DE_Entry.csv: i dati da importare." in text
+    warnings = _expander(at, "Warning della generazione (2)")
+    assert warnings.proto.expanded is False
     assert "- Suspicious pattern: T.F is compared with 'Email' and 'EMAIL'" in text
     assert "No real inbox is set" not in text           # said in the summary instead
-    assert "report.md lists the activities concerned." in text
+    assert "report.md elenca le attività coinvolte." in captions
     buttons = at.get("download_button")
     assert len(buttons) == 1 and buttons[0].label == app.DOWNLOAD_LABEL and buttons[0].proto.type == "primary"
 
@@ -469,7 +511,13 @@ def test_generate_runs_once_and_the_download_does_not_generate_again(pilot_bytes
     assert len(calls) == 1 and calls[0].real_inbox == "tester@example.com"
     assert not _widget(at.button, app.GENERATE_LABEL).disabled          # enabled again under the result
     assert app.PENDING_KEY not in at.session_state
-    assert _markdown(at).count("Done at 13:45") == 1
+    generate = _card(at, app.STEP_GENERATE)
+    assert _plain(generate.label) == f"**{app.STEP_GENERATE}** Completato alle 13:45 · run R01"
+    assert generate.proto.expanded is True            # the result opens step 4 and closes the steps before it
+    assert _card(at, app.STEP_REVIEW).proto.expanded is False
+    settings_card = _card(at, app.STEP_SETTINGS)
+    assert settings_card.proto.expanded is False
+    assert _plain(settings_card.label) == f"**{app.STEP_SETTINGS}** inbox `tester@example.com` · run R01 · 3 contatti per caso"
     stored = at.session_state[app.RESULT_KEY]
     with zipfile.ZipFile(io.BytesIO(stored.zip_bytes)) as archive:
         assert archive.namelist() == list(stored.result.files)
@@ -506,20 +554,22 @@ def test_a_kept_result_shows_only_for_the_same_file_and_settings(pilot_bytes):
 
     at.session_state[app.RESULT_KEY] = app.StoredRun(digest, settings, result=stub, zip_bytes=b"zip")
     at.run(timeout=TIMEOUT)
-    assert "**Summary**" in _markdown(at) and len(at.get("download_button")) == 1
+    assert "cj-banner" in _markdown(at) and len(at.get("download_button")) == 1
 
     other = app.settings_from_form({**app.default_form_values(PILOT_ACTIVATION), "run_id": "R02"})
     at.session_state[app.RESULT_KEY] = app.StoredRun(digest, other, result=stub, zip_bytes=b"zip")
     at.run(timeout=TIMEOUT)
-    assert "**Summary**" not in _markdown(at) and not at.get("download_button")
+    assert "cj-banner" not in _markdown(at) and not at.get("download_button")
 
 
-def test_csv_preview_keeps_the_first_lines_as_written():
+def test_csv_table_keeps_the_first_rows_as_written():
     content = b"A,B,C\n1,,x\n2,\"a,b\",\n3,True,\n"
-    assert app.csv_preview(content, limit=2) == ("A,B,C\n1,,x\n2,\"a,b\",", 3)
-    assert app.csv_preview(content) == (content.decode().rstrip("\n"), 3)
-    assert app.csv_preview(b"") == ("", 0)
-    assert app.csv_preview(b"A,B\n") == ("A,B", 0)
+    assert app.csv_table(content, limit=2) == (["A", "B", "C"], [["1", "", "x"], ["2", "a,b", ""]], 3)
+    assert app.csv_table(content)[1][-1] == ["3", "True", ""]
+    assert app.csv_table(b"") == ([], [], 0)
+    assert app.csv_table(b"A,B\n") == (["A", "B"], [], 0)
+    frame = app._frame(["A", "A", "B"], [["1", "2"]])
+    assert list(frame.columns) == ["A", "A (2)", "B"] and list(frame.iloc[0]) == ["1", "2", ""]
 
 
 def test_zip_file_name():
@@ -548,35 +598,39 @@ def test_generate_on_pilot_then_download_without_generating_again(pilot_bytes, m
     stored = at.session_state[app.RESULT_KEY]
     result = stored.result
     text = _markdown(at)
-    assert app.done_line(result) in text and app.done_line(result).startswith(
-        f"Done at {result.generation_time:%H:%M}, run identifier R01.")
+    assert _plain(_card(at, app.STEP_GENERATE).label).endswith(
+        f"Completato alle {result.generation_time:%H:%M} · run R01")
+    covered, manual, missing, total = app.branch_counts(result)
     stats = result.coverage.stats
-    for label, key in [("Scenarios", "scenarios"), ("Cases", "cases"), ("Contacts", "contacts"),
-                       ("Branches covered", "covered"), ("Branches covered with manual action", "covered_manual"),
-                       ("Branches not covered", "not_covered")]:
-        assert f"| {label} | {stats[key]} |" in text
-    assert re.search(r"\d+ of the \d+ branches not covered lie behind \d+ branch(es)? that no contact can reach",
-                     text)
-    assert "No real inbox was given" not in text
-    assert "- Only TST_R01_S01, the first scenario in run order, is active in the CSVs." in text
-    assert "set DE_NCRM_AD_HOC_CONFIG.ACTIVE to True on its row" in text
-    assert len(re.findall(r"^- (Passed|Failed): ", text, flags=re.MULTILINE)) == len(result.checks)
-    previews = [_plain(e.label) for e in at.expander if _plain(e.label) not in (app.MORE_SETTINGS,)]
-    assert previews[0].startswith("scenarios.csv: the run plan (")
-    assert sorted(p.split(" ")[0].rstrip(":") for p in previews) == sorted(
-        [f"{t}.csv" for t in PILOT_CSV_TABLES] + ["scenarios.csv"])
-    assert len(at.code) == len(previews) and not at.table and not at.get("dataframe")
-    entry = _expander(at, next(p for p in previews if p.startswith("DE_NCM_AdHoc_Entry.csv")))
+    for value, label in [(stats["scenarios"], "Scenari"), (stats["cases"], "Casi"), (stats["contacts"], "Contatti"),
+                         (missing, "Branch non coperti")]:
+        assert f"<b>{value}</b><span>{label}</span>" in text
+    assert f"<b>{covered} <small>/ {total}</small></b><span>Branch coperti, {manual} con azione manuale</span>" in text
+    assert total == stats["covered"] + stats["covered_manual"] + stats["not_covered"]
+    captions = _captions(at)
+    assert any(re.match(r"\d+ dei \d+ branch non coperti stanno dietro a \d+ branch che nessun contatto può "
+                        r"raggiungere", c) for c in captions)
+    assert not any("Non è stata indicata un'inbox reale" in c for c in captions)
+    assert "2. Nei CSV è attivo solo TST_R01_S01, il primo scenario in ordine di esecuzione." in text
+    assert "imposta DE_NCRM_AD_HOC_CONFIG.ACTIVE a True sulla sua riga" in text
+    assert len(re.findall(r"^- :(green|red)-badge\[(Superato|Non superato)\] ", text,
+                          flags=re.MULTILINE)) == len(result.checks)
+    tabs = [tab.label for tab in at.tabs]
+    assert tabs[0] == "scenarios.csv"
+    assert sorted(tabs) == sorted([f"{t}.csv" for t in PILOT_CSV_TABLES] + ["scenarios.csv"])
+    frames = dict(zip(tabs, (frame.value for frame in at.dataframe)))
+    assert len(frames) == len(tabs) and not at.table and not at.code
+    entry = frames["DE_NCM_AdHoc_Entry.csv"]
     entry_columns = [f.name for f in result.package.tables["DE_NCM_AdHoc_Entry"].fields]
-    entry_lines = entry.code[0].value.splitlines()
-    assert next(csv.reader(entry_lines[:1])) == entry_columns
-    assert entry_lines == result.files["DE_NCM_AdHoc_Entry.csv"].decode("utf-8").splitlines()[:app.PREVIEW_ROWS + 1]
-    assert all(len(code.value.splitlines()) <= app.PREVIEW_ROWS + 1 for code in at.code)
+    assert list(entry.columns) == entry_columns
+    file_rows = list(csv.reader(result.files["DE_NCM_AdHoc_Entry.csv"].decode("utf-8").splitlines()))
+    assert [list(row) for row in entry.itertuples(index=False)] == file_rows[1:app.PREVIEW_ROWS + 1]
+    assert all(len(frame) <= app.PREVIEW_ROWS for frame in frames.values())
     with zipfile.ZipFile(io.BytesIO(stored.zip_bytes)) as archive:
         assert archive.namelist() == list(result.files)
     assert sorted(result.files) == sorted([f"{t}.csv" for t in PILOT_CSV_TABLES]
                                           + [outputs.SCENARIOS_FILE, outputs.TESTBOOK_FILE, outputs.REPORT_FILE])
-    assert "CJ_SkYDE_NCRM_Demo_final_test_data.zip holds 7 files:" in text
+    assert "CJ_SkYDE_NCRM_Demo_final_test_data.zip contiene 7 file:" in text
     assert "UPDATECONTACTDATAV2" not in text and "MULTICRITERIADECISIONV2" not in text
 
     at.get("download_button")[0].click().run(timeout=TIMEOUT)

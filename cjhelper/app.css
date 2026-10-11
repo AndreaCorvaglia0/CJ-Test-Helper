@@ -1,0 +1,79 @@
+/* The page's look on top of the theme in .streamlit/config.toml. Rules: docs/brand.md.
+   Selectors use Streamlit's data-testid attributes and the st-key-KEY classes of keyed containers (never a less-than sign in this file, even in a comment: the HTML sanitizer drops a style block that holds one). */
+
+:root {
+  --cj-crimson: #BE0036;
+  --cj-crimson-dark: #8C0031;
+  --cj-jet: #333333;
+  --cj-grey-1: #444444;
+  --cj-grey-2: #B4B4B4;
+  --cj-grey-3: #E1E3EA;
+  --cj-tint: #F6F7FA;
+  --cj-teal: #335A66;
+  --cj-teal-bg: #E8F0F3;
+  --cj-red-bg: #F9E5EA;
+}
+
+/* One centred column, about 1080 px, close to the top: the page's own header replaces Streamlit's. */
+.stMainBlockContainer { max-width: 1080px; padding-top: 0.5rem; padding-bottom: 4rem; }
+header[data-testid="stHeader"] { background: transparent; }
+
+/* Header: logo, separator, app name; a Crimson rule across the window. */
+.cj-header { display: flex; align-items: center; gap: 18px; padding: 14px 0 12px; }
+.cj-header img { width: 118px; height: auto; display: block; }
+.cj-header .cj-sep { width: 1px; height: 22px; background: var(--cj-grey-3); }
+.cj-header .cj-name { font-weight: 300; letter-spacing: .14em; text-transform: uppercase; font-size: 13px; color: var(--cj-jet); }
+.cj-header .cj-note { margin-left: auto; font-size: 12px; color: #777; text-align: right; }
+.cj-rule { height: 3px; background: var(--cj-crimson); margin: 0 calc(50% - 50vw); }
+
+/* Stepper: one line per step, Jet when done, Crimson for the current step. */
+.cj-stepper { display: grid; grid-template-columns: repeat(4, 1fr); margin: 22px 0 6px; }
+.cj-stepper div { border-top: 3px solid var(--cj-grey-3); padding: 9px 12px 0 0; font-size: 12px; color: #888; }
+.cj-stepper b { display: block; font-size: 13px; font-weight: 600; color: var(--cj-jet); }
+.cj-stepper .done { border-top-color: var(--cj-jet); }
+.cj-stepper .now { border-top-color: var(--cj-crimson); }
+.cj-stepper .todo b { color: #888; }
+
+/* Step cards: Streamlit expanders with a title column and a one-line summary. */
+[class*="st-key-card-"] [data-testid="stExpander"] > details { border-color: var(--cj-grey-3); border-radius: 6px; background: #fff; }
+[class*="st-key-card-"] [data-testid="stExpander"] > details > summary { padding: 14px 18px; }
+[class*="st-key-card-"] [data-testid="stExpander"] > details > summary p { font-size: 13px; color: var(--cj-grey-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+[class*="st-key-card-"] [data-testid="stExpander"] > details > summary strong { display: inline-block; min-width: 14rem; font-size: 14px; font-weight: 600; color: var(--cj-jet); }
+[class*="st-key-card-"] [data-testid="stExpander"] > details > summary [data-testid="stIconMaterial"] { font-size: 1.6rem; color: var(--cj-jet); }
+[class*="st-key-card-"][class*="-now"] [data-testid="stExpander"] > details > summary [data-testid="stIconMaterial"] { color: var(--cj-crimson); }
+[class*="st-key-card-"][class*="-todo"] [data-testid="stExpander"] > details > summary [data-testid="stIconMaterial"] { color: var(--cj-grey-2); }
+[class*="st-key-card-"][class*="-now"] [data-testid="stExpander"] > details { border-color: #D9AAB7; }
+[class*="st-key-card-"] [data-testid="stExpanderDetails"] { padding: 4px 20px 20px 56px; }
+
+/* Expanders inside a card (warnings, more settings, technical details): plain, no box. */
+[data-testid="stExpanderDetails"] [data-testid="stExpander"] > details { border: 0; border-top: 1px solid var(--cj-grey-3) !important; border-radius: 0; background: transparent; }
+[data-testid="stExpanderDetails"] [data-testid="stExpander"] > details > summary { padding: 10px 0; }
+[data-testid="stExpanderDetails"] [data-testid="stExpander"] > details > summary p { font-weight: 600; font-size: 13px; color: var(--cj-jet); }
+[data-testid="stExpanderDetails"] [data-testid="stExpander"] [data-testid="stExpanderDetails"] { padding: 0 0 8px; }
+
+/* Section labels inside a card. */
+.cj-label { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--cj-grey-1); margin: 0 0 6px; }
+
+/* Static tables (st.markdown). */
+[data-testid="stMarkdownContainer"] table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin: 0; }
+[data-testid="stMarkdownContainer"] th { background: var(--cj-tint); font-weight: 600; color: var(--cj-grey-1); border: 0; border-bottom: 1px solid var(--cj-grey-3); padding: 6px 10px; }
+[data-testid="stMarkdownContainer"] td { border: 0; border-bottom: 1px solid var(--cj-grey-3); padding: 5px 10px; font-variant-numeric: tabular-nums; }
+
+/* Result banner and the strip of counts. */
+.cj-banner { display: flex; align-items: center; gap: 14px; border-left: 3px solid var(--cj-teal); background: #F2F7F9; padding: 11px 16px; font-size: 13px; margin-bottom: 8px; }
+.cj-banner.failed { border-left-color: var(--cj-crimson); background: var(--cj-red-bg); }
+.cj-chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 3px; background: var(--cj-teal-bg); color: var(--cj-teal); white-space: nowrap; }
+.cj-banner.failed .cj-chip { background: #fff; color: var(--cj-crimson-dark); }
+.cj-strip { display: flex; border: 1px solid var(--cj-grey-3); border-radius: 4px; }
+.cj-strip > div { flex: 1; padding: 11px 16px; border-right: 1px solid var(--cj-grey-3); }
+.cj-strip > div:last-child { border-right: 0; }
+.cj-strip b { display: block; font-size: 20px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--cj-jet); }
+.cj-strip b small { font-size: 12px; font-weight: 400; color: #888; }
+.cj-strip span { font-size: 11.5px; color: var(--cj-grey-1); }
+
+/* Trust checks: a list without bullets, the badge says the state. */
+.st-key-checks ul { list-style: none; padding-left: 0; }
+.st-key-checks ul ul { list-style: disc; padding-left: 1.2rem; }
+
+/* CSV previews: the full file is in the zip, so the table toolbar (with its CSV download) is hidden. */
+.st-key-previews [data-testid="stElementToolbar"] { display: none !important; }
