@@ -236,9 +236,54 @@ def test_expected_range():
 
 
 def test_build_domain_rules():
-    assert coverage.build_domain("Boolean", ["false"], True, False, "%Y-%m-%d %H:%M") == ["False", "True", None]
-    assert coverage.build_domain("Text", ["A", "a", "B"], False, False, "%Y-%m-%d %H:%M") == ["A", "a", "B", "OTHER"]
-    assert coverage.build_domain("Text", ["A", "a", "B"], True, True, "%Y-%m-%d %H:%M") == ["A", "B", "OTHER", None]
-    assert coverage.build_domain("Text", ["OTHER"], False, False, "%Y-%m-%d %H:%M") == ["OTHER", "OTHER_2"]
-    assert coverage.build_domain("Number", ["3"], False, False, "%Y-%m-%d %H:%M") == ["3", "4"]
-    assert coverage.build_domain("Date", ["2026-01-01 00:00"], False, False, "%Y-%m-%d %H:%M") == ["2026-01-01 00:00", "2026-01-02 00:00"]
+    fmt = "%Y-%m-%d %H:%M"
+    c = lambda op, v, t="DE_Master", f="F": cond(t, f, op, v)
+    assert coverage.build_domain("Boolean", [c("Is", "false")], True, False, fmt)[0] == ["False", "True", None]
+    assert coverage.build_domain("Text", [c("Equal", "A"), c("Equal", "a"), c("Equal", "B")], False, False, fmt)[0] == ["A", "a", "B", "OTHER"]
+    assert coverage.build_domain("Text", [c("Equal", "A"), c("Equal", "a"), c("Equal", "B")], True, True, fmt)[0] == ["A", "B", "OTHER", None]
+    assert coverage.build_domain("Text", [c("Equal", "OTHER")], False, False, fmt)[0] == ["OTHER", "X"]
+    assert coverage.build_domain("Number", [c("Equal", "3")], False, False, fmt)[0] == ["3", "4"]
+    assert coverage.build_domain("Date", [c("Equal", "2026-01-01 00:00")], False, False, fmt)[0] == ["2026-01-01 00:00", "2026-01-02 00:00"]
+    # the 'other' value fits the field length; a condition value that does not fit is left out with a warning
+    domain, other, warnings = coverage.build_domain("Text", [c("Equal", "IT"), c("Equal", "ITA")], True, False, fmt, length=2)
+    assert domain == ["IT", "X", None] and other == "X" and any("'ITA'" in w for w in warnings)
+    domain, other, _ = coverage.build_domain("Text", [c("Equal", "Y")], False, False, fmt, length=1)
+    assert domain == ["Y", "X"]
+    # ordering operators get a value on the other side of the bound
+    assert coverage.build_domain("Number", [c("LessThan", "50")], False, False, fmt)[0] == ["50", "49", "51"]
+    assert coverage.build_domain("Date", [c("GreaterThan", "2026-01-01 00:00")], False, False, fmt)[0] == ["2026-01-01 00:00", "2026-01-02 00:00", "2026-01-03 00:00"]
+    # email and phone fields get an 'other' value of their own kind
+    assert coverage.build_domain("EmailAddress", [c("IsNull", None)], True, False, fmt)[0] == ["other@example.invalid", None]
+    assert coverage.build_domain("Phone", [c("IsNull", None)], True, False, fmt)[0] == ["000000000000", None]
+    # a Contains condition: the other value must not contain the text
+    domain, other, _ = coverage.build_domain("Text", [c("Contains", "OTH")], False, False, fmt)
+    assert other == "X"
+
+
+def test_unsupported_outcome_keeps_the_earlier_outcomes_coverable():
+    acts = [decision("SPLIT-1", "s", [("a", "A", "UPD-A", cond("DE_Master", "Perm", "Is", "true")),
+                                      ("b", "B", "UPD-B", cond("DE_Master", "Consent", "Between", "x"))], remainder_next="UPD-R"),
+            update("UPD-A", "A", [], None), update("UPD-B", "B", [], None), update("UPD-R", "R", [], None)]
+    acts[0].outcomes[1].unsupported_reason = "outcome 'B' uses the operator 'Between', which the PoC does not support"
+    r = run(acts, [ENTRY, MASTER])
+    assert status(r, "SPLIT-1", "a").status == STATUS_COVERED
+    b = status(r, "SPLIT-1", "b")
+    assert b.status == STATUS_NOT_COVERED and b.reason.startswith("unsupported outcome") and "Between" in b.reason
+    rem = status(r, "SPLIT-1", "remainder_path")
+    assert rem.status == STATUS_NOT_COVERED and rem.reason.startswith("behind an unsupported element")
+    assert "SPLIT-1/b" in r.unsupported
+    assert r.stats["cases"] == 2   # the A case and the case that stops at the unsupported outcome
+
+
+def test_branches_behind_an_unsupported_activity_name_it():
+    acts = [
+        decision("SPLIT-1", "perm", [("ok", "ok", "X-1", cond("DE_Master", "Perm", "Is", "true"))], remainder_next="X-2"),
+        unsupported("X-1", "SMSSYNC", "SPLIT-2"), unsupported("X-2", "WHATSAPP", "SPLIT-3"),
+        decision("SPLIT-2", "later", [("a", "A", None, cond("DE_Master", "Consent", "Is", "true"))], remainder_next=None),
+        decision("SPLIT-3", "later2", [("a", "A", None, cond("DE_Master", "Consent", "Is", "true"))], remainder_next=None),
+    ]
+    r = run(acts, [ENTRY, MASTER], unsupported_keys=["X-1", "X-2"])
+    b2 = status(r, "SPLIT-2", "a")
+    assert b2.status == STATUS_NOT_COVERED and b2.reason.startswith("behind an unsupported element") and "X-1" in b2.reason and "X-2" not in b2.reason
+    b3 = status(r, "SPLIT-3", "a")
+    assert "X-2" in b3.reason and "X-1" not in b3.reason

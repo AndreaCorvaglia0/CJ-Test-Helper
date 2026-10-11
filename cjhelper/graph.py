@@ -352,10 +352,21 @@ class Walker:
                         seen[ref] = v
             self.on_decision(activity, seen)
 
-        for outcome in activity.outcomes:
+        # Spec: outcomes are tried in order and the remainder means none matched, so the remainder
+        # is evaluated last whatever its position in the export.
+        remainder = [o for o in activity.outcomes if o.is_remainder or o.formula is None]
+        ordered = [o for o in activity.outcomes if o not in remainder] + remainder
+        for outcome in ordered:
             if outcome.is_remainder or outcome.formula is None:
                 observe()
                 self._take(activity, outcome, state)
+                return
+            if outcome.unsupported_reason:
+                observe()
+                state.steps.append(Step(activity.key, None))
+                state.stop = STOP_UNSUPPORTED
+                state.stop_detail = (f"outcome '{outcome.label or outcome.key}' of split '{activity.key}' "
+                                     f"is not supported: {outcome.unsupported_reason}")
                 return
             try:
                 result = evaluate(outcome.formula, value, self.schema, self.case_insensitive)

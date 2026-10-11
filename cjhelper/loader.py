@@ -401,6 +401,12 @@ def _key_field(key: Any) -> Optional[tuple[str, str]]:
     return set_name, field_name
 
 
+def _event_field(text: str) -> Optional[str]:
+    """The field name in ``{{Event.<key>."Field"}}``: the entry table field the journey sends to."""
+    match = re.search(r'\."([^"]+)"\s*\}\}', str(text))
+    return match.group(1) if match else None
+
+
 def _event_key(expression: Any) -> Optional[str]:
     """The event key of ``{{Event.<key>."Field"}}``, or None when the expression reads no entry event."""
     segments = _personalisation_segments(expression)
@@ -817,6 +823,7 @@ class _ExportReader:
             entry_event_key=entry.key or None,
             entry_table=entry.table,
             default_email_event_key=_event_key(email_defaults[0]) if email_defaults else None,
+            default_email_field=_event_field(email_defaults[0]) if email_defaults else None,
             activity_count=len(activities),
         )
 
@@ -919,8 +926,11 @@ class _ExportReader:
             outcome.formula = self.map_formula(formula)
             problem = self.unsupported_condition(outcome)
             if problem is not None:
-                self.make_unsupported(activity, problem)
-                return
+                # Spec: outcomes are tried in order, so the outcomes before this one can still be
+                # covered; this one and the ones after it are reported as not covered.
+                outcome.unsupported_reason = problem
+                self.warn(f"Decision split {_named(activity)}: {problem}; this outcome and the ones after it "
+                          "are reported as not covered.")
         remainders = [position for position, outcome in enumerate(activity.outcomes, 1) if outcome.is_remainder]
         if remainders != [len(activity.outcomes)]:
             self.warn(f"Decision split {_named(activity)} should have one outcome without criteria "
@@ -967,6 +977,10 @@ class _ExportReader:
         for outcome, raw_outcome in zip(activity.outcomes, raw_outcomes):
             when = _dict(raw_outcome.get("arguments")).get("when")
             outcome.when = when if isinstance(when, bool) else None
+        if activity.outcomes and all(o.when is None for o in activity.outcomes):
+            self.make_unsupported(activity, "its outcomes do not say which one is the Yes branch and which the No branch")
+            return
+        for outcome in activity.outcomes:
             if outcome.when is None:
                 self.warn(f"Engagement split {_named(activity)}, outcome {outcome.label!r}, does not "
                           f"say whether it is the Yes or the No branch.")

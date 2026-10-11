@@ -133,3 +133,30 @@ def test_observer_receives_values_of_the_split_fields():
     w.on_decision = lambda activity, values: seen.append((activity.key, values))
     w.run(w.start(), lookup_from({("DE_Master", "Channel"): "Y"}))
     assert seen == [("SPLIT-1", {("DE_Master", "Channel"): "Y"})]
+
+
+def test_remainder_is_evaluated_last_whatever_its_position():
+    from cjhelper.model import Outcome
+    remainder = Outcome(key="remainder_path", label="Remainder", next="UPD-R", formula=None, is_remainder=True)
+    yes = Outcome(key="yes", label="yes", next="UPD-Y", formula=cond("DE_Master", "Perm", "Is", "true"))
+    split = decision("SPLIT-1", "s", [], remainder_next=None)
+    split.outcomes = [remainder, yes]
+    acts = [split, update("UPD-Y", "Y", [], None), update("UPD-R", "R", [], None)]
+    w, j = build_walker(acts)
+    st = w.run(w.start(), lookup_from({("DE_Master", "Perm"): "True"}))
+    assert st.steps[0] == Step("SPLIT-1", "yes")
+    st = w.run(w.start(), lookup_from({("DE_Master", "Perm"): "False"}))
+    assert st.steps[0] == Step("SPLIT-1", "remainder_path")
+
+
+def test_unsupported_outcome_stops_the_walk_only_when_it_is_reached():
+    acts = [decision("SPLIT-1", "s", [("a", "A", "UPD-A", cond("DE_Master", "Perm", "Is", "true")),
+                                      ("b", "B", "UPD-B", cond("DE_Master", "Channel", "Between", "x"))], remainder_next="UPD-R"),
+            update("UPD-A", "A", [], None), update("UPD-B", "B", [], None), update("UPD-R", "R", [], None)]
+    acts[0].outcomes[1].unsupported_reason = "uses the operator 'Between'"
+    w, j = build_walker(acts)
+    st = w.run(w.start(), lookup_from({("DE_Master", "Perm"): "True"}))
+    assert st.steps == [Step("SPLIT-1", "a"), Step("UPD-A", "UPD-A-out")]
+    st = w.run(w.start(), lookup_from({("DE_Master", "Perm"): "False"}))
+    assert st.stop == graph.STOP_UNSUPPORTED and st.steps == [Step("SPLIT-1", None)]
+    assert "Between" in st.stop_detail

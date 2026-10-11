@@ -180,6 +180,7 @@ class Outcome:
     percentage: Optional[int] = None    # random split only
     when: Optional[bool] = None    # engagement split only: True = Yes branch, False = No branch
     description: str = ""          # metaData.criteriaDescription when present
+    unsupported_reason: Optional[str] = None   # decision outcome the PoC cannot evaluate (operator, unknown field)
 
 
 @dataclass
@@ -225,6 +226,7 @@ class Journey:
     entry_event_key: Optional[str]       # eventDefinitionKey of the trigger
     entry_table: Optional[str]           # table bound to the entry trigger
     default_email_event_key: Optional[str] = None   # event key used by defaults.email, for the anomaly check
+    default_email_field: Optional[str] = None       # entry table field the journey sends emails to (defaults.email)
     activity_count: int = 0
 
     def branches(self) -> list[tuple[Activity, Outcome]]:
@@ -300,6 +302,11 @@ class SelectLiteral:
 
 
 @dataclass(frozen=True)
+class SelectNull:
+    """``NULL AS x``: the entry column is empty."""
+
+
+@dataclass(frozen=True)
 class SelectCurrentDate:
     format: Optional[str]          # .NET format string from FORMAT(GETDATE(), '...'), None for a plain date
 
@@ -314,7 +321,7 @@ class SelectUnsupported:
     text: str
 
 
-SelectExpr = Union[SelectColumn, SelectLiteral, SelectCurrentDate, SelectConcat, SelectUnsupported]
+SelectExpr = Union[SelectColumn, SelectLiteral, SelectNull, SelectCurrentDate, SelectConcat, SelectUnsupported]
 
 
 @dataclass(frozen=True)
@@ -540,6 +547,7 @@ class CoverageResult:
     contact_fields: list[FieldRef]
     domains: dict[FieldRef, list[Value]]
     unsupported: list[str]           # activity keys stopped as unsupported
+    other_values: dict[FieldRef, Value] = field(default_factory=dict)   # the 'other' value of each field
     warnings: list[str] = field(default_factory=list)
     stats: dict[str, int] = field(default_factory=dict)
 

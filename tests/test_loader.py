@@ -772,11 +772,11 @@ def test_condition_on_a_field_missing_from_the_schema_is_reported():
         condition(S_CONFIG, "CHANNEL9", "Equal", "SMS"))
     package = load(activities)
     # Spec: "the rest is reported, not guessed": a field missing from the schema cannot be typed,
-    # so the split is unsupported and the branches behind it will be reported as not covered.
+    # so that outcome is unsupported; outcomes before it stay coverable (first match wins).
     channel = package.journey.activities["DECISION-1"]
-    assert channel.kind == KIND_UNSUPPORTED and channel.raw_type == "MULTICRITERIADECISION"
-    assert "CHANNEL9" in channel.unsupported_reason
-    assert "DECISION-1" in package.unsupported_activities
+    assert channel.kind == KIND_DECISION
+    assert channel.outcomes[0].unsupported_reason is None
+    assert "CHANNEL9" in channel.outcomes[1].unsupported_reason
     assert has_warning(package, "CHANNEL9", "DE_Config")
 
 
@@ -798,9 +798,9 @@ def test_unsupported_operator_is_reported():
     package = load(activities)
     channel = package.journey.activities["DECISION-1"]
     # Spec: an unknown operator is "listed in the report, and the branches behind it are marked as
-    # not covered"; the split becomes unsupported instead of crashing the generation.
-    assert channel.kind == KIND_UNSUPPORTED
-    assert "Between" in channel.unsupported_reason
+    # not covered"; the outcome is unsupported instead of crashing the generation.
+    assert channel.kind == KIND_DECISION
+    assert "Between" in channel.outcomes[1].unsupported_reason
     assert has_warning(package, "DECISION-1", "Between", "not support")
 
 

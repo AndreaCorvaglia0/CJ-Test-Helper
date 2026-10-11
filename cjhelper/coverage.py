@@ -34,6 +34,9 @@ from . import graph
 from .model import (
     EqualityFilter,
     IsNullFilter,
+    SelectCurrentDate,
+    SelectLiteral,
+    SelectNull,
     KIND_DECISION,
     KIND_ENGAGEMENT,
     KIND_RANDOM,
@@ -72,7 +75,13 @@ from .model import (
 MAX_CONTACT_COMBINATIONS = 200_000
 MAX_SCENARIO_COMBINATIONS = 2_000_000
 
-OTHER_TEXT_CANDIDATES = ("OTHER", "OTHER_2", "OTHER_3", "OTHER_4")
+OTHER_TEXT_CANDIDATES = ("OTHER", "OTHER_2", "OTHER_3", "OTHER_4", "X", "Y", "Z", "W", "XX", "YY", "ZZ", "XY", "XZ", "YZ")
+OTHER_EMAIL = "other@example.invalid"
+OTHER_PHONE = "000000000000"
+KEY_MARKER = "<generated key>"     # stands for the generated key in the domain of a key field
+TEXT_TYPES = ("Text", "EmailAddress", "Phone", "Locale")
+ORDER_OPERATORS_UP = ("GreaterThan", "GreaterThanOrEqual")
+ORDER_OPERATORS_DOWN = ("LessThan", "LessThanOrEqual")
 
 
 # ---------------------------------------------------------------------------
@@ -90,78 +99,132 @@ def _normalise_boolean(value: Value) -> Value:
     return value
 
 
-def _other_text(values: list[Value]) -> str:
-    taken = {v.lower() for v in values if v is not None}
+def _clashes(candidate: str, values: list[str]) -> bool:
+    """A text 'other' value must not equal, contain or be contained in any condition value,
+    so that Equal, Contains, BeginsWith and EndsWith conditions all stay false for it."""
+    low = candidate.lower()
+    for v in values:
+        vl = v.lower()
+        if vl and (low == vl or vl in low or low in vl):
+            return True
+    return False
+
+
+def _other_text(values: list[str], length: Optional[int]) -> Optional[str]:
+    """An 'other' text value that fits the field length; None when no such value exists."""
     for candidate in OTHER_TEXT_CANDIDATES:
-        if candidate.lower() not in taken:
+        if length is not None and len(candidate) > length:
+            continue
+        if not _clashes(candidate, values):
             return candidate
-    n = 5
-    while f"OTHER_{n}".lower() in taken:
+    n = 1
+    while n < 1000:
+        candidate = f"O{n}"
+        if length is None or len(candidate) <= length:
+            if not _clashes(candidate, values):
+                return candidate
+        elif length is not None and length < 2:
+            break
         n += 1
-    return f"OTHER_{n}"
+    return None
 
 
-def _other_date(values: list[Value], date_format: str) -> str:
-    for v in values:
-        if v is None:
-            continue
-        for fmt in (date_format, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
-            try:
-                return (datetime.strptime(v, fmt) + timedelta(days=1)).strftime(date_format)
-            except ValueError:
-                continue
-    return datetime(2000, 1, 1).strftime(date_format)
-
-
-def _other_number(values: list[Value]) -> str:
-    nums = []
-    for v in values:
+def _parse_date(value: str, date_format: str) -> Optional[datetime]:
+    for fmt in (date_format, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
         try:
-            nums.append(float(v))
-        except (TypeError, ValueError):
+            return datetime.strptime(value, fmt)
+        except ValueError:
             continue
-    if not nums:
-        return "0"
-    top = max(nums) + 1
-    return str(int(top)) if top == int(top) else str(top)
+    return None
 
 
-def build_domain(field_type: str, condition_values: list[Value], nullable: bool,
-                 case_insensitive: bool, date_format: str) -> list[Value]:
+def _shift_date(value: str, days: int, date_format: str) -> Optional[str]:
+    parsed = _parse_date(value, date_format)
+    return (parsed + timedelta(days=days)).strftime(date_format) if parsed else None
+
+
+def _shift_number(value: str, delta: int) -> Optional[str]:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    n += delta
+    return str(int(n)) if n == int(n) else str(n)
+
+
+def build_domain(field_type: str, conditions: list[Condition], nullable: bool, case_insensitive: bool,
+                 date_format: str, length: Optional[int] = None) -> tuple[list[Value], Optional[Value], list[str]]:
     """Spec step 4: the values named in conditions, one extra 'other' value, null when allowed.
 
-    Booleans always take both True and False (the 'other' of one is the other).
-    Text values keep the letter case written in the condition (data rule 2). When text
-    comparisons ignore case, spellings that differ only by case are one value.
+    Returns (domain, the 'other' value, warnings). Booleans always take both True and False.
+    Text values keep the letter case written in the condition (data rule 2); when text
+    comparisons ignore case, spellings that differ only by case are one value. A condition
+    value longer than the field can never be stored, so it is left out with a warning.
+    Ordering conditions (GreaterThan, LessThan, ...) add a value just above or below the bound,
+    so that both sides of the comparison exist.
     """
+    warnings: list[str] = []
     values: list[Value] = []
+    other: Optional[Value] = None
     if field_type == "Boolean":
-        for v in condition_values:
-            v = _normalise_boolean(v)
+        for cond in conditions:
+            v = _normalise_boolean(cond.value)
             if v in ("True", "False") and v not in values:
                 values.append(v)
         for v in ("True", "False"):
             if v not in values:
                 values.append(v)
+    elif field_type in ("Number", "Decimal", "Date"):
+        is_date = field_type == "Date"
+        for cond in conditions:
+            if cond.value is None:
+                continue
+            extra: list[Optional[str]] = [cond.value]
+            if cond.operator in ORDER_OPERATORS_UP:
+                extra.append(_shift_date(cond.value, 1, date_format) if is_date else _shift_number(cond.value, 1))
+            elif cond.operator in ORDER_OPERATORS_DOWN:
+                extra.append(_shift_date(cond.value, -1, date_format) if is_date else _shift_number(cond.value, -1))
+            for v in extra:
+                if v is not None and v not in values:
+                    values.append(v)
+        named = [v for v in values if v is not None]
+        if is_date:
+            other = _shift_date(named[0], 1, date_format) if named else datetime(2000, 1, 1).strftime(date_format)
+            while other in values:
+                other = _shift_date(other, 1, date_format)
+        else:
+            nums = [float(v) for v in named if _shift_number(v, 0) is not None]
+            top = max(nums) + 1 if nums else 0
+            other = str(int(top)) if top == int(top) else str(top)
+        values.append(other)
     else:
         seen: set[str] = set()
-        for v in condition_values:
+        for cond in conditions:
+            v = cond.value
             if v is None:
                 continue
-            key = v.lower() if (case_insensitive and field_type not in ("Date", "Number", "Decimal")) else v
+            if length is not None and len(v) > length:
+                warnings.append(f"the condition value {v!r} is longer than the field ({length} characters), "
+                                "so that condition can never be true")
+                continue
+            key = v.lower() if case_insensitive else v
             if key not in seen:
                 seen.add(key)
                 values.append(v)
-        if field_type == "Date":
-            values.append(_other_date(values, date_format))
-        elif field_type in ("Number", "Decimal"):
-            values.append(_other_number(values))
+        named = [v for v in values if v is not None]
+        if field_type == "EmailAddress":
+            other = OTHER_EMAIL if not _clashes(OTHER_EMAIL, named) else _other_text(named, length)
+        elif field_type == "Phone":
+            other = OTHER_PHONE if not _clashes(OTHER_PHONE, named) else _other_text(named, length)
         else:
-            values.append(_other_text(values))
+            other = _other_text(named, length)
+        if other is None:
+            warnings.append(f"no 'other' value fits the field ({length} characters) beside the condition values")
+        else:
+            values.append(other)
     if nullable:
         values.append(None)
-    return values
-
+    return values, other, warnings
 
 # ---------------------------------------------------------------------------
 # Exploration results
@@ -250,6 +313,7 @@ class CoverageEngine:
         self.conditions_by_field: dict[FieldRef, list[Condition]] = {}
         self.levels: dict[FieldRef, str] = {}
         self.domains: dict[FieldRef, list[Value]] = {}
+        self.other_values: dict[FieldRef, Value] = {}
         self.contact_fields: list[FieldRef] = []
         self.scenario_fields: list[FieldRef] = []
         self.classes: list[ContactClass] = []
@@ -269,6 +333,8 @@ class CoverageEngine:
             if activity.kind != KIND_DECISION:
                 continue
             for outcome in activity.outcomes:
+                if outcome.unsupported_reason:
+                    continue   # never evaluated: the walk stops there
                 for cond in formula_conditions(outcome.formula):
                     ref = self.schema.canonical((cond.table, cond.field))
                     if ref not in self.conditions_by_field:
@@ -289,50 +355,44 @@ class CoverageEngine:
         self.scenario_fields = [f for f in self.fields if self.levels[f] == LEVEL_SCENARIO]
 
     def build_domains(self) -> None:
-        fixed = self._entry_filter_values()
+        fixed, not_null = self._entry_pins()
+        key_fields = {ref for g in self.table_model.key_groups if g.kind in ("contact", "scenario") for ref in g.fields}
         for ref in self.fields:
             conds = self.conditions_by_field[ref]
             values = [c.value for c in conds if c.value is not None]
             ftype = self.schema.field_type(ref)
-            self.domains[ref] = build_domain(ftype, values, self.schema.is_nullable(ref),
-                                             self.settings.case_insensitive_text, self.settings.date_format)
+            table = self.schema.table(ref[0])
+            field = table.field(ref[1]) if table is not None else None
+            length = field.length if field is not None else None
             self._flag_case_variants(ref, ftype, values)
+            if ref in key_fields:
+                # Data rule 1 wins over rule 2: a key field always holds the generated key, so a split
+                # comparing it with a value can never match; IsNotNull stays true.
+                self.domains[ref] = [KEY_MARKER]
+                self.other_values[ref] = KEY_MARKER
+                self.warnings.append(
+                    f"{ref[0]}.{ref[1]} is read by a split but it is a key field: it holds the generated key, "
+                    "so a condition comparing it with a value can never be true")
+                continue
+            domain, other, warnings = build_domain(ftype, conds, self.schema.is_nullable(ref),
+                                                   self.settings.case_insensitive_text, self.settings.date_format, length)
+            for w in warnings:
+                self.warnings.append(f"{ref[0]}.{ref[1]}: {w}")
+            self.other_values[ref] = other
             if ref in fixed:
                 # Data rule 3: a field filtered by the entry query holds a value that passes the filter, so a
                 # contact that enters the journey can only show that value to the splits reading it.
                 value = _normalise_boolean(fixed[ref]) if ftype == "Boolean" else fixed[ref]
-                self.domains[ref] = [value]
+                domain = [value]
                 shown = "null" if value is None else repr(value)
                 self.warnings.append(
-                    f"{ref[0]}.{ref[1]} is read by a split and filtered by the entry query: contacts that enter "
+                    f"{ref[0]}.{ref[1]} is read by a split and fixed by the entry query: contacts that enter "
                     f"the journey always have {shown}, so only that value is tried")
-
-    def _entry_filter_values(self) -> dict[FieldRef, Value]:
-        """Fields pinned by an equality or IS NULL filter of the entry query, with the pinned value."""
-        query = self.table_model.entry_query
-        if query is None:
-            return {}
-        pinned: dict[FieldRef, Value] = {}
-        for flt in query.filters:
-            if isinstance(flt, EqualityFilter):
-                ref = self._filter_ref(flt.column, query)
-                if ref is not None and ref not in pinned:
-                    pinned[ref] = flt.value
-            elif isinstance(flt, IsNullFilter) and not flt.negated:
-                ref = self._filter_ref(flt.column, query)
-                if ref is not None and ref not in pinned:
-                    pinned[ref] = None
-        return pinned
-
-    def _filter_ref(self, column, query) -> Optional[FieldRef]:
-        if column.table:
-            return self.schema.canonical((column.table, column.column))
-        matches = []
-        for source in query.sources:
-            table = self.schema.table(source.table)
-            if table is not None and table.field(column.column) is not None and table.name not in [m[0] for m in matches]:
-                matches.append((table.name, table.field(column.column).name))
-        return matches[0] if len(matches) == 1 else None
+            elif ref in not_null and None in domain:
+                domain = [v for v in domain if v is not None]
+                self.warnings.append(
+                    f"{ref[0]}.{ref[1]} is read by a split and filtered IS NOT NULL by the entry query, so null is not tried")
+            self.domains[ref] = domain
 
     def _flag_case_variants(self, ref: FieldRef, ftype: str, values: list[str]) -> None:
         """Spec, report: 'the same value written in two letter cases (Email and EMAIL in the pilot)'."""
@@ -355,6 +415,52 @@ class CoverageEngine:
                         f"suspicious pattern: {ref[0]}.{ref[1]} is compared with {shown}; "
                         "they are different values because text comparisons are case-sensitive (setting)")
 
+    def _entry_pins(self) -> tuple[dict[FieldRef, Value], set[FieldRef]]:
+        """Fields pinned by the entry query: equality and IS NULL filters, literal and current-date
+        select expressions (every entry row gets that value), and the fields filtered IS NOT NULL."""
+        query = self.table_model.entry_query
+        pinned: dict[FieldRef, Value] = {}
+        not_null: set[FieldRef] = set()
+        if query is None:
+            return pinned, not_null
+        for flt in query.filters:
+            if isinstance(flt, EqualityFilter):
+                ref = self._filter_ref(flt.column, query)
+                if ref is not None and ref not in pinned:
+                    pinned[ref] = flt.value
+            elif isinstance(flt, IsNullFilter):
+                ref = self._filter_ref(flt.column, query)
+                if ref is None:
+                    continue
+                if flt.negated:
+                    not_null.add(ref)
+                elif ref not in pinned:
+                    pinned[ref] = None
+        entry = self.schema.table(self.table_model.entry_table)
+        if entry is not None:
+            for item in query.select:
+                field = entry.field(item.target_column)
+                if field is None:
+                    continue
+                ref = (entry.name, field.name)
+                if isinstance(item.expr, SelectLiteral) and ref not in pinned:
+                    pinned[ref] = item.expr.value
+                elif isinstance(item.expr, SelectNull) and ref not in pinned:
+                    pinned[ref] = None
+                elif isinstance(item.expr, SelectCurrentDate) and ref not in pinned:
+                    pinned[ref] = self.now.strftime(self.settings.date_format)
+        return pinned, not_null
+
+    def _filter_ref(self, column, query) -> Optional[FieldRef]:
+        if column.table:
+            return self.schema.canonical((column.table, column.column))
+        matches = []
+        for source in query.sources:
+            table = self.schema.table(source.table)
+            if table is not None and table.field(column.column) is not None and table.name not in [m[0] for m in matches]:
+                matches.append((table.name, table.field(column.column).name))
+        return matches[0] if len(matches) == 1 else None
+
     # -- contact classes ----------------------------------------------------------------
 
     def contact_predicates(self) -> list[Formula]:
@@ -373,7 +479,7 @@ class CoverageEngine:
             if activity.kind != KIND_DECISION:
                 continue
             for outcome in activity.outcomes:
-                if outcome.formula is None:
+                if outcome.formula is None or outcome.unsupported_reason:
                     continue
                 conds = formula_conditions(outcome.formula)
                 levels = {self.levels[self.schema.canonical((c.table, c.field))] for c in conds}
@@ -741,7 +847,9 @@ class CoverageEngine:
         return CoverageResult(
             scenarios=scenarios, branches=branches, classes=self.classes,
             scenario_fields=list(self.scenario_fields), contact_fields=list(self.contact_fields),
-            domains=dict(self.domains), unsupported=list(self.package.unsupported_activities),
+            domains=dict(self.domains), other_values=dict(self.other_values),
+            unsupported=list(self.package.unsupported_activities) + [
+                f"{a.key}/{o.key}" for a in self.journey.activities.values() for o in a.outcomes if o.unsupported_reason],
             warnings=list(dict.fromkeys(self.warnings)), stats=stats)
 
     def _summary(self, steps: list[Step]) -> str:
@@ -792,7 +900,6 @@ class CoverageEngine:
                     bucket.setdefault(ref, []).append(case.id)
 
         unsupported = set(self.package.unsupported_activities)
-        behind_unsupported = graph.activities_behind(self.journey, unsupported) if unsupported else set()
         preds = graph.predecessors(self.journey)
         statuses: list[BranchStatus] = []
         root_reasons: dict[BranchRef, str] = {}
@@ -818,8 +925,8 @@ class CoverageEngine:
                                              sorted(set(statistical[ref])), statistical=True))
             else:
                 behind = None
-                if activity.key in self.reached_activities or activity.key in unsupported or activity.key in behind_unsupported:
-                    reason = self._not_covered_reason(activity, outcome, behind_unsupported, preds)
+                if activity.key in self.reached_activities or activity.key in unsupported:
+                    reason = self._not_covered_reason(activity, outcome, preds)
                     root_reasons[ref] = reason
                 else:
                     roots = self._root_branches(activity.key, preds)
@@ -829,12 +936,14 @@ class CoverageEngine:
                         root_outcome = root_activity.outcome(behind[1])
                         root_reason = root_reasons.get(behind)
                         if root_reason is None:
-                            root_reason = self._not_covered_reason(root_activity, root_outcome, behind_unsupported, preds)
+                            root_reason = self._not_covered_reason(root_activity, root_outcome, preds)
                             root_reasons[behind] = root_reason
-                        reason = (f"unreachable: lies behind the branch '{root_activity.name or behind[0]}: {label_of(root_outcome)}' "
+                        prefix = ("behind an unsupported element" if root_reason.startswith("unsupported") or
+                                  root_reason.startswith("behind an unsupported") else "unreachable")
+                        reason = (f"{prefix}: lies behind the branch '{root_activity.name or behind[0]}: {label_of(root_outcome)}' "
                                   f"({behind[0]}), which is {root_reason}")
                     else:
-                        reason = self._not_covered_reason(activity, outcome, behind_unsupported, preds)
+                        reason = self._not_covered_reason(activity, outcome, preds)
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                              STATUS_NOT_COVERED, reason, [], behind=behind))
         return statuses
@@ -861,16 +970,23 @@ class CoverageEngine:
                             roots.add((p, o.key))
         return sorted(roots)
 
-    def _not_covered_reason(self, activity: Activity, outcome: Outcome, behind_unsupported: set[str],
-                            preds: dict[str, set[str]]) -> str:
+    def _not_covered_reason(self, activity: Activity, outcome: Outcome, preds: dict[str, set[str]]) -> str:
         key = activity.key
         if key in self.package.unsupported_activities:
             if activity.unsupported_reason:
                 return f"unsupported activity: {activity.unsupported_reason}"
             return f"unsupported activity: its type {activity.raw_type} is not one the PoC understands"
-        if key in behind_unsupported:
-            blockers = sorted(self.package.unsupported_activities)
-            return "unreachable: lies behind the unsupported activity " + ", ".join(f"'{b}'" for b in blockers)
+        if outcome.unsupported_reason:
+            return f"unsupported outcome: {outcome.unsupported_reason}"
+        if activity.kind == KIND_DECISION:
+            remainder = [o for o in activity.outcomes if o.is_remainder or o.formula is None]
+            ordered = [o for o in activity.outcomes if o not in remainder] + remainder
+            for earlier in ordered:
+                if earlier is outcome:
+                    break
+                if earlier.unsupported_reason:
+                    return (f"behind an unsupported element: this outcome comes after the unsupported outcome "
+                            f"'{label_of(earlier)}' of the same split, so it is never evaluated")
         blocked = self.engagement_blocked.get((key, outcome.key))
         if blocked:
             return "unreachable: " + blocked
