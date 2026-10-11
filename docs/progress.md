@@ -12,12 +12,17 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
 - `graph.py`, `coverage.py`, `checks.py`, `pipeline.py`, `__main__.py` (lead): first integrated run on the pilot passes all 7 trust checks.
   `python -m cjhelper "fixtures/CJ template complesso-v1.json" --out output --inbox tester@example.com` takes about 30 s.
 
-## In progress (priority 1, core)
+- `datagen.py` + `outputs.py` (71 tests): delivered. The whole suite (541 tests) passes.
+- `examples/`: 15 examples with hand-derived expected answers (13 small, 2 pilot variants); all pass through `tests/test_examples.py`.
+  First loop finding fixed: the coverage check misread the intended "no real inbox" state (cases exist, branch not covered).
+- `docs/assumptions.md`: Salesforce review, 35 assumptions to verify, 16 suspicious patterns, a one-day verification run plan.
+  Acted on: the filters of the followed automation queries are applied to the generated rows (RUN_TIME stays empty).
 
-- datagen.py + outputs.py: delivered on disk, developer's report pending.
-- examples/: test engineer writes small journeys with hand-derived expected answers (pending).
-- Salesforce review (docs/assumptions.md): pending.
-- Then: the example loop on priority 1.
+## In progress
+
+- End-of-level-1 review loop: five adversarial reviewers plus skeptic verification (workflow), findings to be fixed by the lead.
+- Technical writer: README.md, wording of report.md and testbook.xlsx.
+- Next: priority 2 wording done, then confirm priority 3 (engagement and random splits) on the pilot, priority 4 testbook polish, priority 5 page.
 
 ## Design readings taken by the lead (not Salesforce assumptions)
 
@@ -35,6 +40,15 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
 
 - Run the example loop on priority 1; fix root causes; every bug becomes an example.
 - Priority 2: scenarios.csv and report.md wording. Priority 3: engagement and random splits end to end on the pilot. Priority 4: testbook. Priority 5: Streamlit page.
+
+## To report to the user (spec corrections suggested by the Salesforce review, not changed in code)
+
+- Entry procedure: the review says importing the entry CSV alone admits nobody; the automation (with its journey-entry step) must run,
+  and a full run also executes the entry query (duplicating entry rows) and the verification step. The spec presents direct import as
+  the normal way. The generator still writes all four CSVs, so both procedures are possible; the report lists both as alternatives.
+- Wait dates: the spec default (generation time, "so the wait ends at once") is not guaranteed if Salesforce reads the CSV date in
+  another time zone (CST); a negative wait offset would be safer. Setting kept at the spec default.
+- Letter case moves 46 branches between covered and not covered on the pilot; the setting default (case-sensitive) is the spec's.
 
 ## Open questions
 
