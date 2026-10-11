@@ -543,13 +543,31 @@ class Checker:
             if ckey is None or not email_fields:
                 continue
             by_key = {c.key: c for c in self.data.contacts}
+            cases = {c.id: c for c in self.coverage.cases}
+            scenarios = {s.id: s for s in self.coverage.scenarios}
             _, rows = self.csv[name]
             for row in rows:
                 contact = by_key.get(row.get(ckey))
                 if contact is None:
                     continue
+                case = cases.get(contact.case_id)
+                scenario = scenarios.get(contact.scenario_id)
+                # A split that reads an address field fixes its value (data rule 2 over rule 4); the entry
+                # query may copy that value into another address column.
+                pins: dict[tuple[str, str], Value] = {}
+                for values in ((case.contact_values if case else {}), (scenario.values if scenario else {})):
+                    for (t, f), val in values.items():
+                        if self.schema.field_type((t, f)) == "EmailAddress" and val != self.coverage.other_values.get((t, f)):
+                            pins[(t.lower(), f.lower())] = val
                 for ef in email_fields:
                     v = row.get(ef) or ""
+                    if (name.lower(), ef.lower()) in pins:
+                        pinned = pins[(name.lower(), ef.lower())]
+                        if (row.get(ef) or None) != pinned:
+                            details.append(f"{name}: {contact.key} must have {ef} = {pinned!r} for its path but has {v!r}")
+                        continue
+                    if pins and (row.get(ef) or None) in pins.values():
+                        continue   # copied from the pinned column by the entry query
                     if contact.uses_real_inbox:
                         if not real or not (v.endswith("@" + real.split("@", 1)[1]) and f"+{contact.key}@" in v):
                             details.append(f"{name}: {contact.key} needs the real inbox but has {v!r}")

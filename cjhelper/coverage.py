@@ -858,6 +858,8 @@ class CoverageEngine:
                             writes=list(leaf.writes), waits=list(leaf.waits), manual_actions=list(leaf.manual),
                             end_activity_key=leaf.end_activity_key, contact_count=self.settings.contacts_per_case)
                 case.summary = self._summary(case.steps)
+                if case.manual_actions:
+                    case.inbox_blocked_reason = self._inbox_block_reason(cls.values, entry["values"])
                 cases.append(case)
             for class_id, manual, leaves in sorted(entry["stat"], key=lambda g: (len(g[1]), g[0])):
                 prefix, info = self._random_info(leaves)
@@ -870,6 +872,8 @@ class CoverageEngine:
                             manual_actions=list(manual), end_activity_key=info.activity_key,
                             contact_count=self.settings.contacts_per_random_case, random=info)
                 case.summary = self._summary(case.steps) + " > random split"
+                if case.manual_actions:
+                    case.inbox_blocked_reason = self._inbox_block_reason(cls.values, entry["values"])
                 cases.append(case)
             scenarios.append(Scenario(id=sid, key="", values=dict(entry["values"]), cases=cases, run_order=order,
                                       has_manual_action=any(c.manual_actions for c in cases),
@@ -895,6 +899,25 @@ class CoverageEngine:
             unsupported=list(self.package.unsupported_activities) + [
                 f"{a.key}/{o.key}" for a in self.journey.activities.values() for o in a.outcomes if o.unsupported_reason],
             warnings=list(dict.fromkeys(self.warnings)), stats=stats)
+
+    def _inbox_block_reason(self, contact_values: dict[FieldRef, Value],
+                            scenario_values: dict[FieldRef, Value]) -> Optional[str]:
+        """Data rule 2 wins over rule 4: when a split fixes the address field the journey sends to,
+        the contacts of that case cannot use the tester's inbox, so their open or click cannot be done."""
+        entry = self.table_model.entry_table
+        default_email = (self.journey.default_email_field or "").lower()
+        for values in (contact_values, scenario_values):
+            for ref, value in values.items():
+                is_address = (self.schema.field_type(ref) == "EmailAddress"
+                              or (ref[0].lower() == entry.lower() and ref[1].lower() == default_email))
+                if not is_address:
+                    continue
+                if value is None:
+                    return f"the path requires {ref[0]}.{ref[1]} to be empty, so no email can be received"
+                if value != self.other_values.get(ref):
+                    return (f"the path requires {ref[0]}.{ref[1]} = {value!r}, an address the tester does not own, "
+                            "so the email cannot be opened or clicked")
+        return None
 
     def _summary(self, steps: list[Step]) -> str:
         parts: list[str] = []
@@ -932,8 +955,18 @@ class CoverageEngine:
         manual: dict[BranchRef, list[str]] = {}
         stat_plain: dict[BranchRef, list[str]] = {}
         stat_manual: dict[BranchRef, list[str]] = {}
+        blocked: dict[BranchRef, list[tuple[str, str]]] = {}   # manual cases whose action cannot be done
         for scenario in scenarios:
             for case in scenario.cases:
+                if case.manual_actions and case.inbox_blocked_reason:
+                    refs = [(s.activity_key, s.outcome_key) for s in case.steps if s.outcome_key is not None]
+                    if case.random is not None:
+                        for rb in case.random.branches:
+                            refs.append((case.random.activity_key, rb.outcome_key))
+                            refs.extend((s.activity_key, s.outcome_key) for s in rb.steps if s.outcome_key is not None)
+                    for ref in refs:
+                        blocked.setdefault(ref, []).append((case.id, case.inbox_blocked_reason))
+                    continue
                 before = [(s.activity_key, s.outcome_key) for s in case.steps if s.outcome_key is not None]
                 after: list[BranchRef] = []
                 if case.random is not None:
@@ -981,6 +1014,13 @@ class CoverageEngine:
             elif ref in statistical:
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                              STATUS_COVERED, stat_note, sorted(set(statistical[ref])), statistical=True))
+            elif ref in blocked:
+                ids = sorted({cid for cid, _ in blocked[ref]})
+                reason = blocked[ref][0][1]
+                statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
+                                             STATUS_NOT_COVERED,
+                                             f"needs an open or click that cannot be done: {reason}; the cases exist",
+                                             ids))
             else:
                 behind = None
                 if activity.key in self.reached_activities or activity.key in unsupported:

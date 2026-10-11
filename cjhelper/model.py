@@ -506,6 +506,7 @@ class Case:
     random: Optional[RandomInfo] = None     # set for the statistical case
     contact_keys: list[str] = field(default_factory=list)   # filled by datagen
     summary: str = ""                # short path summary for the testbook title
+    inbox_blocked_reason: Optional[str] = None   # manual action impossible: a split fixes the address
 
 
 @dataclass

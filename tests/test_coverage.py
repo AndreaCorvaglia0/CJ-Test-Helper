@@ -289,3 +289,19 @@ def test_branches_behind_an_unsupported_activity_name_it():
     assert b2.status == STATUS_NOT_COVERED and b2.reason.startswith("behind an unsupported element") and "X-1" in b2.reason and "X-2" not in b2.reason
     b3 = status(r, "SPLIT-3", "a")
     assert "X-2" in b3.reason and "X-1" not in b3.reason
+
+
+def test_manual_action_cannot_be_done_when_a_split_fixes_the_address():
+    """Data rule 2 (split value) wins over rule 4 (real inbox): the open contacts must carry the
+    address the split requires, which the tester does not own, so the Yes branch is not covered."""
+    emails = {"A1": email_asset("A1", "Demo")}
+    acts = [decision("SPLIT-1", "vip?", [("vip", "vip", "EMAIL-1", cond("DE_Master", "Email", "Equal", "vip@example.com"))], remainder_next="UPD-R"),
+            email("EMAIL-1", "Demo", "A1", "WAIT-1"), wait_attr("WAIT-1", "DE_Config", "WAIT1", "ENG-1"),
+            engagement("ENG-1", "Open Demo", "open", "EMAIL-1", "UPD-Y", "UPD-N"),
+            update("UPD-Y", "Y", [], None), update("UPD-N", "N", [], None), update("UPD-R", "R", [], None)]
+    r = run(acts, [ENTRY, MASTER, CONFIG], scenario=True, emails=emails, settings=Settings(real_inbox="t@example.com"))
+    yes = status(r, "ENG-1", "branchResult-1")
+    assert yes.status == STATUS_NOT_COVERED and "vip@example.com" in yes.reason and yes.covered_by
+    assert status(r, "ENG-1", "branchResult-2").status == STATUS_COVERED
+    blocked = [c for c in r.cases if c.manual_actions]
+    assert len(blocked) == 1 and blocked[0].inbox_blocked_reason and "vip@example.com" in blocked[0].inbox_blocked_reason

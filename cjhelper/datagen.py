@@ -932,7 +932,7 @@ class _Generator:
                 if case.contact_count <= 0:
                     self._warn(f"Case {case.id} asks for {case.contact_count} contacts, so it gets none.")
                 keys = []
-                real = bool(case.manual_actions) and inbox is not None
+                real = bool(case.manual_actions) and inbox is not None and not case.inbox_blocked_reason
                 for _ in range(max(case.contact_count, 0)):
                     number += 1
                     key = self.settings.contact_key(number)
@@ -992,9 +992,12 @@ class _Generator:
         manual_without_inbox = 0
         for scenario in scenarios:
             for case in scenario.cases:
-                real = bool(case.manual_actions) and inbox is not None
+                real = bool(case.manual_actions) and inbox is not None and not case.inbox_blocked_reason
                 if case.manual_actions and inbox is None:
                     manual_without_inbox += 1
+                if case.manual_actions and case.inbox_blocked_reason:
+                    self._warn(f"Case {case.id} needs an open or click that cannot be done: "
+                               f"{case.inbox_blocked_reason}. Its contacts keep the address the path requires.")
                 for key in case.contact_keys:
                     if self._email_keys:
                         email = key
