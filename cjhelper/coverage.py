@@ -756,6 +756,7 @@ class CoverageEngine:
         behind_unsupported = graph.activities_behind(self.journey, unsupported) if unsupported else set()
         preds = graph.predecessors(self.journey)
         statuses: list[BranchStatus] = []
+        root_reasons: dict[BranchRef, str] = {}
         for activity, outcome in self.branch_list:
             ref = (activity.key, outcome.key)
             label = outcome.label or outcome.key
@@ -777,10 +778,49 @@ class CoverageEngine:
                                              f"reached only through a random split; statistical case of {self.settings.contacts_per_random_case} contacts",
                                              sorted(set(statistical[ref])), statistical=True))
             else:
+                behind = None
+                if activity.key in self.reached_activities or activity.key in unsupported or activity.key in behind_unsupported:
+                    reason = self._not_covered_reason(activity, outcome, behind_unsupported, preds)
+                    root_reasons[ref] = reason
+                else:
+                    roots = self._root_branches(activity.key, preds)
+                    if roots:
+                        behind = roots[0]
+                        root_activity = self.journey.activities[behind[0]]
+                        root_outcome = root_activity.outcome(behind[1])
+                        root_reason = root_reasons.get(behind)
+                        if root_reason is None:
+                            root_reason = self._not_covered_reason(root_activity, root_outcome, behind_unsupported, preds)
+                            root_reasons[behind] = root_reason
+                        reason = (f"unreachable: lies behind the branch '{root_activity.name or behind[0]}: {label_of(root_outcome)}' "
+                                  f"({behind[0]}), which is {root_reason}")
+                    else:
+                        reason = self._not_covered_reason(activity, outcome, behind_unsupported, preds)
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
-                                             STATUS_NOT_COVERED,
-                                             self._not_covered_reason(activity, outcome, behind_unsupported, preds), []))
+                                             STATUS_NOT_COVERED, reason, [], behind=behind))
         return statuses
+
+    def _root_branches(self, key: str, preds: dict[str, set[str]]) -> list[BranchRef]:
+        """For an activity no path reaches: the branches of reached activities that lead into the
+        unreached region around it. Those branches are the root cause; everything behind them inherits it."""
+        region: set[str] = set()
+        stack = [key]
+        while stack:
+            k = stack.pop()
+            if k in region:
+                continue
+            region.add(k)
+            for p in preds.get(k, ()):
+                if p not in self.reached_activities:
+                    stack.append(p)
+        roots: set[BranchRef] = set()
+        for k in region:
+            for p in preds.get(k, ()):
+                if p in self.reached_activities:
+                    for o in self.journey.activities[p].outcomes:
+                        if o.next == k:
+                            roots.add((p, o.key))
+        return sorted(roots)
 
     def _not_covered_reason(self, activity: Activity, outcome: Outcome, behind_unsupported: set[str],
                             preds: dict[str, set[str]]) -> str:

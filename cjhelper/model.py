@@ -527,6 +527,7 @@ class BranchStatus:
     reason: str                      # why, in plain words (always set for not covered)
     covered_by: list[str]            # case ids
     statistical: bool = False        # covered only through a random split
+    behind: Optional[BranchRef] = None   # not covered: the nearest reached branch this one lies behind (root cause)
 
 
 @dataclass
