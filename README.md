@@ -1,171 +1,173 @@
 # CJ Test Helper
 
-CJ Test Helper reads a Salesforce Marketing Cloud package export, the JSON file that Package Manager produces, and writes test data that sends contacts down every branch of the customer journey. It writes one CSV per table that the journey reads, a list of scenarios, a coverage report and a testbook with the expected result of each test. It never connects to Salesforce: it only generates files, and it checks them before you use them.
+CJ Test Helper legge l'export di un package di Salesforce Marketing Cloud, cioè il file JSON prodotto da Package Manager, e scrive dati di test che portano i contatti lungo ogni branch del customer journey. Scrive un CSV per ogni tabella letta dal journey, un elenco di scenari, un report di coverage e un testbook con il risultato atteso di ogni test. Non si collega mai a Salesforce: genera solo file e li controlla prima che vengano usati.
 
-`docs/spec.md` is the source of truth for what the tool does. This file explains how to run it and how to use what it writes.
+`docs/spec.md` è il riferimento per il comportamento dello strumento. Questo file spiega come avviarlo e come usare i file che produce.
 
-## Requirements and install
+## Requisiti e installazione
 
-- Python 3.11 or later.
-- The packages listed in `requirements.txt`:
+- Python 3.11 o successivo.
+- I pacchetti elencati in `requirements.txt`:
 
 ```
 pip install -r requirements.txt
 ```
 
-## Run it
+## Avvio
 
-From the repository folder:
+Dalla cartella del repository:
 
 ```
 python -m cjhelper "fixtures/CJ template complesso-v1.json" --out output --inbox name@example.com
 ```
 
-The command prints a summary and the result of each trust check. It writes every file into the output folder, together with `test_data.zip`, which holds them all. On the pilot export it takes about 30 seconds.
+Il comando stampa un riepilogo e l'esito di ogni trust check. Scrive tutti i file nella cartella di output, insieme a `test_data.zip`, che li contiene tutti. Sull'export del pilot impiega circa 30 secondi.
 
-| Option | What it does |
+| Opzione | Cosa fa |
 | --- | --- |
-| `export` | The package export JSON. Required. |
-| `--out FOLDER` | Where to write the files. Default `output`. |
-| `--run-id R01` | Run identifier added to every key, as in `TST_R01_C0001`. Default `R01`. |
-| `--inbox ADDRESS` | Real inbox for the contacts that must open or click an email. Default empty. |
-| `--phone NUMBER` | Real phone number. No supported activity sends to a phone yet, so it is not used today. Default empty. |
-| `--contacts N` | Contacts per case. Default 3. |
-| `--random-contacts N` | Contacts in the statistical case of a random split. Default 50. |
-| `--case-insensitive` | Text comparisons ignore letter case, so `Email` matches `EMAIL`. Default off. |
-| `--no-single-active` | Makes every scenario active in the CSVs at once. By default only the first one is. |
-| `--time "YYYY-MM-DD HH:MM"` | Generation time. Default now. Give the same time to get the same files again. |
-| `--no-testbook` | Skips `testbook.xlsx`. |
+| `export` | L'export JSON del package. Obbligatoria. |
+| `--out FOLDER` | Dove scrivere i file. Default `output`. |
+| `--run-id R01` | Run identifier aggiunto a ogni chiave, come in `TST_R01_C0001`. Default `R01`. |
+| `--inbox ADDRESS` | Inbox reale per i contatti che devono aprire o cliccare un'email. Default vuota. |
+| `--phone NUMBER` | Numero di telefono reale. Nessuna attività supportata invia ancora messaggi a un telefono, quindi oggi non viene usato. Default vuoto. |
+| `--contacts N` | Contatti per caso. Default 3. |
+| `--random-contacts N` | Contatti nel caso statistico di un random split. Default 50. |
+| `--case-insensitive` | I confronti di testo ignorano maiuscole e minuscole, quindi `Email` corrisponde a `EMAIL`. Default disattivata. |
+| `--no-single-active` | Rende attivi tutti gli scenari nei CSV. Di default è attivo solo il primo. |
+| `--time "YYYY-MM-DD HH:MM"` | Ora di generazione. Default l'ora corrente. Con la stessa ora si ottengono di nuovo gli stessi file. |
+| `--no-testbook` | Non scrive `testbook.xlsx`. |
 
-The command ends with code 0 when every trust check passes, and with code 2 when a check fails. On an error, such as a file that is not valid JSON or holds no journey, it prints one plain message, writes nothing and ends with code 1.
+Il comando termina con codice 0 quando tutti i trust check sono superati e con codice 2 quando un check non è superato. In caso di errore, per esempio un file che non è un JSON valido o che non contiene un journey, stampa un solo messaggio, non scrive nulla e termina con codice 1.
 
-## What you get
+## I file prodotti
 
-| File | What it holds |
+| File | Contenuto |
 | --- | --- |
-| `<TableName>.csv` | One file per table that the journey or the entry query reads, with all scenarios together, ready to import. UTF-8, comma-separated, the exact field names of the schema as header, `True` and `False` for Booleans, an empty cell for null. |
-| `scenarios.csv` | One row per scenario: its key, its run order, which scenario is active at the start, its cases and contacts, and its scenario-level values. |
-| `report.md` | Read it first. Summary, trust checks, tables, how to run, scenarios and cases, branches not covered and why, unsupported elements, warnings and suspicious patterns, assumptions, settings used. |
-| `testbook.xlsx` | One test per case in the team's layout: ID, Owner system, Test name, Description, Pre conditions, Detailed steps, Expected result, Status, Note. |
-| `test_data.zip` | All the files above in one archive. |
+| `<TableName>.csv` | Un file per ogni tabella letta dal journey o dalla entry query, con tutti gli scenari insieme, pronto da importare. UTF-8, separato da virgole, con i nomi esatti dei campi dello schema come intestazione, `True` e `False` per i Boolean e una cella vuota per il null. |
+| `scenarios.csv` | Una riga per scenario: la chiave, l'ordine di esecuzione, quale scenario è attivo all'inizio, i casi e i contatti, e i valori a livello di scenario. |
+| `report.md` | Da leggere per primo. Riepilogo, trust check, tabelle, come eseguire i test, scenari e casi, branch non coperti e perché, elementi non supportati, warning e pattern sospetti, assunzioni, impostazioni usate. |
+| `testbook.xlsx` | Un test per caso nel formato del team: ID, Owner system, Test name, Description, Pre conditions, Detailed steps, Expected result, Status, Note. |
+| `test_data.zip` | Tutti i file precedenti in un solo archivio. |
 
-Words used in these files:
+Termini usati in questi file:
 
-- A **branch** is one outcome of a split: a decision split, an engagement split or a random split.
-- A **scenario** is one set of scenario-level values, such as one row of a campaign configuration table. All its contacts share it.
-- A **case** is a group of contacts with the same contact values and the same manual actions, so they take the same path. Each case is one test in the testbook. It has 3 contacts by default.
-- A **statistical case** covers the branches behind a random split. Its contacts cannot be sent down one branch, so it has 50 contacts by default.
+- Un **branch** è un esito di uno split: decision split, engagement split o random split.
+- Uno **scenario** è un insieme di valori a livello di scenario, per esempio una riga di una tabella di configurazione della campagna. Tutti i suoi contatti lo condividono.
+- Un **caso** è un gruppo di contatti con gli stessi valori di contatto e le stesse azioni manuali, che quindi seguono lo stesso percorso. Ogni caso è un test del testbook. Di default ha 3 contatti.
+- Un **caso statistico** copre i branch che seguono un random split. I suoi contatti non possono essere indirizzati su un branch preciso, quindi di default ha 50 contatti.
 
-## How a tester uses the files
+## Come un tester usa i file
 
-1. Open `report.md`. Check that every trust check passed, then read its "How to run" section.
-2. Choose one entry procedure and keep it for the whole test. The two are alternatives: doing both would duplicate the entry rows.
-   - Direct import, the normal way in the spec. Import the CSVs of the linked tables first and the entry CSV last. Do not run the automation that fills the entry table.
-   - Through the automation. Import every CSV except the entry CSV. Run the automation once per scenario: its entry query builds the entry rows from the imported rows.
-3. Run one scenario at a time, in run order. The CSVs start with the first scenario active. To make a scenario the active one, set the activation field to True on the row of the scenario and to False on every other row. The report names the field: `ACTIVE` of `DE_NCRM_AD_HOC_CONFIG` in the pilot. The activation field is a filter of the entry query and no split reads it. It holds a scenario back only when the automation runs that query.
-4. Wait until the contacts of a scenario have left the journey before you switch to the next one. Change nothing else and import nothing again, because the journey reads the split data when a contact reaches a split.
-5. Follow the testbook, one row per case. The steps give the waits, any manual action with its deadline, and the evidence to collect. Compare what you see with the Expected result.
-6. For a new generation, use a new run identifier. Keys of an earlier run are already in the tables, and a test contact is never reused.
+1. Apri `report.md`. Verifica che tutti i trust check siano superati, poi leggi la sezione "How to run".
+2. Scegli una procedura di ingresso e mantienila per tutto il test. Le due procedure sono alternative: eseguirle entrambe duplicherebbe le righe di ingresso.
+   - Import diretto, la procedura normale secondo la spec. Importa prima i CSV delle tabelle collegate e per ultimo il CSV di ingresso. Non eseguire l'automation che popola la tabella di ingresso.
+   - Tramite l'automation. Importa tutti i CSV tranne quello di ingresso. Esegui l'automation una volta per scenario: la sua entry query costruisce le righe di ingresso a partire dalle righe importate.
+3. Esegui uno scenario alla volta, in ordine di esecuzione. I CSV partono con il primo scenario attivo. Per rendere attivo uno scenario, imposta il campo di attivazione a True sulla riga dello scenario e a False su tutte le altre righe. Il report indica il campo: nel pilot è `ACTIVE` di `DE_NCRM_AD_HOC_CONFIG`. Il campo di attivazione è un filtro della entry query e nessuno split lo legge. Trattiene uno scenario solo quando l'automation esegue quella query.
+4. Prima di passare allo scenario successivo, aspetta che i contatti dello scenario corrente siano usciti dal journey. Non cambiare altro e non reimportare nulla, perché il journey legge i dati degli split nel momento in cui un contatto raggiunge lo split.
+5. Segui il testbook, una riga per caso. I passi indicano le attese, le eventuali azioni manuali con la loro scadenza e le evidenze da raccogliere. Confronta quello che vedi con l'Expected result.
+6. Per una nuova generazione usa un nuovo run identifier. Le chiavi di un run precedente sono già nelle tabelle e un contatto di test non viene mai riutilizzato.
 
-Assumption to verify before the first real run: when an automation fills the entry table, as in the pilot, importing the entry CSV alone may admit nobody. The direct import may then also need a Run Once of that automation with only its journey-entry activity selected. Rows 23 to 27 of `docs/assumptions.md` explain why.
+Assunzione da verificare prima del primo run reale: quando un'automation popola la tabella di ingresso, come nel pilot, importare solo il CSV di ingresso potrebbe non far entrare nessuno. In quel caso anche l'import diretto potrebbe richiedere un Run Once dell'automation con selezionata solo l'attività di ingresso nel journey. Le righe da 23 a 27 di `docs/assumptions.md` spiegano il motivo.
 
-### The real inbox
+### L'inbox reale
 
-Contacts that must open or click an email get your real inbox with plus-addressing. With `--inbox name@example.com`, the contact `TST_R01_C0004` gets `name+TST_R01_C0004@example.com`, and its emails arrive in `name@example.com`. Every other contact gets an undeliverable address, `<contact key>@example.invalid`.
+I contatti che devono aprire o cliccare un'email ricevono la tua inbox reale con plus-addressing. Con `--inbox name@example.com`, il contatto `TST_R01_C0004` riceve `name+TST_R01_C0004@example.com` e le sue email arrivano in `name@example.com`. Tutti gli altri contatti ricevono un indirizzo non recapitabile, `<contact key>@example.invalid`.
 
-- Open or click only the emails that the testbook names, and only for the contacts of that test.
-- Do it before the deadline in the testbook. The deadline is the end of the wait before the engagement split, 24 hours after the generation time by default. Scenarios with a manual action come first in the run order for this reason.
-- If a run starts too late to meet a deadline, generate the data again.
-- Without `--inbox`, generation still works. Those contacts get undeliverable addresses, and the branches that need an open or a click are reported as not covered.
+- Apri o clicca solo le email indicate dal testbook, e solo per i contatti di quel test.
+- Fallo prima della scadenza indicata nel testbook. La scadenza è la fine del wait che precede l'engagement split, di default 24 ore dopo l'ora di generazione. Per questo motivo gli scenari con un'azione manuale vengono per primi nell'ordine di esecuzione.
+- Se un run parte troppo tardi per rispettare una scadenza, genera di nuovo i dati.
+- Senza `--inbox` la generazione funziona comunque. Quei contatti ricevono indirizzi non recapitabili e i branch che richiedono un open o un click risultano non coperti.
 
-A click can be asked only when the email has a link. In the pilot the email has none, so the click branches are reported as not covered.
+Un click si può chiedere solo se l'email contiene un link. Nel pilot l'email non ne ha, quindi i branch del click risultano non coperti.
 
-### The random split case
+### Il caso del random split
 
-A random split cannot be forced. Its branches get one statistical case, with 50 contacts by default, and the testbook gives the accepted range for the smaller side. For a 90/10 split, 1 to 9 of the 50 contacts should take the 10% side. That holds in about 97% of runs, so a count outside the range can happen by chance.
+Un random split non si può forzare. I suoi branch ricevono un caso statistico, di default con 50 contatti, e il testbook indica l'intervallo accettato per il lato più piccolo. Per uno split 90/10, da 1 a 9 dei 50 contatti dovrebbero prendere il lato del 10%. Questo vale in circa il 97% dei run, quindi un conteggio fuori dall'intervallo può capitare per caso.
 
-## Trust checks
+## Trust check
 
-After writing the files, the generator reads them back and checks them. The report gives the result of each check and its details.
+Dopo aver scritto i file, il generatore li rilegge e li controlla. Il report riporta l'esito di ogni check e i relativi dettagli.
 
-| Check | A failure means |
+| Check | Se non è superato |
 | --- | --- |
-| Values respect type, length, nullability and primary key | The import could reject rows or cut values. |
-| Every key joins across tables | Some contacts would miss their scenario row or their rows in a linked table, so their splits would not see the intended values. |
-| Entry rows match the entry query | The entry CSV does not hold what the entry query would build from the other CSVs, so the two entry procedures would give different data. |
-| Every contact re-simulated from the files takes its intended path | The expected result in the testbook may be wrong for some contacts. |
-| Every reachable branch is covered and every uncovered branch has a reason | The coverage given in the report cannot be trusted. |
-| Only contacts with a manual action use the real inbox; all others are undeliverable | Emails could reach the real inbox when they should not. |
-| Two runs with the same input give the same files | The same export and settings would not give the same data. |
+| I valori rispettano tipo, lunghezza, nullability e primary key | L'import potrebbe scartare righe o troncare valori. |
+| Ogni chiave trova corrispondenza tra le tabelle | Alcuni contatti non troverebbero la riga del loro scenario o le loro righe in una tabella collegata, quindi i loro split non vedrebbero i valori previsti. |
+| Le righe di ingresso corrispondono alla entry query | Il CSV di ingresso non contiene quello che la entry query costruirebbe dagli altri CSV, quindi le due procedure di ingresso darebbero dati diversi. |
+| Ogni contatto, ri-simulato a partire dai file, segue il percorso previsto | Il risultato atteso nel testbook potrebbe essere sbagliato per alcuni contatti. |
+| Ogni branch raggiungibile è coperto e ogni branch non coperto ha un motivo | La coverage indicata nel report non è affidabile. |
+| Solo i contatti con un'azione manuale usano l'inbox reale; tutti gli altri sono non recapitabili | Alcune email potrebbero arrivare all'inbox reale quando non dovrebbero. |
+| Due run con lo stesso input producono gli stessi file | Lo stesso export con le stesse impostazioni non darebbe gli stessi dati. |
 
-When a check fails, the command ends with code 2 and the report lists the failures. Do not import the files until the failure is explained.
+Quando un check non è superato, il comando termina con codice 2 e il report elenca i problemi. Non importare i file finché il problema non è chiarito.
 
-## Settings and defaults
+## Impostazioni e default
 
-These are the settings of the spec. The command line uses the defaults, and the options above change some of them. The report ends with the settings used for the run.
+Queste sono le impostazioni della spec. La riga di comando usa i default e le opzioni descritte sopra ne modificano alcuni. Il report termina con le impostazioni usate per il run.
 
-| Setting | Default | Option |
+| Impostazione | Default | Opzione |
 | --- | --- | --- |
-| Contacts per case | 3 | `--contacts` |
-| Contacts per random-split case | 50 | `--random-contacts` |
-| Real inbox for open and click tests | Empty | `--inbox` |
-| Real phone number | Empty | `--phone` |
-| Fake phone number | `333333333333` | none |
-| Validity window length | From yesterday to 7 days ahead | none |
-| Wait date offset | 0 hours | none |
-| Wait date offset before an engagement split | 24 hours | none |
-| Date format in the CSVs | `YYYY-MM-DD HH:MM` | none |
-| One active scenario at a time | On when an activation field is detected | `--no-single-active` turns it off |
-| Activation field | Suggested from the entry query filters | none |
-| Run identifier in keys | R01 | `--run-id` |
-| Text comparisons ignore letter case | Off | `--case-insensitive` |
+| Contatti per caso | 3 | `--contacts` |
+| Contatti per caso di random split | 50 | `--random-contacts` |
+| Inbox reale per i test di open e click | Vuota | `--inbox` |
+| Numero di telefono reale | Vuoto | `--phone` |
+| Numero di telefono fittizio | `333333333333` | nessuna |
+| Durata della finestra di validità | Da ieri a 7 giorni dopo | nessuna |
+| Offset della data di wait | 0 ore | nessuna |
+| Offset della data di wait prima di un engagement split | 24 ore | nessuna |
+| Formato delle date nei CSV | `YYYY-MM-DD HH:MM` | nessuna |
+| Un solo scenario attivo alla volta | Attivo quando viene rilevato un campo di attivazione | `--no-single-active` lo disattiva |
+| Campo di attivazione | Suggerito dai filtri della entry query | nessuna |
+| Run identifier nelle chiavi | R01 | `--run-id` |
+| I confronti di testo ignorano maiuscole e minuscole | Disattivato | `--case-insensitive` |
 
-## How the values are chosen
+## Come vengono scelti i valori
 
-Each value comes from the first of these rules that applies:
+Ogni valore viene dalla prima di queste regole che si applica:
 
-1. A key or join field gets a generated key, the same in every table that joins on it: `TST_R01_C0001` for contacts, `TST_R01_S01` for scenarios.
-2. A field read by a split gets the value the case needs, written exactly as in the condition, with the same letter case.
-3. A field filtered by the entry query gets a value that passes the filter, so the contact really enters the journey.
-4. An email address gets the real inbox or `@example.invalid`, as above. A phone gets the fake number. The validity window runs from yesterday to 7 days ahead. A wait date is the generation time, meant to end the wait at once, or 24 hours later when the contacts must open an email after that wait.
-5. Any other field gets a placeholder: text `TST_<field>_<n>` cut to the field length, Booleans their default or False.
+1. Un campo chiave o di join riceve una chiave generata, uguale in tutte le tabelle che fanno join su quel campo: `TST_R01_C0001` per i contatti, `TST_R01_S01` per gli scenari.
+2. Un campo letto da uno split riceve il valore che serve al caso, scritto esattamente come nella condizione, con le stesse maiuscole e minuscole.
+3. Un campo filtrato dalla entry query riceve un valore che supera il filtro, così il contatto entra davvero nel journey.
+4. Un indirizzo email riceve l'inbox reale o `@example.invalid`, come descritto sopra. Un telefono riceve il numero fittizio. La finestra di validità va da ieri a 7 giorni dopo. Una data di wait è l'ora di generazione, per far terminare subito il wait, oppure 24 ore dopo quando i contatti devono aprire un'email dopo quel wait.
+5. Ogni altro campo riceve un segnaposto: per il testo `TST_<field>_<n>` troncato alla lunghezza del campo, per i Boolean il loro default o False.
 
-## Known limits
+## Limiti noti
 
-- Branch coverage, not path coverage: every branch is crossed at least once, but not every combination of branches.
-- Random splits are covered statistically, never with certainty.
-- Only the supported activity types, operators and SQL patterns are understood. Anything else is listed in the report, and the branches behind it are marked as not covered. Nothing is guessed.
-- Entry criteria defined outside the JSON, such as contact filters set in the interface and not exported, are not seen.
-- Email content and personalisation are not tested. The tool tests the routing of contacts.
+- Coverage dei branch, non dei percorsi: ogni branch viene attraversato almeno una volta, ma non ogni combinazione di branch.
+- I random split sono coperti in modo statistico, mai con certezza.
+- Vengono interpretati solo i tipi di attività, gli operatori e i pattern SQL supportati. Tutto il resto viene elencato nel report e i branch che ne dipendono risultano non coperti. Nulla viene dedotto per supposizione.
+- I criteri di ingresso definiti fuori dal JSON, come i filtri sui contatti impostati nell'interfaccia e non esportati, non sono visibili.
+- Il contenuto delle email e la personalizzazione non vengono testati. Lo strumento testa l'instradamento dei contatti.
 
-Supported in the PoC:
+Supportato nel PoC:
 
-- Activities: decision split, engagement split, random split, wait by duration, wait by attribute, send-time wait, email, update contact.
-- Condition operators: `Is`, `Equal` and `IsNull`, plus `NotEqual`, `IsNotNull`, `GreaterThan`, `GreaterThanOrEqual`, `LessThan`, `LessThanOrEqual`, `Contains`, `BeginsWith` and `EndsWith`, carried over from the earlier tool.
-- SQL in the entry queries: table names, join equalities, simple WHERE filters on equality, null and date range, and simple select expressions. A more complex filter or expression is reported, and an entry column that depends on it gets a placeholder.
+- Attività: decision split, engagement split, random split, wait by duration, wait by attribute, send-time wait, email, update contact.
+- Operatori nelle condizioni: `Is`, `Equal` e `IsNull`, più `NotEqual`, `IsNotNull`, `GreaterThan`, `GreaterThanOrEqual`, `LessThan`, `LessThanOrEqual`, `Contains`, `BeginsWith` e `EndsWith`, ripresi dallo strumento precedente.
+- SQL nelle entry query: nomi di tabella, uguaglianze di join, filtri WHERE semplici su uguaglianza, null e intervalli di date, ed espressioni semplici nella select. Un filtro o un'espressione più complessi vengono segnalati, e una colonna di ingresso che ne dipende riceve un segnaposto.
 
-## Assumptions to verify
+## Assunzioni da verificare
 
-In a few places the expected results depend on Salesforce behaviour that the spec does not settle: letter case in text comparisons, how a wait date without a time zone is read, how contacts enter through an entry automation, and more. Each one is an assumption to verify once with a small real run, never a fact.
+In alcuni punti i risultati attesi dipendono da comportamenti di Salesforce che la spec non chiarisce: le maiuscole e minuscole nei confronti di testo, come viene letta una data di wait senza fuso orario, come entrano i contatti tramite un'automation di ingresso, e altro. Ognuno è un'assunzione da verificare una volta con un piccolo run reale, mai un dato di fatto.
 
-- `docs/assumptions.md` lists them all, with the documentation found and how to verify each one, and it plans a one-day verification run. Start with its "Check these first" section.
-- The "Assumptions" section of `report.md` lists the ones that apply to the export you ran.
+- `docs/assumptions.md` le elenca tutte, con la documentazione trovata e come verificare ciascuna, e pianifica un run di verifica di un giorno. Inizia dalla sezione "Check these first".
+- La sezione "Assumptions" di `report.md` elenca quelle che valgono per l'export eseguito.
 
-## The one-page app
+## L'app a pagina singola
 
-The one-page app is a later step, priority 5 in the spec: upload the export, review what was detected, adjust the settings, generate and download the zip. A first version is in `cjhelper/app.py` and starts with `streamlit run cjhelper/app.py`. Until it is confirmed, use the command line.
+L'app a pagina singola è un passo successivo, la priorità 5 della spec: carica l'export, verifica cosa è stato rilevato, modifica le impostazioni, genera e scarica lo zip. Una prima versione è in `cjhelper/app.py` e si avvia con `streamlit run cjhelper/app.py` dalla cartella del repository. Finché non viene confermata, usa la riga di comando.
 
-## For developers
+L'interfaccia è in italiano. I messaggi prodotti dal generatore (warning, nomi dei trust check, errori di lettura) e i file scaricati sono ancora in inglese.
 
-| Path | What it holds |
+## Per gli sviluppatori
+
+| Percorso | Contenuto |
 | --- | --- |
-| `docs/spec.md` | The specification, the source of truth |
-| `docs/plan.md` | How the spec is split into modules |
-| `docs/progress.md` | State of the work and open questions |
-| `docs/assumptions.md` | The Salesforce review: assumptions to verify and suspicious patterns |
-| `cjhelper/` | The generator, one module per step of the spec |
-| `tests/` | Unit tests per module, the examples and the end-to-end pilot test |
-| `examples/` | Small hand-made journeys with their expected answers |
-| `fixtures/` | The pilot export |
+| `docs/spec.md` | La specifica, il riferimento |
+| `docs/plan.md` | Come la spec è suddivisa in moduli |
+| `docs/progress.md` | Stato del lavoro e domande aperte |
+| `docs/assumptions.md` | La review Salesforce: assunzioni da verificare e pattern sospetti |
+| `cjhelper/` | Il generatore, un modulo per ogni passo della spec |
+| `tests/` | Test unitari per modulo, gli esempi e il test end-to-end sul pilot |
+| `examples/` | Piccoli journey costruiti a mano con le risposte attese |
+| `fixtures/` | L'export del pilot |
 
-Run the tests with `python -m pytest`. The pilot tests take about a minute.
+Esegui i test con `python -m pytest`. I test sul pilot impiegano circa un minuto.

@@ -71,25 +71,26 @@ from cjhelper.model import (  # noqa: E402
 LOG = logging.getLogger(__name__)
 
 TITLE = "CJ Test Helper"
-DESCRIPTION = "Upload a Marketing Cloud package export and download CSV test data for every branch of its journey."
-STEP_UPLOAD = "1. Upload the package export"
-STEP_REVIEW = "2. Review what was detected"
-STEP_SETTINGS = "3. Adjust the settings"
-STEP_GENERATE = "4. Generate and download"
-UPLOAD_LABEL = "Package export (JSON)"
-UPLOAD_NOTE = ("The JSON file that Package Manager exports for the journey. It is read in memory and discarded; "
-               "nothing is stored.")
-GENERATE_LABEL = "Generate"
-GENERATE_NOTE = "Generation can take about a minute. The result appears below when it is done."
-SPINNER_TEXT = "Generating the test data. This can take about a minute."
-DOWNLOAD_LABEL = "Download the zip"
-MORE_SETTINGS = "More settings"
-TECHNICAL_DETAILS = "Technical details"
+DESCRIPTION = ("Carica l'export di un package di Marketing Cloud e scarica i dati di test in CSV per ogni branch "
+               "del suo journey.")
+STEP_UPLOAD = "1. Carica l'export del package"
+STEP_REVIEW = "2. Verifica cosa è stato rilevato"
+STEP_SETTINGS = "3. Modifica le impostazioni"
+STEP_GENERATE = "4. Genera e scarica"
+UPLOAD_LABEL = "Export del package (JSON)"
+UPLOAD_NOTE = ("Il file JSON che Package Manager esporta per il journey. Viene letto in memoria e poi scartato: "
+               "non viene salvato nulla.")
+GENERATE_LABEL = "Genera"
+GENERATE_NOTE = "La generazione può richiedere circa un minuto. Il risultato compare qui sotto al termine."
+SPINNER_TEXT = "Generazione dei dati di test in corso. Può richiedere circa un minuto."
+DOWNLOAD_LABEL = "Scarica lo zip"
+MORE_SETTINGS = "Altre impostazioni"
+TECHNICAL_DETAILS = "Dettagli tecnici"
 
 # Spec, "Behaviour at the edges": a plain message; it ends with what to do next.
-NEXT_STEP = "Choose the JSON file that Package Manager produces."
-UNEXPECTED_READ = "The file could not be read because of an unexpected error in the generator."
-UNEXPECTED_GENERATION = "The test data could not be generated because of an unexpected error in the generator."
+NEXT_STEP = "Scegli il file JSON prodotto da Package Manager."
+UNEXPECTED_READ = "Il file non è stato letto a causa di un errore imprevisto del generatore."
+UNEXPECTED_GENERATION = "I dati di test non sono stati generati a causa di un errore imprevisto del generatore."
 
 PREVIEW_ROWS = 10        # first rows of each CSV shown in step 4
 DETAIL_LIMIT = 20        # details shown under a failed trust check
@@ -97,6 +98,10 @@ DETAIL_LIMIT = 20        # details shown under a failed trust check
 DETECTION_KEY = "cjhelper.detection"   # st.session_state: (file digest, DetectionSummary)
 RESULT_KEY = "cjhelper.result"         # st.session_state: StoredRun of the last generation
 PENDING_KEY = "cjhelper.pending"       # st.session_state: (file digest, Settings) from the click to the generation
+
+# The page is in Italian; the messages of the generator (warnings, trust check names, loader errors) stay in
+# English, as in report.md, until the downloaded files are translated too. Salesforce's own names (activity
+# types, the roles of report.md) stay in English, as the team uses them.
 
 # Plain names of the activity kinds, in the order of the spec's "Supported in the PoC" table.
 ACTIVITY_NAMES: dict[str, str] = {
@@ -108,25 +113,31 @@ ACTIVITY_NAMES: dict[str, str] = {
     KIND_WAIT_STO: "Send-time wait",
     KIND_EMAIL: "Email",
     KIND_UPDATE: "Update contact",
-    KIND_UNSUPPORTED: "Unsupported",
+    KIND_UNSUPPORTED: "Non supportata",
 }
 
-# The spec's settings, with the wording report.md uses for "Settings used".
+# The level of a table (``TableLine.level``) as the page writes it.
+LEVEL_NAMES: dict[str, str] = {"contact": "contatto", "scenario": "scenario"}
+
+# The manual actions of a case (``ManualAction.kind``) as a verb.
+ACTION_VERBS: dict[str, str] = {"open": "aprire", "click": "cliccare"}
+
+# The spec's settings.
 SETTING_LABELS: dict[str, str] = {
-    "contacts_per_case": "Contacts per case",
-    "contacts_per_random_case": "Contacts per random-split case",
-    "real_inbox": "Real inbox for open and click tests",
-    "real_phone": "Real phone number",
-    "fake_phone": "Fake phone number",
-    "window_start_days": "Validity window start (days from the generation time)",
-    "window_end_days": "Validity window end (days from the generation time)",
-    "wait_offset_hours": "Wait date offset (hours)",
-    "wait_offset_before_engagement_hours": "Wait date offset before an engagement split (hours)",
-    "date_format": "Date format in the CSVs",
-    "one_active_scenario": "One active scenario at a time",
-    "activation_field": "Activation field",
-    "run_id": "Run identifier in keys",
-    "case_insensitive_text": "Text comparisons ignore letter case",
+    "contacts_per_case": "Contatti per caso",
+    "contacts_per_random_case": "Contatti per caso di random split",
+    "real_inbox": "Inbox reale per i test di open e click",
+    "real_phone": "Numero di telefono reale",
+    "fake_phone": "Numero di telefono fittizio",
+    "window_start_days": "Inizio della finestra di validità (giorni dalla generazione)",
+    "window_end_days": "Fine della finestra di validità (giorni dalla generazione)",
+    "wait_offset_hours": "Offset della data di wait (ore)",
+    "wait_offset_before_engagement_hours": "Offset della data di wait prima di un engagement split (ore)",
+    "date_format": "Formato delle date nei CSV",
+    "one_active_scenario": "Un solo scenario attivo alla volta",
+    "activation_field": "Campo di attivazione",
+    "run_id": "Run identifier nelle chiavi",
+    "case_insensitive_text": "I confronti di testo ignorano maiuscole e minuscole",
 }
 NUMBER_SETTINGS = ("contacts_per_case", "contacts_per_random_case", "window_start_days", "window_end_days",
                    "wait_offset_hours", "wait_offset_before_engagement_hours")
@@ -134,30 +145,31 @@ TEXT_SETTINGS = ("real_inbox", "real_phone", "fake_phone", "run_id")
 
 # Visible notes under a field (spec wording where it has some).
 SETTING_NOTES: dict[str, str] = {
-    "real_inbox": ("Contacts that must open or click an email get this inbox with plus-addressing. Left empty, "
-                   "they get undeliverable addresses and those branches are reported as not covered."),
-    "run_id": ("Added to every key, for example TST_R01_C0001. Use a new one for each generation, so that the "
-               "evidence of two runs does not mix."),
-    "real_phone": "Not used: none of the activity types the generator supports sends a message to a phone.",
+    "real_inbox": ("I contatti che devono aprire o cliccare un'email ricevono questa inbox con plus-addressing. "
+                   "Se resta vuota, ricevono indirizzi non recapitabili e i branch relativi risultano non coperti."),
+    "run_id": ("Viene aggiunto a ogni chiave, per esempio TST_R01_C0001. Usane uno nuovo a ogni generazione, così "
+               "le evidenze di due run non si mescolano."),
+    "real_phone": ("Non viene usato: nessuno dei tipi di attività supportati dal generatore invia messaggi a un "
+                   "telefono."),
 }
 SETTING_HELP: dict[str, str] = {
-    "fake_phone": "The clearly fake number written for every contact.",
-    "wait_offset_hours": ("Wait-by-attribute dates are the generation time plus this offset, so 0 ends the wait "
-                          "at once."),
-    "wait_offset_before_engagement_hours": ("For a wait-by-attribute on the path to an engagement split: "
-                                            "time left to open the email."),
-    "activation_field": ("A Boolean field of a scenario-level table. When one active scenario at a time is on, "
-                         "only the first scenario is active in the CSVs."),
-    "case_insensitive_text": ("Whether Salesforce treats Email and EMAIL as the same value is still to be "
-                              "verified; off treats them as different."),
+    "fake_phone": "Il numero palesemente fittizio scritto per ogni contatto.",
+    "wait_offset_hours": ("Le date dei wait by attribute sono l'ora di generazione più questo offset: con 0 il wait "
+                          "termina subito."),
+    "wait_offset_before_engagement_hours": ("Per un wait by attribute sul percorso verso un engagement split: il "
+                                            "tempo a disposizione per aprire l'email."),
+    "activation_field": ("Un campo Boolean di una tabella a livello di scenario. Con un solo scenario attivo alla "
+                         "volta, nei CSV è attivo solo il primo scenario."),
+    "case_insensitive_text": ("Resta da verificare se Salesforce tratta Email ed EMAIL come lo stesso valore; con "
+                              "l'opzione disattivata sono valori diversi."),
 }
 DEFAULT_DATE_PATTERN = "YYYY-MM-DD HH:MM"     # how the spec writes the default date format
 
 # What each file of the zip is for (spec, "Outputs").
 FILE_PURPOSES: dict[str, str] = {
-    outputs.SCENARIOS_FILE: "the scenarios in run order, with the one active at the start",
-    outputs.TESTBOOK_FILE: "the tests and their expected results",
-    outputs.REPORT_FILE: "what is covered, what is not and why, and how to run the tests",
+    outputs.SCENARIOS_FILE: "gli scenari in ordine di esecuzione, con quello attivo all'inizio",
+    outputs.TESTBOOK_FILE: "i test e i risultati attesi",
+    outputs.REPORT_FILE: "cosa è coperto, cosa no e perché, e come eseguire i test",
 }
 
 # Text shown with st.markdown is escaped, so that names such as _Sent or values with * stay plain.
@@ -311,16 +323,16 @@ def settings_from_form(values: Mapping[str, Any]) -> Settings:
 
 
 def days_text(days: int) -> str:
-    """A validity window bound in words, as report.md's "Settings used" writes it."""
+    """A validity window bound in words, as report.md's "Settings used" says it."""
     if days == 0:
-        return "At the generation time."
-    side = "before" if days < 0 else "after"
-    return f"{_count(abs(days), 'day', 'days')} {side} the generation time."
+        return "Al momento della generazione."
+    side = "prima della" if days < 0 else "dopo la"
+    return f"{_count(abs(days), 'giorno', 'giorni')} {side} generazione."
 
 
 def date_format_note(now: datetime) -> str:
     default = Settings().date_format
-    return f"By default, dates are written as {DEFAULT_DATE_PATTERN}, for example {now.strftime(default)}."
+    return f"Di default le date sono scritte come {DEFAULT_DATE_PATTERN}, per esempio {now.strftime(default)}."
 
 
 # ---------------------------------------------------------------------------
@@ -341,14 +353,14 @@ class StoredRun:
 def done_line(result: GenerationResult) -> str:
     """The line that ends a generation: when, with which run identifier, and the trust checks' result."""
     run_id = result.settings.run_id
-    text = f"Done at {result.generation_time:%H:%M}" + (f", run identifier {run_id}." if run_id else ".")
+    text = f"Completato alle {result.generation_time:%H:%M}" + (f", run identifier {run_id}." if run_id else ".")
     total = len(result.checks)
     failed = sum(1 for check in result.checks if not check.passed)
     if failed:
-        text += (f" {failed} of {_count(total, 'trust check', 'trust checks')} failed: read Trust checks below "
-                 "before you import.")
+        text += (f" {failed} trust check su {total} {'non superato' if failed == 1 else 'non superati'}: leggi i "
+                 "trust check qui sotto prima di importare.")
     elif total:
-        text += f" {total} of {_count(total, 'trust check', 'trust checks')} passed."
+        text += f" {total} trust check su {total} {'superato' if total == 1 else 'superati'}."
     return text
 
 
@@ -357,12 +369,12 @@ def summary_rows(result: GenerationResult) -> list[tuple[str, int]]:
     action, and not covered" (the counts of the coverage, as in report.md and the command line)."""
     stats = result.coverage.stats
     return [
-        ("Scenarios", stats.get("scenarios", 0)),
-        ("Cases", stats.get("cases", 0)),
-        ("Contacts", stats.get("contacts", 0)),
-        ("Branches covered", stats.get("covered", 0)),
-        ("Branches covered with manual action", stats.get("covered_manual", 0)),
-        ("Branches not covered", stats.get("not_covered", 0)),
+        ("Scenari", stats.get("scenarios", 0)),
+        ("Casi", stats.get("cases", 0)),
+        ("Contatti", stats.get("contacts", 0)),
+        ("Branch coperti", stats.get("covered", 0)),
+        ("Branch coperti con azione manuale", stats.get("covered_manual", 0)),
+        ("Branch non coperti", stats.get("not_covered", 0)),
     ]
 
 
@@ -379,17 +391,23 @@ def summary_notes(result: GenerationResult) -> list[str]:
     behind = [b for b in missing if b.behind is not None]
     if behind:
         roots = {tuple(b.behind) for b in behind}
-        verb = "lies" if len(behind) == 1 else "lie"
-        notes.append(f"{len(behind)} of the {_count(len(missing), 'branch', 'branches')} not covered {verb} behind "
-                     f"{_count(len(roots), 'branch', 'branches')} that no contact can reach (see "
-                     f"{outputs.REPORT_FILE}).")
+        verb = "sta" if len(behind) == 1 else "stanno"
+        notes.append(f"{len(behind)} dei {len(missing)} branch non coperti {verb} dietro a {len(roots)} branch che "
+                     f"nessun contatto può raggiungere (vedi {outputs.REPORT_FILE}).")
     elif missing:
-        notes.append("report.md gives the reason for each branch not covered.")
-    kinds = _unique(action.kind for case in result.coverage.cases for action in case.manual_actions)
-    if kinds and not result.settings.real_inbox.strip():
-        notes.append(f"No real inbox was given, so the contacts that must {_join_words(kinds, 'or')} an email get "
-                     "undeliverable addresses and those branches are reported as not covered.")
+        notes.append(f"{outputs.REPORT_FILE} indica il motivo di ogni branch non coperto.")
+    if _inbox_missing(result):
+        kinds = _unique(action.kind for case in result.coverage.cases for action in case.manual_actions)
+        verbs = _join_words([ACTION_VERBS.get(kind, kind) for kind in kinds], "o")
+        notes.append(f"Non è stata indicata un'inbox reale: i contatti che devono {verbs} un'email ricevono "
+                     "indirizzi non recapitabili e i branch relativi risultano non coperti.")
     return notes
+
+
+def _inbox_missing(result: GenerationResult) -> bool:
+    """Some case needs a manual action on an email, and no real inbox was given."""
+    needed = any(case.manual_actions for case in result.coverage.cases)
+    return needed and not result.settings.real_inbox.strip()
 
 
 def import_notes(result: GenerationResult) -> list[str]:
@@ -397,24 +415,25 @@ def import_notes(result: GenerationResult) -> list[str]:
 
     The active scenario and its activation field come from the generated scenarios.csv rows.
     """
-    notes = [f"Open {outputs.REPORT_FILE} first: its How to run section gives the import order."]
+    notes = [f"Apri prima {outputs.REPORT_FILE}: la sezione How to run indica l'ordine di import."]
     rows = result.data.scenarios_rows
     active = [row for row in rows if str(row.get("active_at_start", "")).lower() == "yes"]
     field = next((row.get("activation_field") for row in rows if row.get("activation_field")), None)
     if field and len(active) == 1:
-        notes.append(f"Only {active[0].get('scenario_key')}, the first scenario in run order, is active in the CSVs.")
-        notes.append(f"Run the scenarios one at a time, in run order. When the contacts of a scenario have left the "
-                     f"journey, make the next one active: set {field} to True on its row and to False on every "
-                     "other row. Change nothing else and import nothing again.")
+        notes.append(f"Nei CSV è attivo solo {active[0].get('scenario_key')}, il primo scenario in ordine di "
+                     "esecuzione.")
+        notes.append(f"Esegui gli scenari uno alla volta, in ordine di esecuzione. Quando i contatti di uno scenario "
+                     f"sono usciti dal journey, attiva il successivo: imposta {field} a True sulla sua riga e a False "
+                     "su tutte le altre. Non cambiare altro e non reimportare nulla.")
     elif rows:
-        notes.append("Every scenario is active in the CSVs, so the scenarios run together.")
+        notes.append("Nei CSV tutti gli scenari sono attivi, quindi vengono eseguiti insieme.")
     return notes
 
 
 def generation_warnings(result: GenerationResult) -> tuple[list[str], bool]:
     """Warnings of the coverage and of the data generation (step 2 already showed the others). The
     missing real inbox is said in the summary instead (``summary_notes``)."""
-    inbox_note = any(note.startswith("No real inbox") for note in summary_notes(result))
+    inbox_note = _inbox_missing(result)
     warnings = [w for w in list(result.coverage.warnings) + list(result.data.warnings)
                 if not (inbox_note and w.startswith("No real inbox"))]
     return warning_lines(warnings, result.package.journey.activities)
@@ -442,7 +461,7 @@ def download_lines(result: GenerationResult) -> list[str]:
     data_files = [name for name in result.files if name.lower().endswith(".csv") and name not in FILE_PURPOSES]
     lines = []
     if data_files:
-        lines.append(f"{_join_words(data_files)}: the data to import.")
+        lines.append(f"{_join_words(data_files, 'e')}: i dati da importare.")
     for name in result.files:
         if name in FILE_PURPOSES:
             lines.append(f"{name}: {FILE_PURPOSES[name]}.")
@@ -477,12 +496,12 @@ def error_message(error: BaseException) -> str:
         return UNEXPECTED_READ
     parse_error = error if isinstance(error, json.JSONDecodeError) else _json_error_behind(error)
     if parse_error is not None:
-        text = (f"The file is not valid JSON: there is a problem at line {parse_error.lineno}, "
-                f"column {parse_error.colno}.")
+        text = (f"Il file non è un JSON valido: c'è un problema alla riga {parse_error.lineno}, "
+                f"colonna {parse_error.colno}.")
     elif isinstance(error, UnicodeDecodeError):
-        text = "The file is not UTF-8 text, so it is not a valid JSON package export."
-    else:
-        text = str(error).strip() or "The file could not be read as a package export."
+        text = "Il file non è testo UTF-8, quindi non è un export JSON valido."
+    else:   # the loader's own words, in English like the other messages of the generator
+        text = str(error).strip() or "Il file non può essere letto come export di un package."
     if not text.endswith("."):
         text += "."
     return f"{text} {NEXT_STEP}"
@@ -560,49 +579,49 @@ def render_result(result: GenerationResult, zip_bytes: bytes) -> None:
     trust checks one by one and the warnings of the generation."""
     st.markdown(_md(done_line(result)))
 
-    _label("Summary")
-    st.markdown(_markdown_table(["Item", "Count"], summary_rows(result), right=(1,)))
+    _label("Riepilogo")
+    st.markdown(_markdown_table(["Voce", "Numero"], summary_rows(result), right=(1,)))
     for note in summary_notes(result):
         st.markdown(_md(note))
 
-    _label("Before you import")
+    _label("Prima di importare")
     _show_list(import_notes(result), empty="")
 
-    _label("Preview of the CSVs")
+    _label("Anteprima dei CSV")
     for name in preview_files(result):
         text, total = csv_preview(result.files[name])
-        title = f"{name}: the run plan" if name == outputs.SCENARIOS_FILE else name
-        with st.expander(_md(f"{title} ({_count(total, 'row', 'rows')})")):
+        title = f"{name}: il piano di esecuzione" if name == outputs.SCENARIOS_FILE else name
+        with st.expander(_md(f"{title} ({_count(total, 'riga', 'righe')})")):
             if total > PREVIEW_ROWS:
-                st.caption(f"The first {PREVIEW_ROWS} of {total} rows.")
+                st.caption(f"Le prime {PREVIEW_ROWS} di {total} righe.")
             # The file's own lines: a preview holds only its first rows, so it offers no CSV download of its own.
             st.code(text, language=None)
 
     _label("Download")
     file_name = zip_file_name(result.package.journey.name)
     st.download_button(DOWNLOAD_LABEL, data=zip_bytes, file_name=file_name, mime="application/zip", type="primary")
-    st.markdown(_md(f"{file_name} holds {_count(len(result.files), 'file', 'files')}:"))
+    st.markdown(_md(f"{file_name} contiene {len(result.files)} file:"))
     _show_list(download_lines(result), empty="")
 
-    _label("Trust checks")
+    _label("Trust check")
     checks = result.checks
     passed = sum(1 for check in checks if check.passed)
-    st.markdown(f"{passed} of {_count(len(checks), 'trust check', 'trust checks')} passed.")
+    st.markdown(f"{passed} trust check su {len(checks)} {'superato' if passed == 1 else 'superati'}.")
     lines: list[str] = []
     for check in checks:
-        lines.append(f"- {'Passed' if check.passed else 'Failed'}: {_md(_one_line(check.name))}")
+        lines.append(f"- {'Superato' if check.passed else 'Non superato'}: {_md(_one_line(check.name))}")
         if not check.passed:
             lines.extend(f"    - {_md(_one_line(detail))}" for detail in check.details[:DETAIL_LIMIT])
             if len(check.details) > DETAIL_LIMIT:
-                lines.append(f"    - and {len(check.details) - DETAIL_LIMIT} more")
+                lines.append(f"    - e altri {len(check.details) - DETAIL_LIMIT}")
     if lines:
         st.markdown("\n".join(lines))
 
     warnings, left_out = generation_warnings(result)
-    _label("Warnings from the generation")
-    _show_list(warnings, empty="No warnings.")
+    _label("Warning della generazione")
+    _show_list(warnings, empty="Nessun warning.")
     if left_out:
-        st.markdown(_md(f"{outputs.REPORT_FILE} lists the activities concerned."))
+        st.markdown(_md(f"{outputs.REPORT_FILE} elenca le attività coinvolte."))
 
 
 def _detection(data: bytes) -> tuple[str, DetectionSummary]:
@@ -626,20 +645,22 @@ def _forget() -> None:
 
 def _show_detection(summary: DetectionSummary) -> None:
     st.header(STEP_REVIEW)
-    st.markdown(_md(f"The export holds the journey {summary.journey_name}, with "
-                    f"{_count(summary.activity_count, 'activity', 'activities')}."))
-    _label("Activities by type")
-    st.markdown(_markdown_table(["Activity type", "Count"], summary.activities, right=(1,)))
-    _label("Tables")
+    st.markdown(_md(f"L'export contiene il journey {summary.journey_name}, con "
+                    f"{_count(summary.activity_count, 'attività', 'attività')}."))
+    _label("Attività per tipo")
+    st.markdown(_markdown_table(["Tipo di attività", "Numero"], summary.activities, right=(1,)))
+    _label("Tabelle")
     files = summary.csv_files
-    st.markdown(_md(f"{_count(len(files), 'table gets', 'tables get')} a CSV: "
-                    f"{_join_words(files) if files else 'none'}."))
-    rows = [(line.name, line.role, line.level, "yes" if line.csv else "no") for line in summary.tables]
-    st.markdown(_markdown_table(["Table", "Role", "Level", "CSV"], rows))
-    _label("Warnings found in the export")
-    _show_list(summary.warnings, empty="No warnings.")
+    if files:
+        st.markdown(_md(f"{_count(len(files), 'tabella ha', 'tabelle hanno')} un CSV: {_join_words(files)}."))
+    else:
+        st.markdown("Nessuna tabella ha un CSV.")
+    rows = [(line.name, line.role, _level_text(line.level), "sì" if line.csv else "no") for line in summary.tables]
+    st.markdown(_markdown_table(["Tabella", "Ruolo", "Livello", "CSV"], rows))
+    _label("Warning trovati nell'export")
+    _show_list(summary.warnings, empty="Nessun warning.")
     if summary.ids_left_out:
-        st.markdown(_md(f"{outputs.REPORT_FILE} lists the activities concerned once the test data is generated."))
+        st.markdown(_md(f"{outputs.REPORT_FILE} elenca le attività coinvolte, una volta generati i dati di test."))
 
 
 def _settings_form(summary: DetectionSummary, running: bool) -> tuple[Settings, bool]:
@@ -652,22 +673,22 @@ def _settings_form(summary: DetectionSummary, running: bool) -> tuple[Settings, 
     defaults = default_form_values(summary.activation_field)
     values: dict[str, Any] = {}
     with st.form("settings", border=False):
-        values["real_inbox"] = _text("real_inbox", defaults, placeholder="name@domain")
+        values["real_inbox"] = _text("real_inbox", defaults, placeholder="nome@dominio")
         st.caption(_md(SETTING_NOTES["real_inbox"]))
         values["run_id"] = _text("run_id", defaults)
         st.caption(_md(SETTING_NOTES["run_id"]))
         with st.expander(MORE_SETTINGS):
-            _label("Contacts")
+            _label("Contatti")
             left, right = st.columns(2, vertical_alignment="bottom")
             with left:
                 values["contacts_per_case"] = _number("contacts_per_case", defaults, min_value=1)
             with right:
                 values["contacts_per_random_case"] = _number("contacts_per_random_case", defaults, min_value=1)
-            _label("Contact details")
+            _label("Recapiti")
             values["real_phone"] = _text("real_phone", defaults)
             st.caption(_md(SETTING_NOTES["real_phone"]))
             values["fake_phone"] = _text("fake_phone", defaults)
-            _label("Dates")
+            _label("Date")
             left, right = st.columns(2, vertical_alignment="bottom")
             with left:
                 values["window_start_days"] = _number("window_start_days", defaults)
@@ -683,7 +704,7 @@ def _settings_form(summary: DetectionSummary, running: bool) -> tuple[Settings, 
                                                                         defaults)
             values["date_format"] = _text("date_format", defaults)
             st.caption(_md(date_format_note(datetime.now())))
-            _label("Scenarios")
+            _label("Scenari")
             values["one_active_scenario"] = st.checkbox(SETTING_LABELS["one_active_scenario"],
                                                         value=defaults["one_active_scenario"],
                                                         disabled=not summary.activation_choices)
@@ -695,7 +716,7 @@ def _settings_form(summary: DetectionSummary, running: bool) -> tuple[Settings, 
                 values["activation_field"] = st.selectbox(
                     SETTING_LABELS["activation_field"], choices, format_func=_field_text,
                     index=choices.index(suggested) if suggested in choices else None,
-                    placeholder="Choose a field", help=SETTING_HELP["activation_field"])
+                    placeholder="Scegli un campo", help=SETTING_HELP["activation_field"])
             values["case_insensitive_text"] = st.checkbox(SETTING_LABELS["case_insensitive_text"],
                                                           value=defaults["case_insensitive_text"],
                                                           help=SETTING_HELP["case_insensitive_text"])
@@ -717,11 +738,13 @@ def _text(name: str, defaults: Mapping[str, Any], placeholder: Optional[str] = N
 
 def _activation_note(summary: DetectionSummary) -> str:
     if summary.activation_field is not None:
-        return (f"Activation field detected in the entry query filters: {_field_text(summary.activation_field)}. "
-                "Turn this off to make every scenario active in the CSV.")
+        return (f"Campo di attivazione rilevato nei filtri della entry query: "
+                f"{_field_text(summary.activation_field)}. Disattiva l'opzione per rendere attivi tutti gli scenari "
+                "nei CSV.")
     if summary.activation_choices:
-        return "No activation field was detected in the entry query filters."
-    return "No activation field was detected, and no scenario-level table has a Boolean field."
+        return "Nei filtri della entry query non è stato rilevato un campo di attivazione."
+    return ("Non è stato rilevato un campo di attivazione e nessuna tabella a livello di scenario ha un campo "
+            "Boolean.")
 
 
 def _generate(data: bytes, digest: str, settings: Settings) -> None:
@@ -794,6 +817,10 @@ def _without_key_lists(text: str, keys: set[str]) -> tuple[str, bool]:
     return _PARENTHESES.sub(replace, text), removed
 
 
+def _level_text(level: str) -> str:
+    return LEVEL_NAMES.get(level, level)
+
+
 def _field_text(ref: FieldRef) -> str:
     return f"{ref[0]}.{ref[1]}"
 
@@ -802,7 +829,7 @@ def _count(n: int, singular: str, plural: str) -> str:
     return f"{n} {singular if n == 1 else plural}"
 
 
-def _join_words(items: list[str], last: str = "and") -> str:
+def _join_words(items: list[str], last: str = "e") -> str:
     items = list(items)
     if len(items) <= 1:
         return "".join(items)
