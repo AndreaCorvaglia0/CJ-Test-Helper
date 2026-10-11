@@ -262,11 +262,16 @@
     "RANDOMSPLITV2-1/branchResult-1": {"status": "covered", "statistical": true},
     "RANDOMSPLITV2-1/branchResult-2": {"status": "covered", "statistical": true}
   },
+  "branches_any_of": {
+    "MULTICRITERIADECISIONV2-3/default_path_1": ["covered", "covered with manual action"],
+    "MULTICRITERIADECISIONV2-3/remainder_path": ["covered", "covered with manual action"],
+    "MULTICRITERIADECISIONV2-4/default_path_1": ["covered", "covered with manual action"]
+  },
   "scenario_count": {"min": 41, "max": 50},
   "case_count": {"min": 59, "max": 150},
   "contact_count": {"min": 224, "max": 500},
   "cases": [
-    {"scenario_values": {"DE_NCRM_AD_HOC_CONFIG.Control Group Required": "True"}, "manual_actions": [], "contact_count": 50, "random": {"activity_key": "RANDOMSPLITV2-1", "expected_low": 1, "expected_high": 9}},
+    {"scenario_values": {"DE_NCRM_AD_HOC_CONFIG.Control Group Required": "True"}, "contact_count": 50, "random": {"activity_key": "RANDOMSPLITV2-1", "expected_low": 1, "expected_high": 9}},
     {"scenario_values": {"DE_NCRM_AD_HOC_CONFIG.Control Group Required": "False", "DE_NCRM_AD_HOC_CONFIG.CHANNEL1": "Email", "DE_NCRM_AD_HOC_CONFIG.Open_Click_Strategy": "True"}, "end_activity": "ENGAGEMENTSPLITV2-2", "manual_actions": ["open"], "contact_count": 3},
     {"scenario_values": {"DE_NCRM_AD_HOC_CONFIG.Control Group Required": "False"}, "end_activity": "MULTICRITERIADECISIONV2-2", "manual_actions": [], "contact_count": 3}
   ],

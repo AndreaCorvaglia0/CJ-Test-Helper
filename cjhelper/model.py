@@ -207,6 +207,7 @@ class Activity:
     engagement_kind: Optional[str] = None     # engagement: "open" or "click"
     engagement_ref: Optional[str] = None      # engagement: key of the referenced email activity
     writes: list[Write] = field(default_factory=list)   # update
+    unsupported_reason: Optional[str] = None  # unsupported: why, in plain words (unknown type, operator, field...)
 
     def outcome(self, key: str) -> Optional[Outcome]:
         for o in self.outcomes:

@@ -16,7 +16,9 @@ the generator). After building, validate() checks every example:
 - every outcome `next` points to an existing activity key;
 - every {{mcpm#/entities/<kind>/<id>/...}} reference names an existing entity;
 - every criteria XML parses, and every decision outcome except the remainder has criteria;
-- expected.json lists every outcome of every decision, engagement and random split, and nothing else.
+- expected.json lists every outcome of every decision, engagement and random split, and nothing else
+  (the pilot directories may move undecidable outcomes to "branches_any_of"; they are validated against
+  the export named by their "package" key).
 """
 
 from __future__ import annotations
@@ -854,6 +856,50 @@ def build_case_mismatch() -> dict:
     return export(pkg)
 
 
+def build_unsupported_operator() -> dict:
+    pkg = Package("unsupported_operator", "EX unsupported operator")
+    setup_contact_only(pkg, [boolean("IsMailOffers"), text("PostalCode", 10)])
+    m = "DE_Master"
+    j = Journey(pkg, "EX_UnsupportedOperator")
+    j.decision("SPLIT-1", "Mail offers", [
+        ("path_a", "true", criteria(pkg.cond(m, "IsMailOffers", "Is", "true")), "SPLIT-2", "IsMailOffers is True"),
+        ("remainder_path", "false", None, "UPDATE-1", None)])
+    # "Between" is not in the spec's operator list (Is, Equal, IsNull, plus the earlier tool's
+    # not-equal, numeric comparisons, contains, begins-with, ends-with, is-not-null).
+    j.decision("SPLIT-2", "Postal code range", [
+        ("path_a", "North", criteria(pkg.cond(m, "PostalCode", "Between", "10000")), "UPDATE-2",
+         "PostalCode between 10000"),
+        ("remainder_path", "Remainder", None, "UPDATE-3", None)])
+    log_update(j, "UPDATE-1", "No offers", "NoOffers", None)
+    log_update(j, "UPDATE-2", "North", "North", None)
+    log_update(j, "UPDATE-3", "Elsewhere", "Elsewhere", None)
+    event = add_entry_source(pkg, j.name, "DE_Entry", "Q_EX_UnsupportedOperator_Entry", sql_master_only(pkg))
+    add_journey(pkg, j, event)
+    return export(pkg)
+
+
+def build_boolean_exhaustive() -> dict:
+    pkg = Package("boolean_exhaustive", "EX boolean exhaustive")
+    setup_contact_only(pkg, [boolean("StrictFlag", nullable=False, default="False"), boolean("LooseFlag")])
+    m = "DE_Master"
+    j = Journey(pkg, "EX_BooleanExhaustive")
+    j.decision("SPLIT-1", "Strict flag", [
+        ("path_a", "true", criteria(pkg.cond(m, "StrictFlag", "Is", "true")), "SPLIT-2", "StrictFlag is True"),
+        ("path_b", "false", criteria(pkg.cond(m, "StrictFlag", "Is", "false")), "SPLIT-2", "StrictFlag is False"),
+        ("remainder_path", "Remainder", None, "UPDATE-1", None)])
+    j.decision("SPLIT-2", "Loose flag", [
+        ("path_a", "true", criteria(pkg.cond(m, "LooseFlag", "Is", "true")), "UPDATE-2", "LooseFlag is True"),
+        ("path_b", "false", criteria(pkg.cond(m, "LooseFlag", "Is", "false")), "UPDATE-3", "LooseFlag is False"),
+        ("remainder_path", "Remainder", None, "UPDATE-4", None)])
+    log_update(j, "UPDATE-1", "Strict flag empty", "StrictEmpty", None)
+    log_update(j, "UPDATE-2", "Loose true", "LooseTrue", None)
+    log_update(j, "UPDATE-3", "Loose false", "LooseFalse", None)
+    log_update(j, "UPDATE-4", "Loose empty", "LooseEmpty", None)
+    event = add_entry_source(pkg, j.name, "DE_Entry", "Q_EX_BooleanExhaustive_Entry", sql_master_only(pkg))
+    add_journey(pkg, j, event)
+    return export(pkg)
+
+
 # Example directory -> builder. Directories sharing a builder get the same package.json.
 EXAMPLES = {
     "one_split": build_one_split,
@@ -869,6 +915,8 @@ EXAMPLES = {
     "update_then_split": build_update_then_split,
     "case_mismatch": build_case_mismatch,
     "case_mismatch_insensitive": build_case_mismatch,      # same package, case-insensitive setting
+    "unsupported_operator": build_unsupported_operator,
+    "boolean_exhaustive": build_boolean_exhaustive,
 }
 
 
@@ -918,25 +966,47 @@ def validate_package(path: Path) -> list[tuple[str, str]]:
     return branches
 
 
+STATUSES = ("covered", "covered with manual action", "not covered")
+
+
 def validate_expected(path: Path, branches: list[tuple[str, str]]) -> None:
+    """Every split outcome is listed once, in `branches` or (pilot only) in `branches_any_of`."""
     expected = json.loads(path.read_text(encoding="utf-8"))
     listed = set(expected["branches"])
+    any_of = set(expected.get("branches_any_of", {}))
+    assert not listed & any_of, "%s: listed twice %s" % (path, sorted(listed & any_of))
     actual = {"%s/%s" % b for b in branches}
-    missing = actual - listed
-    extra = listed - actual
+    missing = actual - listed - any_of
+    extra = (listed | any_of) - actual
     assert not missing and not extra, "%s: branches missing %s, unknown %s" % (path, sorted(missing), sorted(extra))
     for key, value in expected["branches"].items():
-        assert value["status"] in ("covered", "covered with manual action", "not covered"), (path, key)
+        assert value["status"] in STATUSES, (path, key)
+    for key, values in expected.get("branches_any_of", {}).items():
+        assert values and all(v in STATUSES for v in values), (path, key)
+
+
+def package_path(directory: Path) -> Path:
+    """package.json next to expected.json, or the file named by expected.json's "package" (the pilot)."""
+    expected = directory / "expected.json"
+    if expected.exists():
+        other = json.loads(expected.read_text(encoding="utf-8")).get("package")
+        if other:
+            return (directory / other).resolve()
+    return directory / "package.json"
 
 
 def validate(example_dirs: list[str]) -> None:
     for name in example_dirs:
         directory = HERE / name
-        branches = validate_package(directory / "package.json")
+        branches = validate_package(package_path(directory))
         expected = directory / "expected.json"
         if expected.exists():
             validate_expected(expected, branches)
         print("ok  %-28s %3d split branches" % (name, len(branches)))
+
+
+# Examples that use an existing export instead of a built package.json (expected.json has "package").
+EXTERNAL_EXAMPLES = ["pilot", "pilot_case_insensitive"]
 
 
 def main() -> int:
@@ -945,7 +1015,7 @@ def main() -> int:
         directory.mkdir(exist_ok=True)
         text_out = json.dumps(builder(), indent=1, ensure_ascii=False) + "\n"
         (directory / "package.json").write_text(text_out, encoding="utf-8")
-    validate(list(EXAMPLES))
+    validate(list(EXAMPLES) + [n for n in EXTERNAL_EXAMPLES if (HERE / n / "expected.json").exists()])
     return 0
 
 

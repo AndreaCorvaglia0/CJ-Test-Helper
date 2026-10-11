@@ -272,7 +272,8 @@ class Checker:
         if any(isinstance(f, UnsupportedFilter) for f in query.filters):
             notes.append("some entry query filters are not understood and were not checked")
         if one_active and activation is not None:
-            notes.append(f"the activation field {activation[0]}.{activation[1]} was not applied: only the first scenario is active in the CSV")
+            notes.append(f"the filter on the activation field {activation[0]}.{activation[1]} was not checked: only the first "
+                         "scenario is active in the CSV and the tester activates the others one at a time")
 
         table = self.package.tables[entry]
         header, rows = self.csv[entry]

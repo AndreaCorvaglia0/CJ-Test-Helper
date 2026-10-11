@@ -25,6 +25,7 @@ from typing import Callable, Optional
 
 from . import criteria
 from .model import (
+    ACTIVITY_KINDS,
     KIND_DECISION,
     KIND_EMAIL,
     KIND_ENGAGEMENT,
@@ -394,9 +395,17 @@ class Walker:
 # Structural helpers
 # ---------------------------------------------------------------------------
 
+def is_split(activity: Activity) -> bool:
+    """A decision, engagement or random split, including one reported as unsupported (its outcomes are
+    still branches of the journey, all of them not covered)."""
+    if activity.kind in SPLIT_KINDS:
+        return True
+    return activity.kind == KIND_UNSUPPORTED and ACTIVITY_KINDS.get(activity.raw_type) in SPLIT_KINDS
+
+
 def split_branches(journey: Journey) -> list[tuple[Activity, Outcome]]:
     """Every outcome of every decision, engagement and random split, in export order."""
-    return [(a, o) for a in journey.activities.values() if a.kind in SPLIT_KINDS for o in a.outcomes]
+    return [(a, o) for a in journey.activities.values() if is_split(a) for o in a.outcomes]
 
 
 def predecessors(journey: Journey) -> dict[str, set[str]]:

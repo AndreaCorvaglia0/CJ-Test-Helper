@@ -32,6 +32,8 @@ from typing import Optional
 
 from . import graph
 from .model import (
+    EqualityFilter,
+    IsNullFilter,
     KIND_DECISION,
     KIND_ENGAGEMENT,
     KIND_RANDOM,
@@ -287,6 +289,7 @@ class CoverageEngine:
         self.scenario_fields = [f for f in self.fields if self.levels[f] == LEVEL_SCENARIO]
 
     def build_domains(self) -> None:
+        fixed = self._entry_filter_values()
         for ref in self.fields:
             conds = self.conditions_by_field[ref]
             values = [c.value for c in conds if c.value is not None]
@@ -294,6 +297,42 @@ class CoverageEngine:
             self.domains[ref] = build_domain(ftype, values, self.schema.is_nullable(ref),
                                              self.settings.case_insensitive_text, self.settings.date_format)
             self._flag_case_variants(ref, ftype, values)
+            if ref in fixed:
+                # Data rule 3: a field filtered by the entry query holds a value that passes the filter, so a
+                # contact that enters the journey can only show that value to the splits reading it.
+                value = _normalise_boolean(fixed[ref]) if ftype == "Boolean" else fixed[ref]
+                self.domains[ref] = [value]
+                shown = "null" if value is None else repr(value)
+                self.warnings.append(
+                    f"{ref[0]}.{ref[1]} is read by a split and filtered by the entry query: contacts that enter "
+                    f"the journey always have {shown}, so only that value is tried")
+
+    def _entry_filter_values(self) -> dict[FieldRef, Value]:
+        """Fields pinned by an equality or IS NULL filter of the entry query, with the pinned value."""
+        query = self.table_model.entry_query
+        if query is None:
+            return {}
+        pinned: dict[FieldRef, Value] = {}
+        for flt in query.filters:
+            if isinstance(flt, EqualityFilter):
+                ref = self._filter_ref(flt.column, query)
+                if ref is not None and ref not in pinned:
+                    pinned[ref] = flt.value
+            elif isinstance(flt, IsNullFilter) and not flt.negated:
+                ref = self._filter_ref(flt.column, query)
+                if ref is not None and ref not in pinned:
+                    pinned[ref] = None
+        return pinned
+
+    def _filter_ref(self, column, query) -> Optional[FieldRef]:
+        if column.table:
+            return self.schema.canonical((column.table, column.column))
+        matches = []
+        for source in query.sources:
+            table = self.schema.table(source.table)
+            if table is not None and table.field(column.column) is not None and table.name not in [m[0] for m in matches]:
+                matches.append((table.name, table.field(column.column).name))
+        return matches[0] if len(matches) == 1 else None
 
     def _flag_case_variants(self, ref: FieldRef, ftype: str, values: list[str]) -> None:
         """Spec, report: 'the same value written in two letter cases (Email and EMAIL in the pilot)'."""
@@ -826,6 +865,8 @@ class CoverageEngine:
                             preds: dict[str, set[str]]) -> str:
         key = activity.key
         if key in self.package.unsupported_activities:
+            if activity.unsupported_reason:
+                return f"the activity itself is not supported: {activity.unsupported_reason}"
             return f"the activity itself has the unsupported type {activity.raw_type}"
         if key in behind_unsupported:
             blockers = sorted(self.package.unsupported_activities)

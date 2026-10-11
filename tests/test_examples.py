@@ -79,6 +79,12 @@ def compare(result, expected: dict) -> list[str]:
             problems.append(f"branch {key}: reason {b.reason!r} does not contain {exp['reason_contains']!r}")
         if "statistical" in exp and bool(b.statistical) != bool(exp["statistical"]):
             problems.append(f"branch {key}: statistical {b.statistical} != {exp['statistical']}")
+    for key, allowed in (expected.get("branches_any_of") or {}).items():
+        b = branches.get(key)
+        if b is None:
+            problems.append(f"branch {key}: not in the journey")
+        elif b.status not in allowed:
+            problems.append(f"branch {key}: status {b.status!r} not in {allowed} (reason: {b.reason})")
     check_range("scenario_count", cov.stats["scenarios"], expected.get("scenario_count"), problems)
     check_range("case_count", cov.stats["cases"], expected.get("case_count"), problems)
     check_range("contact_count", cov.stats["contacts"], expected.get("contact_count"), problems)
@@ -115,6 +121,16 @@ def case_matches(result, case, scenario, want) -> bool:
         return False
     if "emails_sent" in want and case.emails_sent != want["emails_sent"]:
         return False
+    if "random" in want:
+        r = want["random"]
+        if case.random is None:
+            return False
+        if "activity_key" in r and case.random.activity_key != r["activity_key"]:
+            return False
+        if "expected_low" in r and case.random.expected_low != r["expected_low"]:
+            return False
+        if "expected_high" in r and case.random.expected_high != r["expected_high"]:
+            return False
     return True
 
 

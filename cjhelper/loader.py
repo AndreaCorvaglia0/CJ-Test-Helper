@@ -848,7 +848,10 @@ class _ExportReader:
         return kind
 
     def make_unsupported(self, activity: Activity, reason: str) -> None:
+        """Spec: "Anything else is not an error: it is listed in the report, and the branches behind it
+        are marked as not covered." The activity keeps its outcomes, so the graph stays whole."""
         activity.kind = KIND_UNSUPPORTED
+        activity.unsupported_reason = reason
         for outcome in activity.outcomes:
             outcome.formula = None
             outcome.is_remainder = False
@@ -872,7 +875,10 @@ class _ExportReader:
                                                 f"({error})")
                 return
             outcome.formula = self.map_formula(formula)
-            self.check_operators(activity, outcome)
+            problem = self.unsupported_condition(outcome)
+            if problem is not None:
+                self.make_unsupported(activity, problem)
+                return
         remainders = [position for position, outcome in enumerate(activity.outcomes, 1) if outcome.is_remainder]
         if remainders != [len(activity.outcomes)]:
             self.warn(f"Decision split {_named(activity)} should have one outcome without criteria "
@@ -886,12 +892,25 @@ class _ExportReader:
             return replace(formula, table=table, field=self.schema_field(table, formula.field))
         return ConditionGroup(formula.operator, tuple(self.map_formula(item) for item in formula.items))
 
-    def check_operators(self, activity: Activity, outcome: Outcome) -> None:
+    def unsupported_condition(self, outcome: Outcome) -> Optional[str]:
+        """Why a mapped outcome formula cannot be evaluated, or None.
+
+        Spec, operators: only the listed ones are understood, "the rest is reported, not guessed".
+        A condition on a table or field that is not in the export's schemas cannot be given a type,
+        a length or a nullability, so its split is reported as unsupported rather than guessed.
+        """
         for condition in formula_conditions(outcome.formula):
             if condition.operator not in OPERATORS:
-                self.warn(f"Decision split {_named(activity)}, outcome {outcome.label!r}, uses the "
-                          f"operator {condition.operator!r}, which is not supported; the branches behind it will be "
-                          f"reported as not covered.")
+                return (f"outcome {outcome.label!r} uses the operator {condition.operator!r}, which the PoC does "
+                        f"not support")
+            table = self.tables.get(condition.table)
+            if table is None:
+                return (f"outcome {outcome.label!r} reads {condition.table}.{condition.field}, and the table "
+                        f"{condition.table!r} is not in the export")
+            if table.field(condition.field) is None:
+                return (f"outcome {outcome.label!r} reads {condition.table}.{condition.field}, and the field "
+                        f"{condition.field!r} is not in the schema of {table.name}")
+        return None
 
     def read_engagement(self, activity: Activity, raw: dict, raw_outcomes: list[dict]) -> None:
         """Plan: ``refActivityCustomerKey`` -> engagement_ref; ``statsTypeId`` through ENGAGEMENT_KINDS;
