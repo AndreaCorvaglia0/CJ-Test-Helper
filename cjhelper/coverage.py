@@ -1057,6 +1057,14 @@ class CoverageEngine:
         # The split was reached but this outcome never matched.
         seen = self.reached_values.get(key, {})
         if activity.kind == KIND_DECISION and outcome.formula is not None:
+            for cond in formula_conditions(outcome.formula):
+                ref = self.schema.canonical((cond.table, cond.field))
+                table = self.schema.table(ref[0])
+                field = table.field(ref[1]) if table is not None else None
+                if (cond.value is not None and field is not None and field.length
+                        and field.type in TEXT_TYPES and len(cond.value) > field.length):
+                    return (f"unreachable: the condition value {cond.value!r} is longer than {ref[0]}.{ref[1]} "
+                            f"({field.length} characters), so the field can never hold it")
             fields = []
             for cond in formula_conditions(outcome.formula):
                 ref = self.schema.canonical((cond.table, cond.field))

@@ -883,12 +883,17 @@ class _Generator:
             )
         if field.is_primary_key:
             # Spec, "Keys": primary keys are unique within each table and carry the run identifier.
-            text = f"TST_{self.settings.run_id}_P{number:04d}"
-            if field.length and len(text) > field.length:
-                self._warn(f"{table.name}.{field.name} is a primary key of {field.length} characters, too short "
-                           "for unique generated keys; its values are cut and may repeat.")
-                return text[:field.length]
-            return text
+            # Shorter forms are used when the field is too short for the full one.
+            run = self.settings.run_id
+            for text in (f"TST_{run}_P{number:04d}", f"{run}_P{number:04d}", f"P{number:04d}", str(number)):
+                if not field.length or len(text) <= field.length:
+                    if not text.startswith("TST_"):
+                        self._warn(f"{table.name}.{field.name} is a primary key of {field.length} characters, too "
+                                   f"short for TST_{run}_P keys; shorter unique values such as {text!r} are written.")
+                    return text
+            self._warn(f"{table.name}.{field.name} is a primary key of {field.length} characters, too short "
+                       "for unique generated keys; its values are cut and may repeat.")
+            return str(number)[:field.length]
         text = f"TST_{field.name}_{number}"
         return text[:field.length] if field.length else text
 
