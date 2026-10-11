@@ -32,8 +32,14 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
 ## In progress
 
 - Review loop, part 2 (trust checks, export robustness, spec compliance) with skeptic verification: running.
-- UX review of the page: running.
-- Then: fix confirmed findings, re-run every example and the pilot, a fresh test engineer tries to break the output, final report.
+- UX review done (docs/ux-review.md: three criteria pass with changes); the page developer is applying changes 1 to 7 and the rest where they fit.
+- A fresh test engineer attacks the output black-box: independent simulator on the pilot, at least 8 new examples, edge cases.
+- Regression tests for the batch-3 behaviours and warning wording tidy-up (Sonnet).
+- Then: fix confirmed findings, re-run every example and the pilot, final report.
+
+## Working rules from the user
+
+- Subagents on Opus at max effort for judgement-heavy work; Sonnet for simpler, possibly long, supervised tasks.
 
 ## Design readings taken by the lead (not Salesforce assumptions)
 
