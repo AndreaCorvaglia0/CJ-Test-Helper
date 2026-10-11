@@ -29,9 +29,19 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
   unsupported .NET date tokens, entry columns copied from scenario-level columns, waits before the email get no extra time,
   unique primary-key placeholders, email-typed contact keys, scenarios.csv `active_at_start` and `activation_field` columns.
 
+## Remaining plan (reduced to save tokens, 11 October afternoon)
+
+1. Triage of the 53 part-2 review findings (Sonnet), then fix only the real high and medium ones (lead).
+2. Fresh tester's final report: fix real bugs only.
+3. Final acceptance run on the pilot, full test suite, commit, final report to the user.
+
+Dropped or postponed: a third review loop, a second UX pass, more examples, wording polish beyond what exists.
+Routing: Sonnet for checks and mechanical work, Haiku for trivial tasks, Opus only where judgement is needed.
+
 ## In progress
 
-- Review loop, part 2 (trust checks, export robustness, spec compliance) with skeptic verification: running.
+- Review loop, part 2: the three reviewers finished (18 + 17 + 18 findings); verification stopped early to save tokens,
+  a Sonnet agent triages the findings against the current code.
 - UX review done (docs/ux-review.md: three criteria pass with changes); the page developer applied changes 1 to 7 and 13 of the
   other 13 in full or in part (.streamlit/config.toml holds the two theme departures). 28 page tests pass.
 - Regression tests for the batch-3 behaviours (17, Sonnet) and warning wording tidy-up: done.
