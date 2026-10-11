@@ -198,8 +198,8 @@ class Activity:
     name: str
     outcomes: list[Outcome]
     # kind-specific details, all optional:
-    wait_amount: Optional[int] = None         # wait_duration
-    wait_unit: Optional[str] = None           # wait_duration: MINUTES, HOURS, DAYS, ...
+    wait_amount: Optional[int] = None         # wait_duration; wait_sto: the sliding window (longest delay)
+    wait_unit: Optional[str] = None           # wait_duration: MINUTES, HOURS, DAYS, ...; wait_sto: HOURS
     wait_field: Optional[FieldRef] = None     # wait_attribute: (table, field) holding the date
     wait_timezone: Optional[str] = None
     email_asset_id: Optional[str] = None      # email
