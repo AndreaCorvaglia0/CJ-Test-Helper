@@ -1,7 +1,7 @@
-# Package export format (what the loader reads)
+# Formato dell'export del package (ciò che legge il loader)
 
-Observed on the pilot export (`fixtures/CJ template complesso-v1.json`, Package Manager `modelVersion` 9).
-Only the parts the generator uses are described. Hand-made examples must follow this shape.
+Osservato sull'export pilota (`fixtures/CJ template complesso-v1.json`, `modelVersion` 9 del Package Manager).
+Sono descritte solo le parti che usa il generatore. Gli esempi fatti a mano devono seguire questa forma.
 
 ```json
 {
@@ -21,15 +21,15 @@ Only the parts the generator uses are described. Hand-made examples must follow 
 }
 ```
 
-Every entity is `{"issues": [], "originID": ..., "originEID": ..., "data": {...}}`; only `data` matters.
+Ogni entità è `{"issues": [], "originID": ..., "originEID": ..., "data": {...}}`; conta solo `data`.
 
-## References
+## Riferimenti
 
-Cross references are strings `{{mcpm#/entities/<kind>/<id>/data/<path>}}`, resolved to the value found at
-`<path>` inside that entity's `data`. Seen paths: `name`, `id`, `eventDefinitionKey`, `namePrefix`,
-`fields/name:<FieldName>/id`, `data/email/legacy/legacyId`. The export does not carry real ids, so `.../id`
-resolves to the entity id (the key in the `entities` map) and `fields/name:X/id` resolves to the field name `X`.
-Other placeholders (`{{mcpm:senderProfile}}`, `{{Context.*}}`, `{{Contact.*}}`, `{{Event.*}}`) are not entity references.
+I riferimenti incrociati sono stringhe `{{mcpm#/entities/<kind>/<id>/data/<path>}}`, che si risolvono nel valore trovato in
+`<path>` dentro il `data` di quell'entità. Path osservati: `name`, `id`, `eventDefinitionKey`, `namePrefix`,
+`fields/name:<FieldName>/id`, `data/email/legacy/legacyId`. L'export non contiene id reali, quindi `.../id`
+si risolve nell'id dell'entità (la chiave nella mappa `entities`) e `fields/name:X/id` si risolve nel nome del campo `X`.
+Gli altri placeholder (`{{mcpm:senderProfile}}`, `{{Context.*}}`, `{{Contact.*}}`, `{{Event.*}}`) non sono riferimenti a entità.
 
 ## Data extension
 
@@ -43,13 +43,13 @@ Other placeholders (`{{mcpm:senderProfile}}`, `{{Context.*}}`, `{{Contact.*}}`, 
       "ordinal": 15, "defaultValue": "False" } ] }
 ```
 
-Types seen: `Text`, `Boolean`, `Date`, `EmailAddress`, `Phone`. `defaultValue` is absent or a string
-(`"False"`, `"false"`, `"GETDATE()"`, `"GetDate()"`). Sendable tables carry `"sendableCustomObjectField": "ContactId"`
-and `"sendableSubscriberField": "_SubscriberKey"`: that field is the contact key.
+Tipi osservati: `Text`, `Boolean`, `Date`, `EmailAddress`, `Phone`. `defaultValue` è assente oppure è una stringa
+(`"False"`, `"false"`, `"GETDATE()"`, `"GetDate()"`). Le tabelle sendable hanno `"sendableCustomObjectField": "ContactId"`
+e `"sendableSubscriberField": "_SubscriberKey"`: quel campo è la chiave del contatto.
 
-## Attribute set and relationships (Contact Builder model)
+## Attribute set e relazioni (modello di Contact Builder)
 
-An attribute set names a table:
+Un attribute set dà il nome a una tabella:
 
 ```json
 { "name": "DE_NCRM_AD_HOC_CONFIG", "storageLogicalType": "DataExtension", "isRoot": false,
@@ -57,7 +57,7 @@ An attribute set names a table:
   "groupId": "{{mcpm#/entities/attributeGroups/<group id>/data/id}}", "leftRelationships": [...] }
 ```
 
-A relationship links two sets on one field pair (`leftAttributeName` is missing on group-to-set links):
+Una relazione collega due set su una coppia di campi (`leftAttributeName` manca nei collegamenti group-to-set):
 
 ```json
 { "name": "DE_NCM_AdHoc_Entry -> DE_NCRM_AD_HOC_CONFIG",
@@ -71,7 +71,7 @@ A relationship links two sets on one field pair (`leftAttributeName` is missing 
                  "name": "{{mcpm#/entities/attributeSets/<set id>/data/name}}" } }
 ```
 
-Pilot links: group `DEMO_SkyDE` -> `SF_Master_DataExtension_DE` on `ContactId` (group-to-set);
+Collegamenti del pilota: gruppo `DEMO_SkyDE` -> `SF_Master_DataExtension_DE` su `ContactId` (group-to-set);
 `SF_Master_DataExtension_DE.ContactId` -> `DE_NCM_AdHoc_Entry.ContactId`; `DE_NCM_AdHoc_Entry.CampaignName` -> `DE_NCRM_AD_HOC_CONFIG.CampaignName`.
 
 ## Event definition (entry source)
@@ -83,7 +83,7 @@ Pilot links: group `DEMO_SkyDE` -> `SF_Master_DataExtension_DE` on `ContactId` (
   "arguments": { "automationId": "{{mcpm#/entities/automations/<automation id>/data/id}}", "criteria": "" } }
 ```
 
-## Automation and queries
+## Automation e query
 
 ```json
 { "name": "A_SkyDE_NCRM_AdHoc_CJ_entry",
@@ -92,7 +92,7 @@ Pilot links: group `DEMO_SkyDE` -> `SF_Master_DataExtension_DE` on `ContactId` (
                                   "objectTypeId": 300 } ] } ] }
 ```
 
-`objectTypeId` 300 = query activity, 1000 = data verification. A query:
+`objectTypeId` 300 = query activity, 1000 = data verification. Una query:
 
 ```json
 { "name": "Q_SKYDE_AdHoc_Target", "targetUpdateTypeName": "Update",
@@ -108,7 +108,7 @@ Pilot links: group `DEMO_SkyDE` -> `SF_Master_DataExtension_DE` on `ContactId` (
   "views": { "subjectline": { "content": "DEMO SKY" }, "html": { "content": "<!DOCTYPE html>..." }, "text": { "content": "" } } }
 ```
 
-(The pilot's asset has no `legacy` block; the email activity's `emailId` reference still names the asset id.)
+(L'asset del pilota non ha il blocco `legacy`; il riferimento `emailId` dell'attività email indica comunque l'id dell'asset.)
 
 ## Journey
 
@@ -121,8 +121,8 @@ Pilot links: group `DEMO_SkyDE` -> `SF_Master_DataExtension_DE` on `ContactId` (
   "activities": [ ... ] }
 ```
 
-Every activity has `key`, `type`, `name`, `outcomes: [ { "key", "next", "arguments", "metaData": { "label" } } ]`.
-An outcome without `next` is a journey exit. The start activity is the one no `next` points to.
+Ogni activity ha `key`, `type`, `name`, `outcomes: [ { "key", "next", "arguments", "metaData": { "label" } } ]`.
+Un outcome senza `next` è un'uscita dal journey. L'attività iniziale è quella a cui non punta nessun `next`.
 
 ### Decision split `MULTICRITERIADECISION`
 
@@ -137,10 +137,10 @@ An outcome without `next` is a journey exit. The start activity is the one no `n
     { "key": "remainder_path", "next": null, "metaData": { "label": "Remainder" } } ] }
 ```
 
-Outcomes are evaluated in order; `remainder_path` has no criteria. Nested groups:
+Gli outcome sono valutati in ordine; `remainder_path` non ha criteria. Gruppi annidati:
 `<ConditionSet Operator="AND"><Condition .../><ConditionSet Operator="OR"><Condition .../><Condition Operator="IsNull"><Value><![CDATA[]]></Value></Condition></ConditionSet></ConditionSet>`.
-Condition `Key` is `<attribute set name>.<field name>`; field names may contain spaces (`Control Group Required`).
-Boolean values are written `true` / `false`. Operators seen: `Is`, `Equal`, `IsNull`.
+Il `Key` della condizione è `<attribute set name>.<field name>`; i nomi dei campi possono contenere spazi (`Control Group Required`).
+I valori Boolean sono scritti `true` / `false`. Operatori osservati: `Is`, `Equal`, `IsNull`.
 
 ### Engagement split `ENGAGEMENTDECISION`
 
@@ -152,7 +152,7 @@ Boolean values are written `true` / `false`. Operators seen: `Is`, `Equal`, `IsN
                 { "key": "branchResult-2", "arguments": { "when": false }, "metaData": { "label": "No" },  "next": "..." } ] }
 ```
 
-`statsTypeId` 2 = open, 3 = click (as named in the pilot). `refActivityCustomerKey` is the key of the email activity.
+`statsTypeId` 2 = open, 3 = click (come indicato nel pilota). `refActivityCustomerKey` è la chiave dell'attività email.
 
 ### Random split `RANDOMSPLIT`
 
@@ -162,7 +162,7 @@ Boolean values are written `true` / `false`. Operators seen: `Is`, `Equal`, `IsN
                 { "key": "branchResult-2", "arguments": { "percentage": 10 }, "metaData": { "label": "10%" }, "next": "..." } ] }
 ```
 
-### Waits
+### Wait
 
 Wait by duration: `{"type": "WAIT", "metaData": {"uiType": "WAITBYDURATION"}, "configurationArguments": {"waitDuration": 1, "waitUnit": "MINUTES", "timeZone": "W. Europe Standard Time"}}`.
 
@@ -188,4 +188,4 @@ Send-time wait: `{"type": "STOWAIT", "configurationArguments": {"params": {"slid
      { "dataExtensionId": "...", "field": ".../fields/name:Mailing_Timestamp/id}}", "value": "{{DateTime.Now}}" } ] } } }
 ```
 
-Values may be strings or numbers (`"value": 1`).
+I valori possono essere stringhe o numeri (`"value": 1`).

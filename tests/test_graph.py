@@ -96,9 +96,9 @@ def test_engagement_verdicts():
     assert st.stop == graph.STOP_CHOICE and st.current == "ENG-1"
     assert graph.engagement_verdict(j.activities["ENG-1"], st, emails, j).possible
     v = graph.engagement_verdict(j.activities["ENG-2"], st, emails, j)
-    assert not v.possible and "no link" in v.reason
+    assert not v.possible and "non contiene link" in v.reason
     v = graph.engagement_verdict(j.activities["ENG-3"], st, emails, j)
-    assert not v.possible and "not sent" in v.reason
+    assert not v.possible and "non viene inviata" in v.reason
     # taking an outcome after a choice continues the walk
     w.take(st, j.activities["ENG-1"], j.activities["ENG-1"].outcomes[1])
     assert st.stop == graph.STOP_EXIT and st.steps[-1] == Step("ENG-1", "branchResult-2")
@@ -115,7 +115,7 @@ def test_loop_and_dangling_are_reported():
     w, j = build_walker(acts)
     st = w.run(w.start(), lookup_from({}))
     assert st.stop == graph.STOP_DANGLING
-    assert any("missing activity" in p for p in graph.structural_problems(j))
+    assert any("attività mancante" in p for p in graph.structural_problems(j))
 
 
 def test_unsupported_activity_stops_the_path():

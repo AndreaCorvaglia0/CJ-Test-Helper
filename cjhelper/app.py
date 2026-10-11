@@ -118,9 +118,9 @@ STYLE_FILE = Path(__file__).resolve().parent / "app.css"
 LOGO_FILE = STATIC / "lutech-logo.svg"
 ICON_FILE = STATIC / "lutech-pictogram.svg"
 
-# The page is in Italian; the messages of the generator (warnings, trust check names, loader errors) stay in
-# English, as in report.md, until the downloaded files are translated too. Salesforce's own names (activity
-# types, the roles of report.md) stay in English, as the team uses them.
+# The page, the messages of the generator (warnings, trust check names, loader errors) and the downloaded
+# files are in Italian (glossary in docs/brand.md). Salesforce's own names (activity types, the roles of
+# report.md) and the team's English terms stay in English.
 
 # Plain names of the activity kinds, in the order of the spec's "Supported in the PoC" table.
 ACTIVITY_NAMES: dict[str, str] = {
@@ -206,7 +206,7 @@ _LIST_SEPARATOR = re.compile(r",\s*|\s+and\s+")
 class TableLine:
     """One table of the export as step 2 shows it, in the words of report.md's Tables section."""
     name: str
-    role: str              # report.md's role names, e.g. "source, split", "written", "none"
+    role: str              # report.md's role names, e.g. "source, split", "written", "nessuno"
     level: str             # "contact", "scenario", or "-" for a table without a CSV
     csv: bool              # gets a CSV
 
@@ -235,7 +235,7 @@ def activity_counts(journey: Journey) -> list[tuple[str, int]]:
 
 def role_text(roles: Iterable[str]) -> str:
     """The roles of a table as report.md writes them, e.g. ``{"split", "source"}`` -> "source, split"."""
-    return ", ".join(sorted(roles)) or "none"
+    return ", ".join(sorted(roles)) or "nessuno"
 
 
 def table_lines(table_model: TableModel) -> list[TableLine]:
@@ -278,7 +278,7 @@ def warning_lines(warnings: Iterable[str], activity_keys: Iterable[str]) -> tupl
         left_out = left_out or removed
         if text.lower().startswith(outputs.SUSPICIOUS_PREFIX):
             rest = text[len(outputs.SUSPICIOUS_PREFIX):].strip()
-            patterns.append(f"Suspicious pattern: {rest}")
+            patterns.append(f"Pattern sospetto: {rest}")
         else:
             others.append(text[:1].upper() + text[1:])
     return patterns + others, left_out
@@ -450,7 +450,7 @@ def import_notes(result: GenerationResult) -> list[str]:
 
     The active scenario and its activation field come from the generated scenarios.csv rows.
     """
-    notes = [f"Apri prima {outputs.REPORT_FILE}: la sezione How to run indica l'ordine di import."]
+    notes = [f"Apri prima {outputs.REPORT_FILE}: la sezione Come eseguire i test indica l'ordine di import."]
     rows = result.data.scenarios_rows
     active = [row for row in rows if str(row.get("active_at_start", "")).lower() == "yes"]
     field = next((row.get("activation_field") for row in rows if row.get("activation_field")), None)
@@ -470,7 +470,7 @@ def generation_warnings(result: GenerationResult) -> tuple[list[str], bool]:
     missing real inbox is said in the summary instead (``summary_notes``)."""
     inbox_note = _inbox_missing(result)
     warnings = [w for w in list(result.coverage.warnings) + list(result.data.warnings)
-                if not (inbox_note and w.startswith("No real inbox"))]
+                if not (inbox_note and w.startswith("Nessuna inbox reale"))]
     return warning_lines(warnings, result.package.journey.activities)
 
 
@@ -533,7 +533,7 @@ def error_message(error: BaseException) -> str:
                 f"colonna {parse_error.colno}.")
     elif isinstance(error, UnicodeDecodeError):
         text = "Il file non è testo UTF-8, quindi non è un export JSON valido."
-    else:   # the loader's own words, in English like the other messages of the generator
+    else:   # the loader's own words, in Italian like the other messages of the generator
         text = str(error).strip() or "Il file non può essere letto come export di un package."
     if not text.endswith("."):
         text += "."

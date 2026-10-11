@@ -76,17 +76,18 @@ def parse_criteria(xml: str) -> Formula:
     documented shape and raise CriteriaError rather than being guessed as AND.
     """
     if not isinstance(xml, str) or not xml.strip():
-        raise CriteriaError("The criteria are empty.")
+        raise CriteriaError("I criteri sono vuoti.")
     try:
         root = ET.fromstring(xml)
     except ET.ParseError as error:
-        raise CriteriaError(f"The criteria are not valid XML ({error}).") from None
+        raise CriteriaError(f"I criteri non sono un XML valido ({error}).") from None
     if _tag(root) != "FilterDefinition":
-        raise CriteriaError(f"The criteria start with <{_tag(root)}> instead of <FilterDefinition>.")
+        raise CriteriaError(f"I criteri iniziano con <{_tag(root)}> invece che con <FilterDefinition>.")
     children = list(root)
     if len(children) != 1:
         raise CriteriaError(
-            f"<FilterDefinition> holds {len(children)} top-level elements; exactly one condition set is expected."
+            f"<FilterDefinition> contiene {len(children)} elementi di primo livello, mentre è atteso un solo "
+            "gruppo di condizioni."
         )
     return _parse_item(children[0])
 
@@ -97,19 +98,19 @@ def _parse_item(element: ET.Element) -> Formula:
         return _parse_set(element)
     if tag == "Condition":
         return _parse_condition(element)
-    raise CriteriaError(f"Unknown element <{tag}> in the criteria.")
+    raise CriteriaError(f"I criteri contengono l'elemento sconosciuto <{tag}>.")
 
 
 def _parse_set(element: ET.Element) -> Formula:
     """A ``<ConditionSet>``: its items joined by AND or OR; a single item stands alone."""
     items = [_parse_item(child) for child in element]
     if not items:
-        raise CriteriaError("A <ConditionSet> in the criteria is empty.")
+        raise CriteriaError("Un <ConditionSet> dei criteri è vuoto.")
     if len(items) == 1:
         return items[0]
     operator = (element.get("Operator") or "").strip().upper()
     if operator not in ("AND", "OR"):
-        raise CriteriaError(f"A <ConditionSet> has operator {element.get('Operator')!r}; AND or OR is expected.")
+        raise CriteriaError(f"Un <ConditionSet> ha l'operatore {element.get('Operator')!r}, mentre è atteso AND o OR.")
     return ConditionGroup(operator, tuple(items))
 
 
@@ -122,19 +123,19 @@ def _parse_condition(element: ET.Element) -> Condition:
     key = element.get("Key") or ""
     set_name, dot, field_name = key.partition(".")
     if not dot or not set_name or not field_name:
-        raise CriteriaError(f"Condition key {key!r} is not written as <attribute set>.<field>.")
+        raise CriteriaError(f"La chiave della condizione {key!r} non è scritta nella forma <attribute set>.<campo>.")
     operator = (element.get("Operator") or "").strip()
     if not operator:
-        raise CriteriaError(f"Condition {key} has no operator.")
+        raise CriteriaError(f"La condizione {key} non ha un operatore.")
     values = _values(element)
     if len(values) > 1:
-        raise CriteriaError(f"Condition {key} holds {len(values)} values; one is expected.")
+        raise CriteriaError(f"La condizione {key} contiene {len(values)} valori, mentre ne è atteso uno.")
     if operator in OPERATORS_WITHOUT_VALUE:
         value: Value = None
     elif values:
         value = values[0]
     elif operator in OPERATORS:
-        raise CriteriaError(f"Condition {key} {operator} has no <Value>.")
+        raise CriteriaError(f"La condizione {key} {operator} non ha un <Value>.")
     else:
         value = None    # unknown operator: UnsupportedOperator is raised when it is evaluated
     return Condition(table=set_name, field=field_name, operator=operator, value=value)
@@ -150,7 +151,7 @@ def _values(element: ET.Element) -> list[str]:
         elif tag == "AttributePath":
             found.extend(_values(child))
         else:
-            raise CriteriaError(f"Unknown element <{tag}> in a condition.")
+            raise CriteriaError(f"Una condizione contiene l'elemento sconosciuto <{tag}>.")
     return found
 
 
@@ -174,7 +175,7 @@ def evaluate_condition(cond: Condition, value: Value, field_type: str, case_inse
     """
     test = OPERATORS.get(cond.operator)
     if test is None:
-        raise UnsupportedOperator(f"Operator {cond.operator!r} is not supported ({formula_text(cond)}).")
+        raise UnsupportedOperator(f"L'operatore {cond.operator!r} non è supportato ({formula_text(cond)}).")
     if cond.operator in OPERATORS_WITHOUT_VALUE:
         return test(value, None, field_type, case_insensitive)
     if _is_null(value) or cond.value is None:

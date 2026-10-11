@@ -96,7 +96,7 @@ def test_repeated_split_on_same_field_marks_contradiction_unreachable():
     r = run(acts, [ENTRY, MASTER, CONFIG], scenario=True)
     b = status(r, "SPLIT-2", "b")
     assert b.status == STATUS_NOT_COVERED
-    assert "never matches" in b.reason and "'A'" in b.reason
+    assert "non è mai vera" in b.reason and "'A'" in b.reason
     assert status(r, "SPLIT-2", "remainder_path").status == STATUS_COVERED
     assert r.stats["scenarios"] == 2
 
@@ -109,7 +109,8 @@ def test_case_mismatch_is_flagged_and_setting_changes_reachability():
     ]
     r = run(acts, [ENTRY, MASTER, CONFIG], scenario=True)
     assert status(r, "SPLIT-2", "b").status == STATUS_NOT_COVERED
-    assert any("'Email' and 'EMAIL'" in w and "case-sensitive" in w for w in r.warnings)
+    assert any("'Email' e 'EMAIL'" in w and "perché i confronti di testo distinguono maiuscole e minuscole" in w
+               for w in r.warnings)
     r2 = run(acts, [ENTRY, MASTER, CONFIG], scenario=True, settings=Settings(case_insensitive_text=True))
     assert status(r2, "SPLIT-2", "b").status == STATUS_COVERED
     assert status(r2, "SPLIT-2", "remainder_path").status == STATUS_NOT_COVERED
@@ -139,7 +140,7 @@ def test_engagement_split_with_email_sent():
     assert status(r, "ENG-1", "branchResult-1").status == STATUS_MANUAL
     assert status(r, "ENG-1", "branchResult-2").status == STATUS_COVERED
     click_yes = status(r, "ENG-2", "branchResult-1")
-    assert click_yes.status == STATUS_NOT_COVERED and "no link" in click_yes.reason
+    assert click_yes.status == STATUS_NOT_COVERED and "non contiene link" in click_yes.reason
     assert status(r, "ENG-2", "branchResult-2").status == STATUS_MANUAL
     manual_cases = [c for c in r.cases if c.manual_actions]
     assert len(manual_cases) == 1 and manual_cases[0].manual_actions[0].kind == "open"
@@ -156,11 +157,11 @@ def test_engagement_split_with_email_never_sent_on_its_paths():
     acts, emails = engagement_journey(False)
     r = run(acts, [ENTRY, MASTER, CONFIG], scenario=True, emails=emails, settings=Settings(real_inbox="t@example.com"))
     yes = status(r, "ENG-1", "branchResult-1")
-    assert yes.status == STATUS_NOT_COVERED and "not sent" in yes.reason and "Demo" in yes.reason
+    assert yes.status == STATUS_NOT_COVERED and "non viene inviata" in yes.reason and "Demo" in yes.reason
     assert status(r, "ENG-1", "branchResult-2").status == STATUS_COVERED
     assert status(r, "ENG-2", "branchResult-1").status == STATUS_NOT_COVERED
     assert status(r, "ENG-2", "branchResult-2").status == STATUS_NOT_COVERED
-    assert "unreachable" in status(r, "ENG-2", "branchResult-2").reason
+    assert "non raggiungibile" in status(r, "ENG-2", "branchResult-2").reason
 
 
 def test_random_split_gets_a_statistical_case():
@@ -201,7 +202,7 @@ def test_unsupported_activity_blocks_what_is_behind_it():
     r = run(acts, [ENTRY, MASTER], unsupported_keys=["X-1"])
     assert status(r, "SPLIT-1", "ok").status == STATUS_COVERED
     b = status(r, "SPLIT-2", "a")
-    assert b.status == STATUS_NOT_COVERED and "unsupported" in b.reason and "X-1" in b.reason
+    assert b.status == STATUS_NOT_COVERED and "non supportat" in b.reason and "X-1" in b.reason
     assert r.unsupported == ["X-1"]
 
 
@@ -214,7 +215,7 @@ def test_update_before_split_is_tracked():
     r = run(acts, [ENTRY, MASTER])
     assert status(r, "SPLIT-1", "ok").status == STATUS_COVERED
     b = status(r, "SPLIT-1", "remainder_path")
-    assert b.status == STATUS_NOT_COVERED and "never" in b.reason.lower() or "always" in b.reason
+    assert b.status == STATUS_NOT_COVERED and "mai" in b.reason.lower() or "sempre" in b.reason
     assert r.stats["cases"] == 1 and r.cases[0].writes[0].value == "True"
 
 
@@ -270,9 +271,9 @@ def test_unsupported_outcome_keeps_the_earlier_outcomes_coverable():
     r = run(acts, [ENTRY, MASTER])
     assert status(r, "SPLIT-1", "a").status == STATUS_COVERED
     b = status(r, "SPLIT-1", "b")
-    assert b.status == STATUS_NOT_COVERED and b.reason.startswith("unsupported outcome") and "Between" in b.reason
+    assert b.status == STATUS_NOT_COVERED and b.reason.startswith("branch non supportato") and "Between" in b.reason
     rem = status(r, "SPLIT-1", "remainder_path")
-    assert rem.status == STATUS_NOT_COVERED and rem.reason.startswith("behind an unsupported element")
+    assert rem.status == STATUS_NOT_COVERED and rem.reason.startswith("a valle di un elemento non supportato")
     assert "SPLIT-1/b" in r.unsupported
     assert r.stats["cases"] == 1   # only the A case: the path stopped at the unsupported outcome covers nothing
 
@@ -286,7 +287,7 @@ def test_branches_behind_an_unsupported_activity_name_it():
     ]
     r = run(acts, [ENTRY, MASTER], unsupported_keys=["X-1", "X-2"])
     b2 = status(r, "SPLIT-2", "a")
-    assert b2.status == STATUS_NOT_COVERED and b2.reason.startswith("behind an unsupported element") and "X-1" in b2.reason and "X-2" not in b2.reason
+    assert b2.status == STATUS_NOT_COVERED and b2.reason.startswith("a valle di un elemento non supportato") and "X-1" in b2.reason and "X-2" not in b2.reason
     b3 = status(r, "SPLIT-3", "a")
     assert "X-2" in b3.reason and "X-1" not in b3.reason
 
@@ -305,3 +306,21 @@ def test_manual_action_cannot_be_done_when_a_split_fixes_the_address():
     assert status(r, "ENG-1", "branchResult-2").status == STATUS_COVERED
     blocked = [c for c in r.cases if c.manual_actions]
     assert len(blocked) == 1 and blocked[0].inbox_blocked_reason and "vip@example.com" in blocked[0].inbox_blocked_reason
+
+
+def test_engagement_split_of_unknown_kind_reports_both_branches_not_covered():
+    """Triage RB-5: a statsTypeId that is neither an open nor a click measures something unknown, so
+    neither branch can be claimed, as the loader warning says; the split before it stays covered."""
+    emails = {"A1": email_asset("A1", "Demo", has_link=True)}
+    acts = [decision("SPLIT-1", "perm", [("ok", "ok", "EMAIL-1", cond("DE_Master", "Perm", "Is", "true"))], remainder_next="UPD-R"),
+            email("EMAIL-1", "Demo", "A1", "ENG-1"),
+            engagement("ENG-1", "Bounce Demo", None, "EMAIL-1", "UPD-Y", "UPD-N"),
+            update("UPD-Y", "Y", [], None), update("UPD-N", "N", [], None), update("UPD-R", "R", [], None)]
+    r = run(acts, [ENTRY, MASTER], emails=emails, settings=Settings(real_inbox="t@example.com"))
+    for key in ("branchResult-1", "branchResult-2"):
+        b = status(r, "ENG-1", key)
+        assert b.status == STATUS_NOT_COVERED and b.covered_by == []
+        assert b.reason.startswith("branch non supportato") and "né un open né un click" in b.reason
+    assert status(r, "SPLIT-1", "ok").status == STATUS_COVERED
+    assert status(r, "SPLIT-1", "remainder_path").status == STATUS_COVERED
+    assert r.stats["not_covered"] == 2

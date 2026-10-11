@@ -80,7 +80,7 @@ GROUP_OTHER = "other"
 # A table with one of these roles is read by the journey, so it gets a CSV.
 READING_ROLES = frozenset({ROLE_ENTRY, ROLE_SPLIT, ROLE_SOURCE})
 
-NO_ROLE_REASON = "Not read or written by this journey."
+NO_ROLE_REASON = "Né letta né scritta da questo journey."
 
 
 def build_table_model(package: Package) -> TableModel:
@@ -101,12 +101,14 @@ def build_table_model(package: Package) -> TableModel:
     entry = _entry_table(package, names)
 
     automation_queries = _entry_automation_queries(package, warnings)
-    entry_query = _find_entry_query(package, entry, automation_queries, names, warnings)
-    entry_parsed = _parse(entry_query, package, warnings) if entry_query else None
+    parse = _Parser(package, warnings)
+    entry_queries = _find_entry_queries(package, entry, automation_queries, names, warnings)
+    entry_query = _choose_entry_query(entry_queries, entry, parse, names, warnings)
+    entry_parsed = parse(entry_query) if entry_query else None
 
     uses = {name: _Use() for name in package.tables}
     _record_split_reads(package, names, uses, warnings)
-    source_queries = _follow_sources(package, entry, entry_query, entry_parsed, automation_queries,
+    source_queries = _follow_sources(package, entry, entry_query, entry_queries, parse, automation_queries,
                                      names, uses, warnings)
     _record_writes(package, names, uses)
 
@@ -130,7 +132,7 @@ def build_table_model(package: Package) -> TableModel:
             reason = _selected_reason(roles[name], uses[name], entry_query_name,
                                       levels[name], level_reasons[name], note)
         elif ROLE_WRITTEN in roles[name]:
-            reason = f"Written by {_writers_text(uses[name])}, never read by a split or by the entry query: no CSV."
+            reason = f"Scritta {_writers_text(uses[name])}, mai letta da uno split o dalla entry query: nessun CSV."
         else:
             reason = NO_ROLE_REASON
         table_roles[name] = TableRole(name=name, roles=roles[name], selected=is_selected,
@@ -183,10 +185,10 @@ class _Names:
     def why_unknown(self, table: Optional[str], field_name: Optional[str]) -> str:
         """Plain words saying why ``field_ref`` found nothing."""
         if not table:
-            return f"the table of column {field_name} is not known"
+            return f"la tabella della colonna {field_name} non è nota"
         if self.table(table) is None:
-            return f"table {table} is not in the export"
-        return f"{self.table(table)} has no field {field_name}"
+            return f"la tabella {table} non è nell'export"
+        return f"{self.table(table)} non ha il campo {field_name}"
 
 
 def _table_order(tables: dict[str, Table], entry: str) -> list[str]:
@@ -206,8 +208,8 @@ def _entry_table(package: Package, names: _Names) -> str:
     """
     entry = names.table(package.journey.entry_table)
     if entry is None:
-        raise ValueError(f"the journey's entry table {package.journey.entry_table!r} "
-                         "is not among the tables of the export")
+        raise ValueError(f"la tabella di ingresso {package.journey.entry_table!r} del journey "
+                         "non è tra le tabelle dell'export")
     return entry
 
 
@@ -223,54 +225,90 @@ def _entry_automation_queries(package: Package, warnings: list[str]) -> list[Que
     for name in package.automation_queries.get(automation, []):
         query = by_name.get(name)
         if query is None:
-            warnings.append(f"The entry automation {automation} runs query {name}, which is not in the export")
+            warnings.append(f"L'automation di ingresso {automation} esegue la query {name}, che non è nell'export")
         elif query not in out:
             out.append(query)
     return out
 
 
-def _find_entry_query(package: Package, entry: str, automation_queries: list[Query], names: _Names,
-                      warnings: list[str]) -> Optional[Query]:
-    """The query that fills the entry table (contract in docs/plan.md, "tables.py").
+def _find_entry_queries(package: Package, entry: str, automation_queries: list[Query], names: _Names,
+                        warnings: list[str]) -> list[Query]:
+    """Every query that fills the entry table (contract in docs/plan.md, "tables.py").
 
-    It is the query of the entry automation whose target is the entry table; when several are,
-    the last one in step order (warning). When the automation has none, every query of the export
-    is searched (warning). When no query fills the entry table there is no entry query (warning),
-    and the entry table alone is the source side.
+    Spec, source table: "Any table in the FROM or JOIN of a query that fills the entry table", so
+    all of them count, not only the last. They are the queries of the entry automation whose target
+    is the entry table, in step order. When the automation has none, every query of the export that
+    fills the entry table is taken (warning). When no query fills the entry table there is no entry
+    query (warning), and the entry table alone is the source side.
     """
     in_automation = [q for q in automation_queries if names.table(q.target_table) == entry]
     if in_automation:
-        chosen = in_automation[-1]
-        if len(in_automation) > 1:
-            warnings.append(f"Several queries of the entry automation fill the entry table {entry} "
-                            f"({_join_words([q.name for q in in_automation])}): the last one in step order, "
-                            f"{chosen.name}, is taken as the entry query")
-        return chosen
+        return in_automation
 
     if package.entry_event is None:
-        why = "The journey has no entry event"
+        why = "Il journey non ha un entry event"
     elif not package.entry_event.automation_name:
-        why = f"The entry event {package.entry_event.name} is not fed by an automation"
+        why = f"L'entry event {package.entry_event.name} non è alimentato da un'automation"
     else:
-        why = f"No query of the entry automation {package.entry_event.automation_name} fills the entry table {entry}"
+        why = (f"Nessuna query dell'automation di ingresso {package.entry_event.automation_name} popola la tabella "
+               f"di ingresso {entry}")
     elsewhere = [q for q in package.queries if names.table(q.target_table) == entry]
     if not elsewhere:
-        warnings.append(f"{why}, and no other query of the export fills {entry}: there is no entry query, "
-                        "so the entry table alone is the source side")
-        return None
-    chosen = elsewhere[-1]
-    if len(elsewhere) > 1:
-        warnings.append(f"{why}; queries {_join_words([q.name for q in elsewhere])} fill {entry}: "
-                        f"the last one, {chosen.name}, is taken as the entry query")
+        warnings.append(f"{why}, e nessun'altra query dell'export popola {entry}: non c'è una entry query, "
+                        "quindi l'unica sorgente è la tabella di ingresso")
+    elif len(elsewhere) == 1:
+        warnings.append(f"{why}; la query {elsewhere[0].name} popola {entry} e viene presa come entry query")
     else:
-        warnings.append(f"{why}; query {chosen.name} fills {entry} and is taken as the entry query")
+        warnings.append(f"{why}; le query dell'export che popolano {entry} vengono prese come entry query")
+    return elsewhere
+
+
+def _choose_entry_query(entry_queries: list[Query], entry: str, parse: "_Parser", names: _Names,
+                        warnings: list[str]) -> Optional[Query]:
+    """The one entry query that builds the entry rows: the last query in step order.
+
+    When several queries fill the entry table (warning), the tables read by all of them are source
+    tables, but the entry rows come from one query. A last query that reads only the entry table
+    (a post-processing update of the entry rows) is not the one that builds them: the last query that
+    reads some other table is taken instead.
+    """
+    if not entry_queries:
+        return None
+    chosen = entry_queries[-1]
+    if len(entry_queries) == 1:
+        return chosen
+    reading_others = [q for q in entry_queries if any(names.table(ref.table) != entry for ref in parse(q).sources)]
+    if reading_others:
+        chosen = reading_others[-1]
+    how = "l'ultima nell'ordine degli step" if chosen is entry_queries[-1] else \
+        f"l'ultima che legge una tabella diversa da {entry}"
+    warnings.append(f"Più query popolano la tabella di ingresso {entry} "
+                    f"({_join_words([q.name for q in entry_queries])}): "
+                    f"le tabelle che leggono sono tutte tabelle sorgente, e le righe di ingresso sono costruite da "
+                    f"{chosen.name}, {how}")
     return chosen
+
+
+class _Parser:
+    """Parse each query once; its parser warnings are repeated in the table model, prefixed with the
+    query name."""
+
+    def __init__(self, package: Package, warnings: list[str]):
+        self.package = package
+        self.warnings = warnings
+        self._done: dict[str, ParsedQuery] = {}
+
+    def __call__(self, query: Query) -> ParsedQuery:
+        if query.name not in self._done:
+            self._done[query.name] = _parse(query, self.package, self.warnings)
+        return self._done[query.name]
 
 
 def _parse(query: Query, package: Package, warnings: list[str]) -> ParsedQuery:
     """Parse one query; its parser warnings are repeated here, prefixed with the query name."""
     parsed = sqlparse_lite.parse_query(query, package.tables)
-    warnings.extend(f"Query {query.name}: {warning}" for warning in parsed.warnings)
+    prefix = f"Query {query.name}: "
+    warnings.extend(w if w.startswith(prefix) else prefix + w for w in parsed.warnings)
     return parsed
 
 
@@ -314,40 +352,42 @@ def _record_split_reads(package: Package, names: _Names, uses: dict[str, _Use], 
         if names.field_ref(table, field_name) is None:
             _add_once(unknown_fields.setdefault(f"{table}.{field_name}", []), activity_key)
     for table_name, keys in unknown_tables.items():
-        warnings.append(f"Table {table_name} is read by {_short_list(keys)} but is not in the export: "
-                        "no CSV can be made for it")
+        warnings.append(f"La tabella {table_name} è letta da {_short_list(keys)} ma non è nell'export: "
+                        "non è possibile crearne il CSV")
     for ref_text, keys in unknown_fields.items():
-        warnings.append(f"{ref_text} is read by {_short_list(keys)} but is not a field of the export")
+        warnings.append(f"{ref_text} è letto da {_short_list(keys)} ma non è un campo dell'export")
 
 
-def _follow_sources(package: Package, entry: str, entry_query: Optional[Query], entry_parsed: Optional[ParsedQuery],
-                    automation_queries: list[Query], names: _Names, uses: dict[str, _Use],
+def _follow_sources(package: Package, entry: str, entry_query: Optional[Query], entry_queries: list[Query],
+                    parse: _Parser, automation_queries: list[Query], names: _Names, uses: dict[str, _Use],
                     warnings: list[str]) -> list[ParsedQuery]:
     """Spec, source table: "Any table in the FROM or JOIN of a query that fills the entry table,
     followed back until no query writes it".
 
-    Breadth-first from the FROM/JOIN tables of the entry query. For each new source table, every
-    query whose target it is gets parsed and its own FROM/JOIN tables are followed in turn: the
-    queries of the entry automation first (step order), then the other queries of the export.
+    Breadth-first from the FROM/JOIN tables of every query that fills the entry table (the entry
+    query first, then the others in step order). For each new source table, every query whose
+    target it is gets parsed and its own FROM/JOIN tables are followed in turn: the queries of the
+    entry automation first (step order), then the other queries of the export.
     Each table and each query is followed once, and the walk starts at the entry table, which is
     therefore never a source: cycles stop (the pilot has a query that writes its Config table from
     Config and the entry table).
 
     Returns the parsed queries followed, the entry query first.
     """
-    if entry_query is None or entry_parsed is None:
+    if entry_query is None:
         return []
     search_order = automation_queries + [q for q in package.queries if q not in automation_queries]
-    followed = [entry_parsed]
-    done_queries = {entry_query.name}
+    starting = [entry_query] + [q for q in entry_queries if q is not entry_query]
+    followed = [parse(q) for q in starting]
+    done_queries = {q.name for q in starting}
     done_tables = {entry}
-    pending = deque((ref.table, entry_parsed) for ref in entry_parsed.sources)
+    pending = deque((ref.table, parsed) for parsed in followed for ref in parsed.sources)
     while pending:
         table_name, reader = pending.popleft()
         table = names.table(table_name)
         if table is None:
-            warnings.append(f"Query {reader.name} reads table {table_name}, which is not in the export: "
-                            "no CSV can be made for it")
+            warnings.append(f"Query {reader.name}: la tabella {table_name}, letta dalla query, non è nell'export, "
+                            "quindi non è possibile crearne il CSV")
             continue
         if table in done_tables:
             continue
@@ -358,7 +398,7 @@ def _follow_sources(package: Package, entry: str, entry_query: Optional[Query], 
             if query.name in done_queries or names.table(query.target_table) != table:
                 continue
             done_queries.add(query.name)
-            parsed = _parse(query, package, warnings)
+            parsed = parse(query)
             followed.append(parsed)
             pending.extend((ref.table, parsed) for ref in parsed.sources)
     return followed
@@ -414,29 +454,31 @@ def _contact_key_field(package: Package, entry: str, names: _Names, warnings: li
         found = table.field(table.sendable_field)
         if found:
             return (entry, found.name)
-        warnings.append(f"The sendable field {table.sendable_field} of the entry table {entry} is not in its schema")
+        warnings.append(f"Il campo sendable {table.sendable_field} della tabella di ingresso {entry} non è nel "
+                        f"suo schema")
     for rel in package.relationships:
         if rel.left_table is None and names.table(rel.right_table) == entry:
             found = table.field(rel.right_field)
             if found:
-                warnings.append(f"The entry table {entry} has no usable sendable field: the contact key is "
-                                f"{found.name}, the field relationship {rel.name} links to the contact")
+                warnings.append(f"La tabella di ingresso {entry} non ha un campo sendable utilizzabile: la chiave del "
+                                f"contatto è {found.name}, il campo che la relazione {rel.name} collega al contatto")
                 return (entry, found.name)
     primary_key = table.primary_key
     if len(primary_key) == 1:
-        warnings.append(f"The entry table {entry} has no usable sendable field and no contact link: "
-                        f"the contact key is its primary key {primary_key[0]}")
+        warnings.append(f"La tabella di ingresso {entry} non ha un campo sendable utilizzabile né un collegamento al "
+                        f"contatto: la chiave del contatto è la sua chiave primaria {primary_key[0]}")
         return (entry, primary_key[0])
     if primary_key:
-        warnings.append(f"The entry table {entry} has no usable sendable field and no contact link, and its "
-                        f"primary key has several fields ({_join_words(primary_key)}): the contact key is "
-                        f"taken to be the first one, {primary_key[0]}")
+        warnings.append(f"La tabella di ingresso {entry} non ha un campo sendable utilizzabile né un collegamento al "
+                        f"contatto, e la sua chiave primaria ha più campi ({_join_words(primary_key)}): come chiave "
+                        f"del contatto si prende il primo, {primary_key[0]}")
         return (entry, primary_key[0])
     if table.fields:
-        warnings.append(f"The entry table {entry} has no usable sendable field, no contact link and no primary "
-                        f"key: the contact key is taken to be its first field, {table.fields[0].name} (assumption)")
+        warnings.append(f"La tabella di ingresso {entry} non ha un campo sendable utilizzabile, né un collegamento al "
+                        f"contatto, né una chiave primaria: come chiave del contatto si prende il suo primo campo, "
+                        f"{table.fields[0].name} (assunzione)")
         return (entry, table.fields[0].name)
-    raise ValueError(f"the entry table {entry} has no fields")
+    raise ValueError(f"la tabella di ingresso {entry} non ha campi")
 
 
 class _KeyUnion:
@@ -517,7 +559,8 @@ def _join_links(package: Package, source_queries: list[ParsedQuery], names: _Nam
     links: list[tuple[FieldRef, FieldRef]] = []
     for parsed in source_queries:
         for join in parsed.joins:
-            what = f"Query {parsed.name}: join {_column_text(join.left)} = {_column_text(join.right)}"
+            what = (f"Query {parsed.name}: il join {_column_text(join.left)} = {_column_text(join.right)} "
+                    "viene ignorato")
             link = _resolve_link(names, (join.left.table, join.left.column),
                                  (join.right.table, join.right.column), what, warnings)
             if link:
@@ -526,7 +569,7 @@ def _join_links(package: Package, source_queries: list[ParsedQuery], names: _Nam
         if rel.left_table is None:
             continue   # group-to-set: see _contact_links
         link = _resolve_link(names, (rel.left_table, rel.left_field), (rel.right_table, rel.right_field),
-                             f"Relationship {rel.name}", warnings)
+                             f"La relazione {rel.name} viene ignorata", warnings)
         if link:
             links.append(link)
     return links
@@ -538,7 +581,7 @@ def _resolve_link(names: _Names, left: tuple[Optional[str], Optional[str]], righ
     right_ref = names.field_ref(*right)
     if left_ref is None or right_ref is None:
         problem = names.why_unknown(*left) if left_ref is None else names.why_unknown(*right)
-        warnings.append(f"{what} is skipped: {problem}")
+        warnings.append(f"{what}, perché {problem}")
         return None
     return left_ref, right_ref
 
@@ -552,7 +595,7 @@ def _contact_links(package: Package, names: _Names, warnings: list[str]) -> list
         ref = names.field_ref(rel.right_table, rel.right_field)
         if ref is None:
             problem = names.why_unknown(rel.right_table, rel.right_field)
-            warnings.append(f"Relationship {rel.name} is skipped: {problem}")
+            warnings.append(f"La relazione {rel.name} viene ignorata, perché {problem}")
             continue
         out.append(ref)
     return out
@@ -605,11 +648,11 @@ def _table_levels(entry: str, selected: list[str], tables: dict[str, Table], key
     members = _group_members(keys, selected, tables)
     contact_root = keys.find(contact_key)
     levels = {entry: LEVEL_CONTACT}
-    reasons = {entry: "it is the entry table, one row per contact"}
+    reasons = {entry: "è la tabella di ingresso, una riga per contatto"}
     for table, field_name in members.get(contact_root, {}).items():
         if table not in levels:
             levels[table] = LEVEL_CONTACT
-            reasons[table] = f"joined to the entry on the contact key ({table}.{field_name})"
+            reasons[table] = f"collegata alla tabella di ingresso tramite la chiave del contatto ({table}.{field_name})"
 
     queue = deque(name for name in selected if name in levels)
     while queue:
@@ -621,16 +664,18 @@ def _table_levels(entry: str, selected: list[str], tables: dict[str, Table], key
                 if other in levels:
                     continue
                 levels[other] = LEVEL_SCENARIO
-                reasons[other] = (f"joined on {current}.{tables_in_group[current]} = {other}.{other_field}, "
-                                  "not on the contact key, so many contacts share one row")
+                reasons[other] = (f"collegata tramite {current}.{tables_in_group[current]} = {other}.{other_field}, "
+                                  "non tramite la chiave del contatto, quindi più contatti condividono una riga")
                 queue.append(other)
 
     for name in selected:
         if name not in levels:
             levels[name] = LEVEL_SCENARIO
-            reasons[name] = "not joined to the entry: treated as one row shared by all contacts (assumption)"
-            warnings.append(f"Table {name} is not joined to the entry: treated as one row shared by all contacts "
-                            "(scenario-level). This is an assumption: check how the journey links this table")
+            reasons[name] = ("non collegata alla tabella di ingresso: trattata come una riga condivisa da tutti i "
+                             "contatti (assunzione)")
+            warnings.append(f"La tabella {name} non è collegata alla tabella di ingresso: è trattata come una riga "
+                            "condivisa da tutti i contatti (a livello di scenario). È un'assunzione: verifica come il "
+                            "journey collega questa tabella")
     return levels, reasons
 
 
@@ -744,9 +789,10 @@ def _activation_field(entry_parsed: Optional[ParsedQuery], levels: dict[str, str
     ref, filter_text = candidates[0]
     if len(candidates) > 1:
         others = [f"{table}.{field_name}" for (table, field_name), _ in candidates[1:]]
-        warnings.append(f"Several entry query filters could be the activation field: {ref[0]}.{ref[1]} is "
-                        f"suggested (the first one), not {_join_words(others)}")
-    return ref, f"Its field {ref[1]} is suggested as the activation field (entry query filter {filter_text})."
+        warnings.append(f"Più filtri della entry query possono indicare il campo di attivazione: si suggerisce "
+                        f"{ref[0]}.{ref[1]} (il primo), non {_join_words(others)}")
+    return ref, (f"Il suo campo {ref[1]} è suggerito come campo di attivazione (filtro della entry query "
+                 f"{filter_text}).")
 
 
 # ---------------------------------------------------------------------------
@@ -759,18 +805,18 @@ def _selected_reason(roles: set[str], use: _Use, entry_query_name: Optional[str]
     reads = _reads_text(use, entry_query_name)
     if ROLE_ENTRY in roles:
         if entry_query_name:
-            text = f"Entry table of the journey, filled by the entry query {entry_query_name}"
+            text = f"Tabella di ingresso del journey, popolata dalla entry query {entry_query_name}"
         else:
-            text = "Entry table of the journey, filled by no query of the export"
+            text = "Tabella di ingresso del journey, non popolata da alcuna query dell'export"
         if reads:
-            text += f"; also read by {_join_words(reads)}"
+            text += f"; letta anche {_join_words(reads)}"
         writers = _writers_text(use, skip_query=entry_query_name)
     else:
-        text = f"Read by {_join_words(reads)}"
+        text = f"Letta {_join_words(reads)}"
         writers = _writers_text(use)
     if writers:
-        text += f"; also written by {writers}"
-    level_name = "Contact-level" if level == LEVEL_CONTACT else "Scenario-level"
+        text += f"; scritta anche {writers}"
+    level_name = "A livello di contatto" if level == LEVEL_CONTACT else "A livello di scenario"
     parts = [f"{text}.", f"{level_name}: {level_reason}."]
     if activation_note:
         parts.append(activation_note)
@@ -780,24 +826,24 @@ def _selected_reason(roles: set[str], use: _Use, entry_query_name: Optional[str]
 def _reads_text(use: _Use, entry_query_name: Optional[str]) -> list[str]:
     phrases: list[str] = []
     if use.splits:
-        phrases.append(_count(len(use.splits), "split"))
+        phrases.append("da " + _count(len(use.splits), "split", "split"))
     if use.waits:
-        phrases.append(_count(len(use.waits), "wait by attribute", "waits by attribute"))
+        phrases.append("da " + _count(len(use.waits), "Wait by attribute", "Wait by attribute"))
     if use.read_by_query:
         if use.read_by_query == entry_query_name:
-            phrases.append(f"the entry query {use.read_by_query}")
+            phrases.append(f"dalla entry query {use.read_by_query}")
         else:
-            phrases.append(f"query {use.read_by_query}, which fills {use.query_fills}")
+            phrases.append(f"dalla query {use.read_by_query}, che popola {use.query_fills}")
     return phrases
 
 
 def _writers_text(use: _Use, skip_query: Optional[str] = None) -> str:
     phrases: list[str] = []
     if use.update_steps:
-        phrases.append(_count(len(use.update_steps), "update contact step"))
+        phrases.append("da " + _count(len(use.update_steps), "attività Update contact", "attività Update contact"))
     queries = [name for name in use.written_by_queries if name != skip_query]
     if queries:
-        phrases.append(("query " if len(queries) == 1 else "queries ") + _join_words(queries))
+        phrases.append(("dalla query " if len(queries) == 1 else "dalle query ") + _join_words(queries))
     return _join_words(phrases)
 
 
@@ -807,16 +853,16 @@ def _add_once(items: list[str], item: str) -> None:
 
 
 def _join_words(items: list[str]) -> str:
-    """``a``, ``a and b``, ``a, b and c``."""
+    """``a``, ``a e b``, ``a, b e c`` (Italian: the texts built with it are in Italian)."""
     if len(items) <= 1:
         return "".join(items)
-    return ", ".join(items[:-1]) + " and " + items[-1]
+    return ", ".join(items[:-1]) + " e " + items[-1]
 
 
 def _short_list(items: list[str], limit: int = 5) -> str:
     if len(items) <= limit:
         return _join_words(items)
-    return ", ".join(items[:limit]) + f" and {len(items) - limit} more"
+    return ", ".join(items[:limit]) + f" e altri {len(items) - limit}"
 
 
 def _count(n: int, singular: str, plural: Optional[str] = None) -> str:

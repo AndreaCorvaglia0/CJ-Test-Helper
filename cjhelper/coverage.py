@@ -206,8 +206,8 @@ def build_domain(field_type: str, conditions: list[Condition], nullable: bool, c
             if v is None:
                 continue
             if length is not None and len(v) > length:
-                warnings.append(f"the condition value {v!r} is longer than the field ({length} characters), "
-                                "so that condition can never be true")
+                warnings.append(f"il valore {v!r} della condizione è più lungo del campo ({length} caratteri), "
+                                "quindi quella condizione non può mai essere vera")
                 continue
             key = v.lower() if case_insensitive else v
             if key not in seen:
@@ -221,7 +221,7 @@ def build_domain(field_type: str, conditions: list[Condition], nullable: bool, c
         else:
             other = _other_text(named, length)
         if other is None:
-            warnings.append(f"no 'other' value fits the field ({length} characters) beside the condition values")
+            warnings.append(f"nel campo ({length} caratteri) non entra nessun valore diverso da quelli delle condizioni")
         else:
             values.append(other)
     if nullable:
@@ -350,11 +350,11 @@ class CoverageEngine:
             if level is None:
                 level = LEVEL_CONTACT
                 self.warnings.append(
-                    f"field {ref[0]}.{ref[1]} is read by a split but its table is not linked to the entry; "
-                    "treated as a contact-level field (assumption)")
+                    f"il campo {ref[0]}.{ref[1]} è letto da uno split, ma la sua tabella non è collegata alla tabella di ingresso: "
+                    "è trattato come campo a livello di contatto (assunzione)")
             self.levels[ref] = level
             if self.schema.table(ref[0]) is None or self.schema.table(ref[0]).field(ref[1]) is None:
-                self.warnings.append(f"field {ref[0]}.{ref[1]} is read by a split but is not in the export's schemas; treated as nullable text")
+                self.warnings.append(f"il campo {ref[0]}.{ref[1]} è letto da uno split, ma non è negli schemi dell'export: è trattato come testo che ammette null")
         self.contact_fields = [f for f in self.fields if self.levels[f] == LEVEL_CONTACT]
         self.scenario_fields = [f for f in self.fields if self.levels[f] == LEVEL_SCENARIO]
 
@@ -375,8 +375,8 @@ class CoverageEngine:
                 self.domains[ref] = [KEY_MARKER]
                 self.other_values[ref] = KEY_MARKER
                 self.warnings.append(
-                    f"{ref[0]}.{ref[1]} is read by a split but it is a key field: it holds the generated key, "
-                    "so a condition comparing it with a value can never be true")
+                    f"{ref[0]}.{ref[1]} è letto da uno split, ma è un campo chiave: contiene la chiave generata, "
+                    "quindi una condizione che lo confronta con un valore non può mai essere vera")
                 continue
             domain, other, warnings = build_domain(ftype, conds, self.schema.is_nullable(ref),
                                                    self.settings.case_insensitive_text, self.settings.date_format, length)
@@ -390,12 +390,12 @@ class CoverageEngine:
                 domain = [value]
                 shown = "null" if value is None else repr(value)
                 self.warnings.append(
-                    f"{ref[0]}.{ref[1]} is read by a split and fixed by the entry query: contacts that enter "
-                    f"the journey always have {shown}, so only that value is tried")
+                    f"{ref[0]}.{ref[1]} è letto da uno split ed è fissato dalla entry query: i contatti che entrano "
+                    f"nel journey hanno sempre {shown}, quindi si prova solo quel valore")
             elif ref in not_null and None in domain:
                 domain = [v for v in domain if v is not None]
                 self.warnings.append(
-                    f"{ref[0]}.{ref[1]} is read by a split and filtered IS NOT NULL by the entry query, so null is not tried")
+                    f"{ref[0]}.{ref[1]} è letto da uno split e la entry query lo filtra con IS NOT NULL, quindi null non si prova")
             self.domains[ref] = domain
 
     def _flag_case_variants(self, ref: FieldRef, ftype: str, values: list[str]) -> None:
@@ -409,15 +409,15 @@ class CoverageEngine:
                 by_lower[v.lower()].append(v)
         for spellings in by_lower.values():
             if len(spellings) > 1:
-                shown = " and ".join(repr(s) for s in spellings)
+                shown = " e ".join(repr(s) for s in spellings)
                 if self.settings.case_insensitive_text:
                     self.warnings.append(
-                        f"suspicious pattern: {ref[0]}.{ref[1]} is compared with {shown}; "
-                        "treated as the same value because text comparisons ignore letter case")
+                        f"pattern sospetto: {ref[0]}.{ref[1]} è confrontato con {shown}; "
+                        "sono trattati come un solo valore perché i confronti di testo non distinguono maiuscole e minuscole")
                 else:
                     self.warnings.append(
-                        f"suspicious pattern: {ref[0]}.{ref[1]} is compared with {shown}; "
-                        "they are different values because text comparisons are case-sensitive (setting)")
+                        f"pattern sospetto: {ref[0]}.{ref[1]} è confrontato con {shown}; "
+                        "sono valori diversi perché i confronti di testo distinguono maiuscole e minuscole (impostazione)")
 
     def _entry_pins(self) -> tuple[dict[FieldRef, Value], set[FieldRef]]:
         """Fields pinned by the entry query: equality and IS NULL filters, literal and current-date
@@ -508,8 +508,8 @@ class CoverageEngine:
         if total > MAX_CONTACT_COMBINATIONS:
             self.classes_incomplete = True
             self.warnings.append(
-                f"{total} contact-level value combinations; only the first {MAX_CONTACT_COMBINATIONS} were examined, "
-                "so some contact classes are missing and reachable branches may be reported as not covered")
+                f"{total} combinazioni di valori a livello di contatto: sono state esaminate solo le prime {MAX_CONTACT_COMBINATIONS}, "
+                "quindi mancano alcune classi di contatti e alcuni branch raggiungibili possono risultare non coperti")
             combos = itertools.islice(combos, MAX_CONTACT_COMBINATIONS)
         by_truth: dict[tuple[bool, ...], ContactClass] = {}
         for combo in combos:
@@ -559,10 +559,10 @@ class CoverageEngine:
             if not self.exploration_truncated:
                 self.exploration_truncated = True
                 self.warnings.append(
-                    f"the journey has more than {MAX_PATHS} distinct paths; exploration stopped there, so some "
-                    "reachable branches may be reported as not covered")
+                    f"il journey ha più di {MAX_PATHS} percorsi distinti: l'esplorazione si è fermata a quel limite, quindi "
+                    "alcuni branch raggiungibili possono risultare non coperti")
             state.stop = graph.STOP_ERROR
-            state.stop_detail = "exploration limit reached"
+            state.stop_detail = "limite di esplorazione raggiunto"
             return LeafNode(self._leaf(cls, state, assigned, manual, randoms))
         state = self.walker.run(state, self._lookup(cls, assigned), choose=None)
         self.reached_activities.update(s.activity_key for s in state.steps)
@@ -572,9 +572,10 @@ class CoverageEngine:
         if state.stop == graph.STOP_UNDETERMINED:
             ref = state.pending_field
             if ref is None or ref not in self.domains:
-                self.warnings.append(f"split '{state.current}' reads a field the generator cannot enumerate; path stopped there")
+                self.warnings.append(f"lo split '{state.current}' legge un campo di cui il generatore non sa elencare i valori: "
+                                     "il percorso si ferma lì")
                 state.stop = graph.STOP_ERROR
-                state.stop_detail = f"split '{state.current}' reads a field the generator cannot enumerate"
+                state.stop_detail = f"lo split '{state.current}' legge un campo di cui il generatore non sa elencare i valori"
                 return LeafNode(self._leaf(cls, state, assigned, manual, randoms))
             children: dict[Value, Node] = {}
             for value in self.domains[ref]:
@@ -615,7 +616,7 @@ class CoverageEngine:
     def _leaf(self, cls: ContactClass, state: graph.WalkState, assigned: dict[FieldRef, Value],
               manual: tuple[ManualAction, ...], randoms: tuple[tuple[str, str], ...]) -> Leaf:
         if state.stop in (graph.STOP_LOOP, graph.STOP_DANGLING, graph.STOP_ERROR):
-            self.warnings.append(f"path stopped: {state.stop_detail}")
+            self.warnings.append(f"percorso interrotto: {state.stop_detail}")
         leaf = Leaf(id=len(self.leaves), class_id=cls.id, assigned=dict(assigned), manual=manual, randoms=randoms,
                     steps=list(state.steps), emails_sent=list(state.emails_sent), writes=list(state.writes),
                     waits=list(state.waits), stop=state.stop or graph.STOP_EXIT, stop_detail=state.stop_detail)
@@ -637,8 +638,8 @@ class CoverageEngine:
         signatures: dict[tuple[int, ...], dict[FieldRef, Value]] = {}
         if total > MAX_SCENARIO_COMBINATIONS:
             self.warnings.append(
-                f"{total} scenario-level value combinations is more than the generator enumerates "
-                f"({MAX_SCENARIO_COMBINATIONS}); scenarios were built from the paths' own values instead")
+                f"{total} combinazioni di valori a livello di scenario superano il limite del generatore "
+                f"({MAX_SCENARIO_COMBINATIONS}): gli scenari sono stati costruiti solo dai valori da cui dipendono i percorsi esplorati")
             for leaf in self.leaves:
                 assignment = {f: d[0] for f, d in zip(self.scenario_fields, domains)}
                 assignment.update(leaf.assigned)
@@ -920,10 +921,10 @@ class CoverageEngine:
                 if not is_address:
                     continue
                 if value is None:
-                    return f"the path requires {ref[0]}.{ref[1]} to be empty, so no email can be received"
+                    return f"il percorso richiede che {ref[0]}.{ref[1]} sia vuoto, quindi nessuna email può essere ricevuta"
                 if value != self.other_values.get(ref):
-                    return (f"the path requires {ref[0]}.{ref[1]} = {value!r}, an address the tester does not own, "
-                            "so the email cannot be opened or clicked")
+                    return (f"il percorso richiede {ref[0]}.{ref[1]} = {value!r}, un indirizzo che il tester non possiede, "
+                            "quindi l'email non può essere aperta né cliccata")
         return None
 
     def _summary(self, steps: list[Step]) -> str:
@@ -934,7 +935,7 @@ class CoverageEngine:
                 continue
             if activity.kind in (KIND_DECISION, KIND_ENGAGEMENT):
                 outcome = activity.outcome(step.outcome_key)
-                label = outcome.label if outcome is not None and outcome.label else "match"
+                label = outcome.label if outcome is not None and outcome.label else "condizione vera"
                 parts.append(f"{activity.name or activity.key}: {label}")
         text = " > ".join(parts)
         return text if len(text) <= 160 else text[:157] + "..."
@@ -967,10 +968,11 @@ class CoverageEngine:
             if others:
                 ref = self.journey.activities.get(activity.engagement_ref)
                 ref_name = ref.email_name if ref is not None and ref.email_name else activity.engagement_ref
-                shown = ", ".join(f"'{self.journey.activities[k].email_name or k}' ({k})" for k in others)
-                out.append(f"suspicious pattern: engagement split '{activity.name or activity.key}' ({activity.key}) "
-                           f"measures the email '{ref_name}' ({activity.engagement_ref}), but on some paths the last "
-                           f"email sent before it is {shown}")
+                names = [f"'{self.journey.activities[k].email_name or k}' ({k})" for k in others]
+                shown = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " oppure " + names[-1]
+                out.append(f"pattern sospetto: l'engagement split '{activity.name or activity.key}' ({activity.key}) "
+                           f"misura l'email '{ref_name}' ({activity.engagement_ref}), ma su alcuni percorsi l'ultima "
+                           f"email inviata prima dello split è {shown}")
         return out
 
     def _same_name_different_conditions(self) -> list[str]:
@@ -985,7 +987,7 @@ class CoverageEngine:
         for name, variants in by_name.items():
             if len(variants) > 1:
                 keys = ", ".join(variants.values())
-                out.append(f"suspicious pattern: {len(variants)} different conditions share the split name '{name}' ({keys})")
+                out.append(f"pattern sospetto: {len(variants)} split con condizioni diverse hanno lo stesso nome '{name}' ({keys})")
         return out
 
     def _branch_statuses(self, scenarios: list[Scenario]) -> list[BranchStatus]:
@@ -1037,20 +1039,27 @@ class CoverageEngine:
         for activity, outcome in self.branch_list:
             ref = (activity.key, outcome.key)
             label = outcome.label or outcome.key
-            stat_note = f"reached only through a random split; statistical case of {self.settings.contacts_per_random_case} contacts"
-            if ref in plain:
+            stat_note = f"raggiunto solo attraverso un random split; caso statistico di {self.settings.contacts_per_random_case} contatti"
+            if _unknown_engagement(activity):
+                # Triage RB-5: the split measures neither an open nor a click, so no branch can be claimed,
+                # whatever path crosses it; the loader warns that both branches are not covered.
+                reason = self._not_covered_reason(activity, outcome, preds)
+                root_reasons[ref] = reason
+                statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
+                                             STATUS_NOT_COVERED, reason, []))
+            elif ref in plain:
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                              STATUS_COVERED, "", sorted(set(plain[ref]))))
             elif ref in manual:
                 is_stat = ref in statistical and ref not in plain
-                reason = "a contact must open or click the email" + ("; " + stat_note if is_stat else "")
+                reason = "un contatto deve aprire o cliccare l'email" + ("; " + stat_note if is_stat else "")
                 if self.settings.real_inbox:
                     statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                                  STATUS_MANUAL, reason, sorted(set(manual[ref])), statistical=is_stat))
                 else:
                     statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                                  STATUS_NOT_COVERED,
-                                                 "needs an open or click but no real inbox is configured; the cases exist with undeliverable addresses",
+                                                 "richiede un open o un click, ma non è configurata un'inbox reale; i casi esistono, con indirizzi non recapitabili",
                                                  sorted(set(manual[ref])), statistical=is_stat))
             elif ref in statistical:
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
@@ -1060,7 +1069,7 @@ class CoverageEngine:
                 reason = blocked[ref][0][1]
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                              STATUS_NOT_COVERED,
-                                             f"needs an open or click that cannot be done: {reason}; the cases exist",
+                                             f"richiede un open o un click che non si può fare: {reason}; i casi esistono",
                                              ids))
             else:
                 behind = None
@@ -1077,10 +1086,12 @@ class CoverageEngine:
                         if root_reason is None:
                             root_reason = self._not_covered_reason(root_activity, root_outcome, preds)
                             root_reasons[behind] = root_reason
-                        prefix = ("behind an unsupported element" if root_reason.startswith("unsupported") or
-                                  root_reason.startswith("behind an unsupported") else "unreachable")
-                        reason = (f"{prefix}: lies behind the branch '{root_activity.name or behind[0]}: {label_of(root_outcome)}' "
-                                  f"({behind[0]}), which is {root_reason}")
+                        prefix = ("a valle di un elemento non supportato"
+                                  if root_reason.startswith(("attività non supportata", "branch non supportato",
+                                                             "a valle di un elemento non supportato"))
+                                  else "non raggiungibile")
+                        reason = (f"{prefix}: si trova a valle del branch '{root_activity.name or behind[0]}: {label_of(root_outcome)}' "
+                                  f"({behind[0]}), che non è coperto per questo motivo: {root_reason}")
                     else:
                         reason = self._not_covered_reason(activity, outcome, preds)
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
@@ -1113,10 +1124,13 @@ class CoverageEngine:
         key = activity.key
         if key in self.package.unsupported_activities:
             if activity.unsupported_reason:
-                return f"unsupported activity: {activity.unsupported_reason}"
-            return f"unsupported activity: its type {activity.raw_type} is not one the PoC understands"
+                return f"attività non supportata: {activity.unsupported_reason}"
+            return f"attività non supportata: il PoC non gestisce il tipo {activity.raw_type}"
         if outcome.unsupported_reason:
-            return f"unsupported outcome: {outcome.unsupported_reason}"
+            return f"branch non supportato: {outcome.unsupported_reason}"
+        if _unknown_engagement(activity):
+            return ("branch non supportato: lo split misura un tipo di statistica che non è né un open né un click, "
+                    "quindi nessuno dei suoi branch può essere considerato coperto")
         if activity.kind == KIND_DECISION:
             remainder = [o for o in activity.outcomes if o.is_remainder or o.formula is None]
             ordered = [o for o in activity.outcomes if o not in remainder] + remainder
@@ -1124,17 +1138,17 @@ class CoverageEngine:
                 if earlier is outcome:
                     break
                 if earlier.unsupported_reason:
-                    return (f"behind an unsupported element: this outcome comes after the unsupported outcome "
-                            f"'{label_of(earlier)}' of the same split, so it is never evaluated")
+                    return (f"a valle di un elemento non supportato: questo branch viene dopo il branch non supportato "
+                            f"'{label_of(earlier)}' dello stesso split, quindi non viene mai valutato")
         blocked = self.engagement_blocked.get((key, outcome.key))
         if blocked:
-            return "unreachable: " + blocked
+            return "non raggiungibile: " + blocked
         if key not in self.reached_activities:
             parent = sorted(preds.get(key, ()))
             if not parent:
-                return "unreachable: no path from the start reaches this activity"
-            return ("unreachable: no combination of field values reaches this activity "
-                    f"(it follows {', '.join(repr(p) for p in parent)})")
+                return "non raggiungibile: nessun percorso dall'inizio del journey raggiunge questa attività"
+            return ("non raggiungibile: nessuna combinazione di valori dei campi raggiunge questa attività "
+                    f"(segue {', '.join(repr(p) for p in parent)})")
         # The split was reached but this outcome never matched.
         seen = self.reached_values.get(key, {})
         if activity.kind == KIND_DECISION and outcome.formula is not None:
@@ -1144,22 +1158,28 @@ class CoverageEngine:
                 field = table.field(ref[1]) if table is not None else None
                 if (cond.value is not None and field is not None and field.length
                         and field.type in TEXT_TYPES and len(cond.value) > field.length):
-                    return (f"unreachable: the condition value {cond.value!r} is longer than {ref[0]}.{ref[1]} "
-                            f"({field.length} characters), so the field can never hold it")
+                    return (f"non raggiungibile: il valore {cond.value!r} della condizione è più lungo di {ref[0]}.{ref[1]} "
+                            f"({field.length} caratteri), quindi il campo non può mai contenerlo")
             fields = []
             for cond in formula_conditions(outcome.formula):
                 ref = self.schema.canonical((cond.table, cond.field))
                 values = seen.get(ref)
                 if values:
                     shown = ", ".join("null" if v is None else repr(v) for v in sorted(values, key=lambda x: (x is None, str(x))))
-                    fields.append(f"{ref[0]}.{ref[1]} is always one of {shown}")
-            detail = "; ".join(fields) if fields else "the condition is never true"
-            return f"unreachable: the split is reached but '{label_of(outcome)}' never matches on those paths ({detail})"
+                    fields.append(f"{ref[0]}.{ref[1]} vale sempre uno tra {shown}")
+            detail = "; ".join(fields) if fields else "la condizione non è mai vera"
+            return (f"non raggiungibile: lo split è raggiunto, ma su quei percorsi la condizione di '{label_of(outcome)}' "
+                    f"non è mai vera ({detail})")
         if activity.kind == KIND_DECISION and outcome.is_remainder:
-            return "unreachable: the split is reached but an earlier outcome always matches"
+            return "non raggiungibile: lo split è raggiunto, ma la condizione di un branch precedente è sempre vera"
         if activity.kind == KIND_ENGAGEMENT:
-            return "unreachable: the split is reached but this branch is never taken"
-        return "unreachable: no simulated path crosses this branch"
+            return "non raggiungibile: lo split è raggiunto, ma nessun contatto prende questo branch"
+        return "non raggiungibile: nessun percorso simulato attraversa questo branch"
+
+
+def _unknown_engagement(activity: Activity) -> bool:
+    """An engagement split whose statsTypeId is neither an open nor a click (triage RB-5)."""
+    return activity.kind == KIND_ENGAGEMENT and activity.engagement_kind not in ("open", "click")
 
 
 def label_of(outcome: Outcome) -> str:
