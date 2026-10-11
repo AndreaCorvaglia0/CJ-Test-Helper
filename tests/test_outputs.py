@@ -146,6 +146,7 @@ def test_report_sections_in_order():
     report = write_report(build_result())
     titles = [line for line in report.splitlines() if line.startswith("## ")]
     assert titles == ["## Summary", "## Trust checks", "## Tables", "## Scenarios", "## Branches not covered",
+                      "## Branches covered with a manual action or through a random split",
                       "## Unsupported elements", "## Warnings and suspicious patterns", "## Assumptions",
                       "## Settings used"]
 

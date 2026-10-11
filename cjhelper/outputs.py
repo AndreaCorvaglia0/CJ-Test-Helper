@@ -1441,6 +1441,31 @@ def _section_not_covered(result: GenerationResult) -> str:
     return "\n\n".join(parts)
 
 
+def _section_special_branches(result: GenerationResult) -> str:
+    """Spec, "Outputs": every branch ends in one of three states, each with its reason. The
+    branches covered with a manual action, and those crossed only through a random split, are
+    listed here by name, with the cases that cover them."""
+    journey = result.package.journey
+    manual = [b for b in result.coverage.branches if b.status == STATUS_MANUAL]
+    statistical = [b for b in result.coverage.branches if b.statistical and b.status != STATUS_NOT_COVERED]
+    if not manual and not statistical:
+        return ""
+    parts = ["## Branches covered with a manual action or through a random split"]
+    if manual:
+        rows = [[f"{_activity_name(journey, b.activity_key)} ({b.activity_key})", b.outcome_label,
+                 ", ".join(b.covered_by)] for b in manual]
+        parts.append(f"{len(manual)} branches are covered only by contacts that must open or click an email. "
+                     "The testbook names the action and its deadline.")
+        parts.append(_md_table(["Activity", "Outcome", "Cases"], rows))
+    if statistical:
+        rows = [[f"{_activity_name(journey, b.activity_key)} ({b.activity_key})", b.outcome_label,
+                 ", ".join(b.covered_by)] for b in statistical]
+        parts.append(f"{len(statistical)} branches are crossed only after a random split, by the contacts of a "
+                     "statistical case. The testbook gives the accepted range.")
+        parts.append(_md_table(["Activity", "Outcome", "Cases"], rows))
+    return "\n\n".join(parts)
+
+
 def _section_unsupported(result: GenerationResult) -> str:
     journey = result.package.journey
     items = []
@@ -1718,9 +1743,10 @@ def write_report(result: GenerationResult) -> str:
         _section_tables(result),
         _section_scenarios(result),
         _section_not_covered(result),
+        _section_special_branches(result),
         _section_unsupported(result),
         _section_warnings(result),
         _section_assumptions(result),
         _section_settings(result),
     ]
-    return "\n\n".join(sections) + "\n"
+    return "\n\n".join(sec for sec in sections if sec) + "\n"

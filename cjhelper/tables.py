@@ -736,7 +736,7 @@ def _activation_field(entry_parsed: Optional[ParsedQuery], levels: dict[str, str
             continue
         if names.tables[ref[0]].field(ref[1]).type.lower() != "boolean":
             continue
-        if flt.value.strip().lower() != "true":
+        if flt.value.strip().lower() not in ("true", "1"):
             continue
         candidates.append((ref, f"{flt.column.column} = '{flt.value}'"))
     if not candidates:

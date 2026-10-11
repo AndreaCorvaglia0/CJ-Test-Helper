@@ -497,6 +497,12 @@ class Checker:
     # 5 ---------------------------------------------------------------------------------
     def check_coverage(self) -> CheckResult:
         details: list[str] = []
+        if self.coverage.stats.get("classes_incomplete"):
+            details.append("not every contact-level value combination was examined, so the list of reachable branches "
+                           "is incomplete (too many contact-level fields read by splits)")
+        if self.coverage.stats.get("exploration_truncated"):
+            details.append("the journey has more distinct paths than the generator explores, so the list of reachable "
+                           "branches is incomplete")
         cases = {c.id: c for c in self.coverage.cases}
         crossed: set[tuple[str, str]] = set()
         for c in self.coverage.cases:

@@ -327,6 +327,7 @@ class CoverageEngine:
         self.reached_values: dict[str, dict[FieldRef, set[Value]]] = {}
         self.reached_activities: set[str] = set()
         self.exploration_truncated = False
+        self.classes_incomplete = False
 
     # -- step 3 and 4: fields, levels, domains ------------------------------------------
 
@@ -505,8 +506,10 @@ class CoverageEngine:
         total = math.prod(len(d) for d in domains) if domains else 1
         combos = itertools.product(*domains)
         if total > MAX_CONTACT_COMBINATIONS:
+            self.classes_incomplete = True
             self.warnings.append(
-                f"{total} contact-level value combinations; only the first {MAX_CONTACT_COMBINATIONS} were examined")
+                f"{total} contact-level value combinations; only the first {MAX_CONTACT_COMBINATIONS} were examined, "
+                "so some contact classes are missing and reachable branches may be reported as not covered")
             combos = itertools.islice(combos, MAX_CONTACT_COMBINATIONS)
         by_truth: dict[tuple[bool, ...], ContactClass] = {}
         for combo in combos:
@@ -825,6 +828,7 @@ class CoverageEngine:
         self.build_classes()
         self.explore()
         self.warnings.extend(self._same_name_different_conditions())
+        self.warnings.extend(self._engagement_refers_to_an_earlier_email())
         signatures = self.enumerate_scenarios()
         det_scenarios, det_universe = self.choose_cover(signatures)
         stat_groups = self.choose_statistical(signatures, det_universe)
@@ -871,7 +875,8 @@ class CoverageEngine:
                             writes=[], waits=[k for k in prefix_keys if self.journey.activities[k].kind in graph.WAIT_KINDS],
                             manual_actions=list(manual), end_activity_key=info.activity_key,
                             contact_count=self.settings.contacts_per_random_case, random=info)
-                case.summary = self._summary(case.steps) + " > random split"
+                prefix_summary = self._summary(case.steps)
+                case.summary = (prefix_summary + " > random split") if prefix_summary else "random split"
                 if case.manual_actions:
                     case.inbox_blocked_reason = self._inbox_block_reason(cls.values, entry["values"])
                 cases.append(case)
@@ -889,6 +894,8 @@ class CoverageEngine:
             "covered_manual": sum(1 for b in branches if b.status == STATUS_MANUAL),
             "not_covered": sum(1 for b in branches if b.status == STATUS_NOT_COVERED),
             "contact_classes": len(self.classes),
+            "classes_incomplete": int(self.classes_incomplete),
+            "exploration_truncated": int(self.exploration_truncated),
             "paths_explored": len(self.leaves),
             "scenario_signatures": len(signatures),
         }
@@ -931,6 +938,40 @@ class CoverageEngine:
                 parts.append(f"{activity.name or activity.key}: {label}")
         text = " > ".join(parts)
         return text if len(text) <= 160 else text[:157] + "..."
+
+    def _engagement_refers_to_an_earlier_email(self) -> list[str]:
+        """Spec check carried over: an engagement split that references an email never sent on the
+        paths reaching it. Read structurally: when another email is the last one sent before the
+        split on some path, the split measures an older email than the one just sent."""
+        preds = graph.predecessors(self.journey)
+        out: list[str] = []
+        for activity in self.journey.activities.values():
+            if activity.kind != KIND_ENGAGEMENT or not activity.engagement_ref:
+                continue
+            nearest: set[str] = set()
+            seen: set[str] = set()
+            stack = list(preds.get(activity.key, ()))
+            while stack:
+                k = stack.pop()
+                if k in seen:
+                    continue
+                seen.add(k)
+                a = self.journey.activities.get(k)
+                if a is None:
+                    continue
+                if a.kind == KIND_EMAIL:
+                    nearest.add(k)
+                    continue
+                stack.extend(preds.get(k, ()))
+            others = sorted(k for k in nearest if k != activity.engagement_ref)
+            if others:
+                ref = self.journey.activities.get(activity.engagement_ref)
+                ref_name = ref.email_name if ref is not None and ref.email_name else activity.engagement_ref
+                shown = ", ".join(f"'{self.journey.activities[k].email_name or k}' ({k})" for k in others)
+                out.append(f"suspicious pattern: engagement split '{activity.name or activity.key}' ({activity.key}) "
+                           f"measures the email '{ref_name}' ({activity.engagement_ref}), but on some paths the last "
+                           f"email sent before it is {shown}")
+        return out
 
     def _same_name_different_conditions(self) -> list[str]:
         """Spec check carried over: splits with the same name but different conditions."""

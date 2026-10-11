@@ -295,6 +295,26 @@ def case_paths(case: Case) -> list[list[str]]:
     return [base]
 
 
+def manual_wait_rank(wait_key: str, case: Case, activities: Optional[dict] = None) -> int:
+    """0 when the wait gives no time for a manual action; otherwise the position of its manual
+    action on the path (1 for the first engagement split, 2 for the second, ...), so that each
+    deadline comes one offset after the previous one."""
+    if not case.manual_actions:
+        return 0
+    best = 0
+    for keys in case_paths(case):
+        if wait_key not in keys:
+            continue
+        actions = sorted((a for a in case.manual_actions if a.activity_key in keys),
+                         key=lambda a: keys.index(a.activity_key))
+        for position, action in enumerate(actions, start=1):
+            end = keys.index(action.activity_key)
+            start = keys.index(action.email_activity_key) if action.email_activity_key in keys[:end] else -1
+            if wait_key in keys[start + 1:end]:
+                best = max(best, position)
+    return best
+
+
 def wait_precedes_manual_action(wait_key: str, case: Case, activities: Optional[dict] = None) -> bool:
     """True when this wait is the one that leaves the tester time for a manual action.
 
@@ -853,9 +873,13 @@ class _Generator:
         over all the cases of its scenario, a contact-level field for the contact's own case."""
         cases = [row.case] if row.case is not None else list(row.scenario.cases)
         activities = self.package.journey.activities
-        before_engagement = any(wait_precedes_manual_action(key, case, activities) for case in cases for key in wait_keys)
-        hours = (self.settings.wait_offset_before_engagement_hours if before_engagement
-                 else self.settings.wait_offset_hours)
+        rank = max((manual_wait_rank(key, case, activities) for case in cases for key in wait_keys), default=0)
+        if rank:
+            # Two engagement splits on one path need two deadlines: the second wait ends one offset
+            # after the first, so that the second email is sent before its own deadline starts.
+            hours = self.settings.wait_offset_before_engagement_hours * rank
+        else:
+            hours = self.settings.wait_offset_hours
         return self._format_date(self.generation_time + timedelta(hours=hours))
 
     def _email_value(self, table: Table, field: Field, row: _Row) -> str:
