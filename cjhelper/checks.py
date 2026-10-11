@@ -26,6 +26,8 @@ from . import graph, sqlparse_lite
 from .model import (
     KIND_ENGAGEMENT,
     KIND_RANDOM,
+    STATUS_COVERED,
+    STATUS_MANUAL,
     STATUS_NOT_COVERED,
     Case,
     CheckResult,
@@ -52,6 +54,11 @@ from .model import (
 
 MAX_DETAILS = 25
 
+ENTRY_CHECK = "Le righe della tabella di ingresso corrispondono alla entry query"
+
+# A branch status as the check details say it (the glossary words of docs/brand.md).
+_STATUS_WORDS = {STATUS_COVERED: "coperto", STATUS_MANUAL: "coperto con azione manuale"}
+
 
 def read_csv_bytes(data: bytes) -> tuple[list[str], list[dict[str, Value]]]:
     """Header and rows; empty cells become None (the CSV convention for null)."""
@@ -72,7 +79,7 @@ def read_csv_bytes(data: bytes) -> tuple[list[str], list[dict[str, Value]]]:
 def _trim(details: list[str]) -> list[str]:
     if len(details) <= MAX_DETAILS:
         return details
-    return details[:MAX_DETAILS] + [f"... and {len(details) - MAX_DETAILS} more"]
+    return details[:MAX_DETAILS] + [f"... e altri {len(details) - MAX_DETAILS}"]
 
 
 def _parse_date(value: str, date_format: str) -> Optional[datetime]:
@@ -151,13 +158,13 @@ class Checker:
             table = self.package.tables.get(name)
             header, rows = self.csv[name]
             if table is None:
-                details.append(f"{name}: no schema in the export")
+                details.append(f"{name}: l'export non contiene il suo schema")
                 continue
             if not header:
-                details.append(f"{name}.csv is missing or empty")
+                details.append(f"{name}.csv manca o è vuoto")
                 continue
             if header != table.field_names:
-                details.append(f"{name}.csv header {header} differs from the schema {table.field_names}")
+                details.append(f"{name}.csv: l'intestazione {header} è diversa dallo schema {table.field_names}")
                 continue
             pk_fields = table.primary_key
             seen_pk: set[tuple] = set()
@@ -166,36 +173,36 @@ class Checker:
                     v = row.get(f.name)
                     if v is None:
                         if not f.is_nullable:
-                            details.append(f"{name}.csv line {i}: {f.name} is empty but not nullable")
+                            details.append(f"{name}.csv riga {i}: {f.name} è vuoto ma non ammette null")
                         continue
                     if f.length is not None and f.type in ("Text", "EmailAddress", "Phone", "Locale") and len(v) > f.length:
-                        details.append(f"{name}.csv line {i}: {f.name} has {len(v)} characters, schema allows {f.length}")
+                        details.append(f"{name}.csv riga {i}: {f.name} ha {len(v)} caratteri, lo schema ne ammette {f.length}")
                     if f.type == "Boolean" and v not in ("True", "False"):
-                        details.append(f"{name}.csv line {i}: {f.name} = {v!r} is not True/False")
+                        details.append(f"{name}.csv riga {i}: {f.name} = {v!r} non è True o False")
                     elif f.type == "Date" and not self._is_date(name, f.name, v):
-                        details.append(f"{name}.csv line {i}: {f.name} = {v!r} is not a date in {self.settings.date_format}")
+                        details.append(f"{name}.csv riga {i}: {f.name} = {v!r} non è una data nel formato {self.settings.date_format}")
                     elif f.type == "Number":
                         try:
                             int(v)
                         except ValueError:
-                            details.append(f"{name}.csv line {i}: {f.name} = {v!r} is not a whole number")
+                            details.append(f"{name}.csv riga {i}: {f.name} = {v!r} non è un numero intero")
                     elif f.type == "Decimal":
                         try:
                             float(v)
                         except ValueError:
-                            details.append(f"{name}.csv line {i}: {f.name} = {v!r} is not a number")
+                            details.append(f"{name}.csv riga {i}: {f.name} = {v!r} non è un numero")
                     elif f.type == "EmailAddress" and ("@" not in v or " " in v):
-                        details.append(f"{name}.csv line {i}: {f.name} = {v!r} is not an email address")
+                        details.append(f"{name}.csv riga {i}: {f.name} = {v!r} non è un indirizzo email")
                     elif f.type == "Phone" and (" " in v or not v.replace("+", "").isdigit()):
-                        details.append(f"{name}.csv line {i}: {f.name} = {v!r} is not a phone number")
+                        details.append(f"{name}.csv riga {i}: {f.name} = {v!r} non è un numero di telefono")
                 if pk_fields:
                     pk = tuple(row.get(f) for f in pk_fields)
                     if any(p is None for p in pk):
-                        details.append(f"{name}.csv line {i}: primary key {pk_fields} has an empty part")
+                        details.append(f"{name}.csv riga {i}: la chiave primaria {pk_fields} ha una parte vuota")
                     elif pk in seen_pk:
-                        details.append(f"{name}.csv line {i}: duplicate primary key {pk}")
+                        details.append(f"{name}.csv riga {i}: chiave primaria {pk} duplicata")
                     seen_pk.add(pk)
-        return CheckResult("Values respect type, length, nullability and primary key", not details, _trim(details))
+        return CheckResult("I valori rispettano tipo, lunghezza, null e chiave primaria", not details, _trim(details))
 
     # 2 ---------------------------------------------------------------------------------
     def _column_values(self, ref: FieldRef) -> Optional[set[Value]]:
@@ -224,18 +231,18 @@ class Checker:
             for member in members:
                 found = self._column_values(member)
                 if found is None:
-                    details.append(f"{member[0]}.{member[1]} is in a key group but not in the CSV")
+                    details.append(f"{member[0]}.{member[1]} fa parte di un gruppo di chiavi ma non è nel CSV")
                 else:
                     values[member] = found - {None}
             for member, member_values in values.items():
                 for other, other_values in values.items():
                     missing = sorted(member_values - other_values) if other != member else []
                     if missing:
-                        details.append(f"{len(missing)} {member[0]}.{member[1]} values have no row in "
+                        details.append(f"{len(missing)} valori di {member[0]}.{member[1]} non hanno una riga in "
                                        f"{other[0]}.{other[1]}: " + ", ".join(missing[:5]))
         details.extend(self._check_contact_rows())
         details.extend(self._check_scenario_links())
-        return CheckResult("Every key joins across tables", not details, _trim(details))
+        return CheckResult("Ogni chiave trova le sue righe nelle altre tabelle", not details, _trim(details))
 
     def _generated_contacts(self) -> set[str]:
         """The contacts of the cases, which must be the contacts the generator registered."""
@@ -250,7 +257,7 @@ class Checker:
         registered = {c.key for c in self.data.contacts}
         if expected != registered:
             odd = sorted(expected ^ registered)
-            details.append(f"the contacts of the cases and the registered contacts differ ({len(odd)}): "
+            details.append(f"i contatti dei casi e i contatti registrati non coincidono ({len(odd)}): "
                            + ", ".join(odd[:5]))
         for name in self.table_model.contact_tables:
             if name not in self.rows_of_contact:
@@ -258,13 +265,13 @@ class Checker:
             rows = self.rows_of_contact[name]
             missing = sorted(expected - set(rows))
             if missing:
-                details.append(f"{len(missing)} generated contacts have no row in {name}: " + ", ".join(missing[:5]))
+                details.append(f"{len(missing)} contatti generati non hanno righe in {name}: " + ", ".join(missing[:5]))
             extra = sorted(set(rows) - expected)
             if extra:
-                details.append(f"{name} has rows for {len(extra)} contacts that were not generated: " + ", ".join(extra[:5]))
+                details.append(f"{name} ha righe per {len(extra)} contatti che non sono stati generati: " + ", ".join(extra[:5]))
             several = sorted(key for key, found in rows.items() if len(found) > 1)
             if several:
-                details.append(f"{len(several)} contacts have several rows in {name}: " + ", ".join(several[:5]))
+                details.append(f"{len(several)} contatti hanno più righe in {name}: " + ", ".join(several[:5]))
         return details
 
     def _check_scenario_links(self) -> list[str]:
@@ -283,7 +290,7 @@ class Checker:
         for contact, scenarios in sorted(linked.items()):
             if len(scenarios) > 1:
                 shown = "; ".join(f"{key} in {', '.join(tables)}" for key, tables in sorted(scenarios.items()))
-                details.append(f"contact {contact} links to {len(scenarios)} scenario rows: {shown}")
+                details.append(f"il contatto {contact} è collegato a {len(scenarios)} righe di scenario: {shown}")
         return details
 
     def _contact_key_field(self, table: str) -> Optional[str]:
@@ -307,15 +314,15 @@ class Checker:
         query = self.table_model.entry_query
         entry = self.table_model.entry_table
         if query is None:
-            return CheckResult("Entry rows match the entry query", True, ["no entry query in the export; nothing to compare"])
+            return CheckResult(ENTRY_CHECK, True, ["nessuna entry query nell'export: non c'è nulla da confrontare"])
         if entry not in self.csv:
-            return CheckResult("Entry rows match the entry query", False, [f"{entry}.csv is missing"])
+            return CheckResult(ENTRY_CHECK, False, [f"{entry}.csv manca"])
         details: list[str] = []
         notes: list[str] = []
         self._excluded = self._exclusion_joins(query)
         joined = self._join_sources(query, details)
         if joined is None:
-            return CheckResult("Entry rows match the entry query", False, _trim(details))
+            return CheckResult(ENTRY_CHECK, False, _trim(details))
         activation = self.settings.activation_field or self.table_model.activation_field
         one_active = self.settings.one_active_scenario
         if one_active is None:
@@ -350,13 +357,13 @@ class Checker:
             if ok:
                 kept.append(combo)
         if any(isinstance(f, UnsupportedFilter) for f in query.filters):
-            notes.append("some entry query filters are not understood and were not checked")
+            notes.append("alcuni filtri della entry query non sono stati interpretati, quindi non sono stati verificati")
         if self._excluded:
-            notes.append(f"{', '.join(sorted(self._excluded))} is excluded in the entry query with a LEFT JOIN and an IS NULL "
-                         "filter: that join and filter were not checked, the generated contacts are taken to be new")
+            notes.append(f"la entry query esclude {', '.join(sorted(self._excluded))} con un LEFT JOIN e un filtro IS NULL: quel "
+                         "join e quel filtro non sono stati verificati, perché i contatti generati sono considerati nuovi")
         if one_active and activation is not None:
-            notes.append(f"the filter on the activation field {activation[0]}.{activation[1]} was not checked: only the first "
-                         "scenario is active in the CSV and the tester activates the others one at a time")
+            notes.append(f"il filtro sul campo di attivazione {activation[0]}.{activation[1]} non è stato verificato: nel CSV è "
+                         "attivo solo il primo scenario e il tester attiva gli altri uno alla volta")
 
         table = self.package.tables[entry]
         header, rows = self.csv[entry]
@@ -382,15 +389,15 @@ class Checker:
         actual = {tuple(r.get(p) for p in pk): r for r in rows}
         for key in expected:
             if key not in actual:
-                details.append(f"the entry query would produce a row with key {key} that is not in {entry}.csv")
+                details.append(f"la entry query produrrebbe una riga con chiave {key} che non è in {entry}.csv")
         for key, row in actual.items():
             if key not in expected:
-                details.append(f"{entry}.csv has a row with key {key} that the entry query would not produce")
+                details.append(f"{entry}.csv ha una riga con chiave {key} che la entry query non produrrebbe")
                 continue
             exp = expected[key]
             for col, v in exp.items():
                 if row.get(col) != v:
-                    details.append(f"{entry}.csv row {key}: {col} is {row.get(col)!r} but the entry query gives {v!r}")
+                    details.append(f"{entry}.csv, riga con chiave {key}: {col} vale {row.get(col)!r} ma la entry query dà {v!r}")
             wait_fields = {a.wait_field[1].lower() for a in self.package.journey.activities.values()
                            if a.wait_field is not None and a.wait_field[0].lower() == entry.lower()}
             default_email = (self.package.journey.default_email_field or "").lower()
@@ -404,8 +411,8 @@ class Checker:
                 if f.default is not None:
                     allowed.add(_normalise_default(f, f.default))
                 if v not in allowed and f.is_nullable:
-                    details.append(f"{entry}.csv row {key}: {f.name} is {v!r} but the entry query does not fill it")
-        return CheckResult("Entry rows match the entry query", not details, _trim(details) + notes)
+                    details.append(f"{entry}.csv, riga con chiave {key}: {f.name} vale {v!r} ma la entry query non lo popola")
+        return CheckResult(ENTRY_CHECK, not details, _trim(details) + notes)
 
     def _exclusion_joins(self, query: ParsedQuery) -> set[str]:
         """Tables the entry query excludes with ``LEFT JOIN X ON ... WHERE X.key IS NULL``: a contact enters
@@ -421,7 +428,7 @@ class Checker:
         sources = [s.table for s in query.sources if s.table not in self._excluded]
         for name in sources:
             if name not in self.csv:
-                details.append(f"source table {name} has no CSV to join")
+                details.append(f"la tabella sorgente {name} non ha un CSV da mettere in join")
                 return None
         combos: list[dict[str, dict[str, Value]]] = [{}]
         for name in sources:
@@ -490,27 +497,27 @@ class Checker:
             case = cases.get(contact.case_id)
             scenario = scenario_of.get(contact.scenario_id)
             if case is None or scenario is None:
-                details.append(f"contact {contact.key} belongs to an unknown case {contact.case_id}")
+                details.append(f"il contatto {contact.key} appartiene al caso sconosciuto {contact.case_id}")
                 continue
             lookup, link = self._contact_lookup(contact.key)
             if has_scenario_link and link != scenario.key:
-                details.append(f"contact {contact.key} (case {case.id}) is linked to scenario {link!r} by its own "
-                               f"rows but was created for scenario {scenario.key!r}")
+                details.append(f"il contatto {contact.key} (caso {case.id}) è collegato allo scenario {link!r} dalle "
+                               f"sue righe, ma è stato creato per lo scenario {scenario.key!r}")
             if case.random is None:
                 steps = self._simulate(walker, lookup, case, None)
                 if steps != case.steps:
-                    details.append(f"contact {contact.key} (case {case.id}) takes {_describe(steps)} instead of {_describe(case.steps)}")
+                    details.append(f"il contatto {contact.key} (caso {case.id}) segue il percorso {_describe(steps)} invece di {_describe(case.steps)}")
                 checked += 1
             else:
                 for branch in case.random.branches:
                     steps = self._simulate_branch(walker, lookup, case, branch)
                     expected = list(case.steps[:-1]) + [Step(case.random.activity_key, branch.outcome_key)] + list(branch.steps)
                     if steps != expected:
-                        details.append(f"contact {contact.key} (case {case.id}, random outcome {branch.outcome_key}) takes "
-                                       f"{_describe(steps)} instead of {_describe(expected)}")
+                        details.append(f"il contatto {contact.key} (caso {case.id}, branch {branch.outcome_key} del random split) "
+                                       f"segue il percorso {_describe(steps)} invece di {_describe(expected)}")
                     checked += 1
-        notes = [f"{checked} contact paths re-simulated from the written values"]
-        return CheckResult("Every contact re-simulated from the files takes its intended path", not details, _trim(details) + notes)
+        notes = [f"{checked} percorsi di contatti simulati dai valori scritti"]
+        return CheckResult("Ogni contatto simulato dai file segue il percorso previsto", not details, _trim(details) + notes)
 
     def _contact_lookup(self, contact_key: str):
         """The value lookup for one contact, read from the files only, and the scenario key it links to.
@@ -608,11 +615,11 @@ class Checker:
     def check_coverage(self) -> CheckResult:
         details: list[str] = []
         if self.coverage.stats.get("classes_incomplete"):
-            details.append("not every contact-level value combination was examined, so the list of reachable branches "
-                           "is incomplete (too many contact-level fields read by splits)")
+            details.append("non tutte le combinazioni di valori a livello di contatto sono state esaminate, quindi l'elenco dei "
+                           "branch raggiungibili è incompleto (gli split leggono troppi campi a livello di contatto)")
         if self.coverage.stats.get("exploration_truncated"):
-            details.append("the journey has more distinct paths than the generator explores, so the list of reachable "
-                           "branches is incomplete")
+            details.append("il journey ha più percorsi distinti di quanti il generatore ne esplori, quindi l'elenco dei branch "
+                           "raggiungibili è incompleto")
         cases = {c.id: c for c in self.coverage.cases}
         crossed_by = {c.id: _crossed_branches(c) for c in self.coverage.cases}
         crossed: set[tuple[str, str]] = set().union(*crossed_by.values())
@@ -620,46 +627,46 @@ class Checker:
         journey_branches = {(a.key, o.key) for a, o in graph.split_branches(self.package.journey)}
         listed = [(b.activity_key, b.outcome_key) for b in self.coverage.branches]
         for ref in sorted(journey_branches - set(listed)):
-            details.append(f"branch {ref} of the journey has no status in the report")
+            details.append(f"il branch {ref} del journey non ha uno stato nel report")
         for ref in sorted(set(listed) - journey_branches):
-            details.append(f"branch {ref} has a status but is not a branch of a split of the journey")
+            details.append(f"il branch {ref} ha uno stato ma non è un branch di uno split del journey")
         for ref in sorted(r for r in listed if listed.count(r) > 1):
-            details.append(f"branch {ref} has several statuses")
+            details.append(f"il branch {ref} ha più stati")
         splits = {a.key for a in self.package.journey.activities.values() if graph.is_split(a)}
         for ref in sorted(r for r in crossed if r[0] in splits and r not in journey_branches):
-            details.append(f"a case crosses {ref}, which is not a branch of the journey")
+            details.append(f"un caso attraversa {ref}, che non è un branch del journey")
         for b in self.coverage.branches:
             ref = (b.activity_key, b.outcome_key)
             if b.status == STATUS_NOT_COVERED:
                 if not b.reason:
-                    details.append(f"branch {ref} is not covered and has no reason")
+                    details.append(f"il branch {ref} non è coperto e non ha un motivo")
                 # Spec: with no real inbox the open/click cases still exist, but the branch is
                 # reported as not covered; such a branch names its cases in covered_by.
                 if ref in crossed and not b.covered_by:
-                    details.append(f"branch {ref} is reported as not covered but a case crosses it")
+                    details.append(f"il branch {ref} risulta non coperto ma un caso lo attraversa")
             else:
                 if not b.covered_by:
-                    details.append(f"branch {ref} is reported as {b.status} but no case covers it")
+                    details.append(f"il branch {ref} risulta {_status(b.status)} ma nessun caso lo copre")
                 if ref not in crossed:
-                    details.append(f"branch {ref} is reported as {b.status} but no case path crosses it")
+                    details.append(f"il branch {ref} risulta {_status(b.status)} ma il percorso di nessun caso lo attraversa")
             for cid in b.covered_by:
                 if cid not in cases:
-                    details.append(f"branch {ref} names an unknown case {cid}")
+                    details.append(f"il branch {ref} cita il caso sconosciuto {cid}")
                 elif ref not in crossed_by[cid]:
-                    details.append(f"branch {ref} names the case {cid} as covering it, but the path of {cid} does not cross it")
+                    details.append(f"il branch {ref} cita il caso {cid} tra quelli che lo coprono, ma il percorso di {cid} non lo attraversa")
         # Every case has its contacts in the files (spec: "covered by at least one case of 3 contacts").
         entry_contacts = self.rows_of_contact.get(self.table_model.entry_table, {})
         for c in self.coverage.cases:
             expected = self.settings.contacts_per_random_case if c.random is not None else self.settings.contacts_per_case
             if c.contact_count != expected:
-                details.append(f"case {c.id} has {c.contact_count} contacts instead of {expected}")
+                details.append(f"il caso {c.id} ha {c.contact_count} contatti invece di {expected}")
             if len(c.contact_keys) != c.contact_count:
-                details.append(f"case {c.id} lists {len(c.contact_keys)} contact keys for {c.contact_count} contacts")
+                details.append(f"il caso {c.id} elenca {len(c.contact_keys)} chiavi dei contatti per {c.contact_count} contatti")
             absent = [key for key in c.contact_keys if key not in entry_contacts]
             if absent:
-                details.append(f"case {c.id}: {len(absent)} of its {len(c.contact_keys)} contacts have no row in "
+                details.append(f"caso {c.id}: {len(absent)} dei suoi {len(c.contact_keys)} contatti non hanno righe in "
                                f"{self.table_model.entry_table}.csv: " + ", ".join(absent[:3]))
-        return CheckResult("Every reachable branch is covered and every uncovered branch has a reason", not details, _trim(details))
+        return CheckResult("Ogni branch raggiungibile è coperto e ogni branch non coperto ha un motivo", not details, _trim(details))
 
     # addresses -------------------------------------------------------------------------
     def check_addresses(self) -> CheckResult:
@@ -680,8 +687,8 @@ class Checker:
             for row in rows:
                 contact = by_key.get(row.get(ckey))
                 if contact is None:
-                    details.append(f"{name}: the row of {row.get(ckey)!r} is not a generated contact, so its address "
-                                   f"cannot be right")
+                    details.append(f"{name}: la riga di {row.get(ckey)!r} non è di un contatto generato, quindi il suo "
+                                   f"indirizzo non può essere corretto")
                     continue
                 case = cases.get(contact.case_id)
                 scenario = scenarios.get(contact.scenario_id)
@@ -697,16 +704,16 @@ class Checker:
                     if (name.lower(), ef.lower()) in pins:
                         pinned = pins[(name.lower(), ef.lower())]
                         if (row.get(ef) or None) != pinned:
-                            details.append(f"{name}: {contact.key} must have {ef} = {pinned!r} for its path but has {v!r}")
+                            details.append(f"{name}: {contact.key} deve avere {ef} = {pinned!r} per seguire il suo percorso, ma ha {v!r}")
                         continue
                     if pins and (row.get(ef) or None) in pins.values():
                         continue   # copied from the pinned column by the entry query
                     if contact.uses_real_inbox:
                         if not real or not (v.endswith("@" + real.split("@", 1)[1]) and f"+{contact.key}@" in v):
-                            details.append(f"{name}: {contact.key} needs the real inbox but has {v!r}")
+                            details.append(f"{name}: {contact.key} deve usare l'inbox reale ma ha {v!r}")
                     elif not v.endswith("@example.invalid"):
-                        details.append(f"{name}: {contact.key} should be undeliverable but has {v!r}")
-        return CheckResult("Only contacts with a manual action use the real inbox; all others are undeliverable", not details, _trim(details))
+                        details.append(f"{name}: {contact.key} dovrebbe avere un indirizzo non recapitabile ma ha {v!r}")
+        return CheckResult("Solo i contatti con un'azione manuale usano l'inbox reale, gli altri hanno indirizzi non recapitabili", not details, _trim(details))
 
 
 class _Skip:
@@ -745,6 +752,10 @@ def _crossed_branches(case: Case) -> set[tuple[str, str]]:
     return crossed
 
 
+def _status(status: str) -> str:
+    return _STATUS_WORDS.get(status, status)
+
+
 def _describe(steps: list[Step]) -> str:
     return " > ".join(f"{s.activity_key}/{s.outcome_key}" if s.outcome_key else s.activity_key for s in steps)
 
@@ -754,10 +765,10 @@ def check_determinism(first: dict[str, bytes], second: dict[str, bytes]) -> Chec
     details: list[str] = []
     for name in sorted(set(first) | set(second)):
         if name not in first or name not in second:
-            details.append(f"{name} is produced by only one of the two runs")
+            details.append(f"{name} è prodotto da uno solo dei due run")
         elif first[name] != second[name]:
-            details.append(f"{name} differs between two runs with the same input")
-    return CheckResult("Two runs with the same input give the same files", not details, details)
+            details.append(f"{name} è diverso tra due run con lo stesso input")
+    return CheckResult("Due run con lo stesso input danno gli stessi file", not details, details)
 
 
 def run_checks(package: Package, table_model: TableModel, coverage: CoverageResult, data: GeneratedData,
