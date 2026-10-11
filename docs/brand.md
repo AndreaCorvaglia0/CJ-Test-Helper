@@ -1,6 +1,6 @@
 # Brand e stile dell'interfaccia
 
-Regole di stile per la pagina Streamlit e per ogni interfaccia futura del progetto. La fonte è il documento "Lutech Brand Guidelines" (gennaio 2024); i numeri tra parentesi sono i capitoli di quel documento. Il PDF originale non è nella repository: le regole che servono a questo progetto sono riportate qui.
+Regole di stile per la pagina Streamlit e per ogni interfaccia futura del progetto. Chi modifica l'aspetto della pagina, persona o agente, parte da qui: lo stile è solo presentazione e non cambia mai la logica di generazione, le impostazioni o i file prodotti. La fonte è il documento "Lutech Brand Guidelines" (gennaio 2024); i numeri tra parentesi sono i capitoli di quel documento. Il PDF originale non è nella repository: le regole che servono a questo progetto sono riportate qui.
 
 Dove questo file prende una decisione che le linee guida non coprono (gli stati, i grigi chiari, il peso del testo a schermo), lo dice esplicitamente.
 
