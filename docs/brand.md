@@ -125,3 +125,21 @@ Stessa parola per lo stesso concetto, in tutta l'app e in tutti i file prodotti.
 | evidence (collected during the test) | evidenze |
 | re-simulation from the files | simulazione dai file |
 | determinism (two runs give the same files) | determinismo |
+| undeliverable address | indirizzo non recapitabile |
+| activation field, activation filter | campo di attivazione, filtro di attivazione |
+| key group | gruppo di chiavi |
+| source table, entry column, entry rows, entry procedure | tabella sorgente, colonna di ingresso, righe di ingresso, procedura di ingresso |
+| contact class | classe di contatti |
+| run order | ordine di esecuzione |
+| root causes (of not-covered branches) | cause a monte |
+| status (of a branch) | stato |
+| a query fills a table; fed by an automation | popola; alimentata da |
+| assumption, assumption to verify | assunzione, assunzione da verificare |
+| entry trigger, entry automation | trigger di ingresso, automation di ingresso |
+| start activity, incoming link | attività iniziale, collegamento in entrata |
+| SQL statement, select item, column, not understood | istruzione SQL, elemento della SELECT, colonna, non compreso |
+| statistics type (of an engagement split) | tipo di statistica |
+| default (value) | valore di default |
+| direct import, real inbox, time zone | import diretto, inbox reale, fuso orario |
+| How to run (report section) | Come eseguire i test |
+| tester, row (of a CSV) | tester, riga |
