@@ -894,12 +894,14 @@ class _Generator:
             # Spec, "Keys": primary keys are unique within each table and carry the run identifier.
             # Shorter forms are used when the field is too short for the full one.
             run = self.settings.run_id
-            for text in (f"TST_{run}_P{number:04d}", f"{run}_P{number:04d}", f"P{number:04d}", str(number)):
+            forms = [(f"TST_{run}_P{number:04d}", f"TST_{run}_P0001"), (f"{run}_P{number:04d}", f"{run}_P0001"),
+                     (f"P{number:04d}", "P0001"), (str(number), "1")]
+            for text, example in forms:
                 if not field.length or len(text) <= field.length:
                     if not text.startswith("TST_"):
                         self._warn(f"{table.name}.{field.name} is a primary key of "
                                    f"{_count(field.length, 'character')}, which is too short for TST_{run}_P keys. "
-                                   f"Shorter unique values are written, such as {text!r}.")
+                                   f"Shorter unique values are written, such as {example!r}.")
                     return text
             self._warn(f"{table.name}.{field.name} is a primary key of {_count(field.length, 'character')}, "
                        "which is too short for unique generated keys. Its values are cut and may repeat.")
