@@ -464,8 +464,8 @@ def test_validity_window_follows_the_settings():
 
 def test_unsupported_filter_and_ignored_select_columns_are_warned():
     data = run(build_world())
-    assert any("C.Region LIKE 'N%' OR C.Region IS NULL" in w and "not supported" in w for w in data.warnings)
-    assert any("FirstName" in w and "ignored" in w for w in data.warnings)
+    assert any("C.Region LIKE 'N%' OR C.Region IS NULL" in w and "non è supportato" in w for w in data.warnings)
+    assert any("FirstName" in w and "ignorate" in w for w in data.warnings)
 
 
 def test_one_active_scenario_activates_only_the_first_in_run_order():
@@ -475,7 +475,7 @@ def test_one_active_scenario_activates_only_the_first_in_run_order():
     assert configs["TST_R01_S01"]["ACTIVE"] == "True"
     assert configs["TST_R01_S02"]["ACTIVE"] == "False"
     assert [r["active_at_start"] for r in data.scenarios_rows] == ["yes", "no"]
-    assert not any("ACTIVE" in w and "instead of" in w for w in data.warnings)
+    assert not any("ACTIVE" in w and "il valore sarebbe stato" in w for w in data.warnings)
 
 
 def test_one_active_scenario_off_activates_every_scenario():
@@ -488,10 +488,10 @@ def test_activation_field_from_settings_must_be_boolean():
     world = build_world(activation_field=(CONFIG, "Region"))
     on, field, warnings = activation_setting(world.package, world.model, world.settings)
     assert (on, field) == (False, None)
-    assert any("not Boolean" in w for w in warnings)
+    assert any("non Boolean" in w for w in warnings)
     data = run(world)
     assert [r["active_at_start"] for r in data.scenarios_rows] == ["yes", "yes"]
-    assert any("Region" in w and "not Boolean" in w for w in data.warnings)
+    assert any("Region" in w and "non Boolean" in w for w in data.warnings)
 
 
 def test_activation_setting_resolves_the_schema_spelling():
@@ -506,7 +506,7 @@ def test_key_wins_over_a_split_value_with_a_warning():
         s.values[(CONFIG, "CampaignName")] = "DemoCampaign"
     data = run(world)
     assert [r["CampaignName"] for r in rows_of(data, CONFIG)] == ["TST_R01_S01", "TST_R01_S02"]
-    assert any("CampaignName" in w and "generated key" in w and "DemoCampaign" in w for w in data.warnings)
+    assert any("CampaignName" in w and "chiave generata" in w and "DemoCampaign" in w for w in data.warnings)
 
 
 def test_split_value_wins_over_a_filter_value_with_a_warning():
@@ -558,7 +558,7 @@ def test_missing_wait_between_email_and_engagement_is_warned():
     case_open.steps = [Step("DEC-1", "email"), Step("WAIT-1", "w1"), Step("EMAIL-1", "e1"), Step("ENG-1", "yes"),
                        Step("UPD-1", None)]
     data = run(world)
-    assert any("S01-C01" in w and "ENG-1" in w and "may not have time" in w for w in data.warnings)
+    assert any("S01-C01" in w and "ENG-1" in w and "potrebbe non avere il tempo" in w for w in data.warnings)
     assert not any("S01-C01" in w for w in run(build_world()).warnings)
 
 
@@ -569,7 +569,7 @@ def test_wait_field_listed_by_coverage_still_gets_the_wait_date():
         s.values[(CONFIG, "WAIT1")] = None
     data = run(world)
     assert [r["WAIT1"] for r in rows_of(data, CONFIG)] == [PLUS_24H, NOW]
-    assert any("WAIT1" in w and "wait date" in w for w in data.warnings)
+    assert any("WAIT1" in w and "data del wait" in w for w in data.warnings)
 
 
 def test_real_inbox_with_plus_addressing_only_for_manual_action_contacts():
@@ -591,13 +591,13 @@ def test_without_real_inbox_every_contact_is_undeliverable():
     data = run(build_world(real_inbox=""))
     assert not any(c.uses_real_inbox for c in data.contacts)
     assert all(c.email == f"{c.key}@example.invalid" for c in data.contacts)
-    assert any("No real inbox" in w for w in data.warnings)
+    assert any("Nessuna inbox reale" in w for w in data.warnings)
 
 
 def test_malformed_real_inbox_is_not_used():
     data = run(build_world(real_inbox="tester"))
     assert not any(c.uses_real_inbox for c in data.contacts)
-    assert any("'tester'" in w and "name@domain" in w for w in data.warnings)
+    assert any("'tester'" in w and "nome@dominio" in w for w in data.warnings)
 
 
 def test_phone_fields_get_the_fake_number_and_never_the_real_one():
@@ -667,7 +667,7 @@ def test_entry_key_column_missing_from_the_select_still_gets_the_key():
     world.model.entry_query.select = [i for i in world.model.entry_query.select if i.target_column != "ContactId"]
     data = run(world)
     assert [r["ContactId"] for r in rows_of(data, ENTRY)][:2] == ["TST_R01_C0001", "TST_R01_C0002"]
-    assert any(f"{ENTRY}.ContactId" in w and "does not fill it" in w for w in data.warnings)
+    assert any(f"{ENTRY}.ContactId" in w and "non lo riempie" in w for w in data.warnings)
 
 
 def test_split_on_an_entry_column_is_pushed_back_to_its_source():
@@ -711,7 +711,7 @@ def test_without_entry_query_the_entry_table_uses_the_general_rules():
     assert rows[0]["CampaignName"] == "TST_R01_S01"
     assert rows[0]["ActionId"] == "TST_R01_P0001"   # a primary key: unique and with the run identifier
     assert rows[0]["Email"] == "tester+TST_R01_C0001@example.com"
-    assert any("No entry query" in w for w in data.warnings)
+    assert any("Nessuna entry query" in w for w in data.warnings)
     assert data.placeholders == []
 
 
@@ -793,7 +793,7 @@ def test_filter_on_the_entry_table_itself_is_not_applied():
     world.model.entry_query.filters.append(IsNullFilter(ColumnRef(ENTRY, "ContactId")))
     data = run(world)
     assert rows_of(data, ENTRY)[0]["ContactId"] == "TST_R01_C0001"
-    assert any("filters on the entry table itself" in w for w in data.warnings)
+    assert any("filtra sulla tabella di ingresso stessa" in w for w in data.warnings)
 
 
 def test_several_filters_on_one_field_and_unknown_filter_columns_are_warned():
@@ -802,8 +802,8 @@ def test_several_filters_on_one_field_and_unknown_filter_columns_are_warned():
                                         EqualityFilter(ColumnRef("", "NoSuchColumn"), "x")]
     data = run(world)
     assert {r["Region"] for r in rows_of(data, CONFIG)} == {"North"}     # the first filter is used
-    assert any("several filters on DE_Config.Region" in w for w in data.warnings)
-    assert any("NoSuchColumn" in w and "matches no field" in w for w in data.warnings)
+    assert any("più filtri su DE_Config.Region" in w for w in data.warnings)
+    assert any("NoSuchColumn" in w and "non corrisponde a nessun campo" in w for w in data.warnings)
 
 
 def test_text_field_named_like_an_email_gets_a_placeholder_and_a_warning():
@@ -811,7 +811,7 @@ def test_text_field_named_like_an_email_gets_a_placeholder_and_a_warning():
     world.package.tables[MASTER].fields.append(Field("EmailStatus", "Text", 20, False, True, None, 13))
     data = run(world)
     assert rows_of(data, MASTER)[0]["EmailStatus"] == "TST_EmailStatus_1"
-    assert any("DE_Master.EmailStatus" in w and "named like an email" in w for w in data.warnings)
+    assert any("DE_Master.EmailStatus" in w and "con il nome di un indirizzo email" in w for w in data.warnings)
 
 
 def test_email_field_in_a_scenario_level_table():
@@ -843,13 +843,13 @@ def test_case_without_contacts_is_warned():
     data = run(world)
     assert len(data.contacts) == 53
     assert case_keys(world, "S02-C01")[0] == "TST_R01_C0004"
-    assert any("S01-C02" in w and "0 contacts" in w for w in data.warnings)
+    assert any("S01-C02" in w and "0 contatti" in w for w in data.warnings)
 
 
 def test_date_format_without_directives_is_warned():
     data = run(build_world(date_format="YYYY-MM-DD HH:MM"))
     assert rows_of(data, MASTER)[0]["BirthDate"] == "YYYY-MM-DD HH:MM"
-    assert any("no strftime directive" in w for w in data.warnings)
+    assert any("non contiene direttive strftime" in w for w in data.warnings)
 
 
 def test_entry_dates_use_the_local_converter_when_sqlparse_lite_is_missing(monkeypatch):
@@ -878,7 +878,7 @@ def test_entry_key_column_filled_by_an_unsupported_expression_still_gets_the_key
     entry_keys = [r["ContactId"] for r in rows_of(data, ENTRY)]
     assert entry_keys == [r["ContactId"] for r in rows_of(data, MASTER)] == all_contact_keys(world)
     assert entry_keys[:2] == ["TST_R01_C0001", "TST_R01_C0002"]
-    assert any(f"{ENTRY}.ContactId" in w and "key field" in w and "CAST(M.ContactId AS VARCHAR(50))" in w
+    assert any(f"{ENTRY}.ContactId" in w and "campo chiave" in w and "CAST(M.ContactId AS VARCHAR(50))" in w
                for w in data.warnings)
     assert not any(p.startswith(f"{ENTRY}.ContactId:") for p in data.placeholders)   # a key is not a placeholder
 
@@ -990,7 +990,7 @@ def test_wait_before_the_email_gets_the_plain_offset_and_the_wait_before_the_eng
     assert configs["TST_R01_S01"]["WAIT0"] == NOW            # before the email: it would only delay the send
     assert configs["TST_R01_S01"]["WAIT1"] == PLUS_24H       # between the email and ENG-1: time to open it
     assert configs["TST_R01_S02"]["WAIT0"] == configs["TST_R01_S02"]["WAIT1"] == NOW
-    assert not any("S01-C01" in w and "may not have time" in w for w in data.warnings)
+    assert not any("S01-C01" in w and "potrebbe non avere il tempo" in w for w in data.warnings)
 
 
 @pytest.mark.parametrize("length, expected, shortened", [
@@ -1008,7 +1008,7 @@ def test_primary_key_text_field_that_is_not_a_join_field_gets_unique_values_that
     assert len(set(values)) == len(values) and all(len(v) <= length for v in values)
     warned = [w for w in data.warnings if f"{CONFIG}.ConfigId" in w]
     assert bool(warned) == shortened
-    assert all("primary key" in w for w in warned)
+    assert all("chiave primaria" in w for w in warned)
 
 
 def build_email_key_world(**settings) -> World:
@@ -1070,7 +1070,7 @@ def test_scenarios_rows_leave_the_activation_field_empty_when_no_field_is_known(
     data = run(world)
     assert [r["active_at_start"] for r in data.scenarios_rows] == ["yes", "yes"]
     assert [r["activation_field"] for r in data.scenarios_rows] == [None, None]
-    assert any("no activation field" in w for w in data.warnings)
+    assert any("nessun campo di attivazione" in w for w in data.warnings)
 
 
 def test_filter_of_a_followed_query_leaves_its_column_empty_and_is_warned():

@@ -47,12 +47,12 @@ def generate(source, settings: Optional[Settings] = None, with_testbook: bool = 
 def summary_lines(result: GenerationResult) -> list[str]:
     s = result.coverage.stats
     lines = [
-        f"Journey: {result.package.journey.name} ({result.package.journey.activity_count} activities)",
-        f"Scenarios: {s.get('scenarios', 0)}  Cases: {s.get('cases', 0)}  Contacts: {s.get('contacts', 0)}",
-        f"Branches: {s.get('covered', 0)} covered, {s.get('covered_manual', 0)} covered with manual action, "
-        f"{s.get('not_covered', 0)} not covered",
-        "Tables: " + ", ".join(result.table_model.selected_tables),
+        f"Journey: {result.package.journey.name} ({result.package.journey.activity_count} attività)",
+        f"Scenari: {s.get('scenarios', 0)}  Casi: {s.get('cases', 0)}  Contatti: {s.get('contacts', 0)}",
+        f"Branch: {s.get('covered', 0)} coperti, {s.get('covered_manual', 0)} coperti con azione manuale, "
+        f"{s.get('not_covered', 0)} non coperti",
+        "Tabelle: " + ", ".join(result.table_model.selected_tables),
     ]
     for c in result.checks:
-        lines.append(("PASS  " if c.passed else "FAIL  ") + c.name)
+        lines.append(("Superato      " if c.passed else "Non superato  ") + c.name)
     return lines
