@@ -13,8 +13,10 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
   `python -m cjhelper "fixtures/CJ template complesso-v1.json" --out output --inbox tester@example.com` takes about 30 s.
 
 - `datagen.py` + `outputs.py` (71 tests): delivered. The whole suite (541 tests) passes.
-- `examples/`: 15 examples with hand-derived expected answers (13 small, 2 pilot variants); all pass through `tests/test_examples.py`.
-  First loop finding fixed: the coverage check misread the intended "no real inbox" state (cases exist, branch not covered).
+- `examples/`: 17 examples with hand-derived expected answers (15 small, 2 pilot variants with hand-proven minimum counts);
+  all pass through `tests/test_examples.py`. Loop findings fixed: the coverage check misread the intended "no real inbox" state;
+  an unknown condition operator crashed the run (now the split is unsupported, its branches not covered); a condition on a field
+  missing from the schema was guessed as text (now unsupported); a field pinned by an entry filter is no longer tried with other values.
 - `docs/assumptions.md`: Salesforce review, 35 assumptions to verify, 16 suspicious patterns, a one-day verification run plan.
   Acted on: the filters of the followed automation queries are applied to the generated rows (RUN_TIME stays empty).
 
