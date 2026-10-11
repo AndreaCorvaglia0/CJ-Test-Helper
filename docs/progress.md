@@ -39,7 +39,7 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
 
 ## Working rules from the user
 
-- Subagents on Opus at max effort for judgement-heavy work; Sonnet for simpler, possibly long, supervised tasks.
+- Subagents on Opus at max effort for judgement-heavy work; Sonnet for simpler, possibly long, supervised tasks and for simple checks.
 
 ## Design readings taken by the lead (not Salesforce assumptions)
 
