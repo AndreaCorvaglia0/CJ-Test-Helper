@@ -481,45 +481,63 @@ class _Generator:
         return sources
 
     def _index_filters(self) -> dict[tuple[str, str], list[object]]:
-        """Spec priority 3: "Field filtered by the entry query: a value that passes the filter"."""
+        """Spec priority 3: "Field filtered by the entry query: a value that passes the filter".
+
+        The filters of the queries followed back from the entry query (tables.py, "Source table")
+        are applied too, in order, because the automation's own queries must still find the rows
+        they expect: on the pilot, the configuration update query reads Config rows
+        ``WHERE RUN_TIME IS NULL`` and switches the scenario off after the run, so RUN_TIME stays
+        empty. The entry query comes first and wins when two queries filter the same field."""
         filters: dict[tuple[str, str], list[object]] = {}
-        query = self.model.entry_query
-        if query is None:
-            return filters
-        for flt in query.filters:
-            if isinstance(flt, UnsupportedFilter):
-                self._warn(
-                    f"The entry query filter {flt.text!r} is not supported, so the generated rows may not "
-                    "pass it and the contacts may not enter the journey."
-                )
-                continue
-            resolved = self._resolve_column(flt.column)
-            if resolved is None:
-                self._warn(
-                    f"The entry query filters on {flt.column.table or '?'}.{flt.column.column}, which matches "
-                    "no field of a source table, so the filter is not applied to the generated rows."
-                )
-                continue
-            table, field = resolved
-            if table is self._entry:
-                self._warn(
-                    f"The entry query filters on the entry table itself ({table.name}.{field.name}); the generated "
-                    "contacts are new, so the filter is not applied to the generated rows."
-                )
-                continue
-            if table.name.lower() not in self._levels:
-                self._warn(
-                    f"The entry query filters on {table.name}.{field.name}, but {table.name} gets no CSV, "
-                    "so the filter is not applied to the generated rows."
-                )
-                continue
-            same_field = filters.setdefault(_norm((table.name, field.name)), [])
-            if same_field and same_field[0] != flt:
-                self._warn(
-                    f"The entry query has several filters on {table.name}.{field.name}; only the first one "
-                    "is used to choose its value."
-                )
-            same_field.append(flt)
+        filter_source: dict[tuple[str, str], str] = {}
+        queries = list(self.model.source_queries) if self.model.source_queries else []
+        if self.model.entry_query is not None and self.model.entry_query not in queries:
+            queries.insert(0, self.model.entry_query)
+        for query in queries:
+            label = "The entry query" if query is self.model.entry_query else f"The query {query.name}"
+            for flt in query.filters:
+                if isinstance(flt, UnsupportedFilter):
+                    self._warn(
+                        f"{label} filter {flt.text!r} is not supported, so the generated rows may not "
+                        "pass it and the contacts may not enter the journey."
+                    )
+                    continue
+                resolved = self._resolve_column(flt.column, query)
+                if resolved is None:
+                    self._warn(
+                        f"{label} filters on {flt.column.table or '?'}.{flt.column.column}, which matches "
+                        "no field of a source table, so the filter is not applied to the generated rows."
+                    )
+                    continue
+                table, field = resolved
+                if table is self._entry:
+                    self._warn(
+                        f"{label} filters on the entry table itself ({table.name}.{field.name}); the generated "
+                        "contacts are new, so the filter is not applied to the generated rows."
+                    )
+                    continue
+                if table.name.lower() not in self._levels:
+                    self._warn(
+                        f"{label} filters on {table.name}.{field.name}, but {table.name} gets no CSV, "
+                        "so the filter is not applied to the generated rows."
+                    )
+                    continue
+                key = _norm((table.name, field.name))
+                same_field = filters.setdefault(key, [])
+                if same_field and same_field[0] != flt:
+                    if filter_source[key] == label:
+                        self._warn(
+                            f"{label} has several filters on {table.name}.{field.name}; only the first one "
+                            "is used to choose its value."
+                        )
+                    else:
+                        self._warn(
+                            f"{label} also filters on {table.name}.{field.name}; the filter of "
+                            f"{filter_source[key][0].lower() + filter_source[key][1:]} is used to choose its value."
+                        )
+                    continue
+                filter_source.setdefault(key, label)
+                same_field.append(flt)
         return filters
 
     def _resolve_activation(self) -> tuple[bool, Optional[FieldRef]]:
@@ -528,14 +546,14 @@ class _Generator:
             self._warn(message)
         return on, ref
 
-    def _resolve_column(self, column: ColumnRef) -> Optional[tuple[Table, Field]]:
+    def _resolve_column(self, column: ColumnRef, query=None) -> Optional[tuple[Table, Field]]:
         """A query column as (table, field) with the schema spelling; unqualified columns are looked
-        up in the entry query's source tables and must match exactly one of them."""
+        up in the query's source tables (the entry query by default) and must match exactly one of them."""
         if column.table:
             table = self._table(column.table)
             field = table.field(column.column) if table is not None else None
             return (table, field) if field is not None else None
-        query = self.model.entry_query
+        query = query if query is not None else self.model.entry_query
         matches: list[tuple[Table, Field]] = []
         for source in (query.sources if query is not None else []):
             table = self._table(source.table)
