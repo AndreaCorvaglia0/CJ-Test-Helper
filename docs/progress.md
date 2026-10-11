@@ -8,11 +8,11 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
 - `cjhelper/model.py`: the shared data model and module contract.
 - `docs/plan.md`: module responsibilities and function signatures. `docs/export-format.md`: export shape for hand-made examples.
 
-- `loader.py` + `criteria.py` (195 tests), `sqlparse_lite.py` (143 tests), `tables.py` (27 tests): delivered and reviewed.
+- `loader.py` + `criteria.py` (197 tests), `sqlparse_lite.py` (144 tests), `tables.py` (27 tests): delivered and reviewed.
 - `graph.py`, `coverage.py`, `checks.py`, `pipeline.py`, `__main__.py` (lead): first integrated run on the pilot passes all 7 trust checks.
   `python -m cjhelper "fixtures/CJ template complesso-v1.json" --out output --inbox tester@example.com` takes about 30 s.
 
-- `datagen.py` + `outputs.py` (71 tests): delivered. The whole suite (541 tests) passes.
+- `datagen.py` + `outputs.py` (88 tests): delivered. The whole suite (562 tests) passes.
 - `examples/`: 17 examples with hand-derived expected answers (15 small, 2 pilot variants with hand-proven minimum counts);
   all pass through `tests/test_examples.py`. Loop findings fixed: the coverage check misread the intended "no real inbox" state;
   an unknown condition operator crashed the run (now the split is unsupported, its branches not covered); a condition on a field
@@ -21,7 +21,7 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
   Acted on: the filters of the followed automation queries are applied to the generated rows (RUN_TIME stays empty).
 
 - Technical writer: README.md, report.md with a how-to-run section and root-cause grouping, testbook wording. Done.
-- Streamlit page `cjhelper/app.py` (22 tests), screenshots judged by the lead; UX review pending.
+- Streamlit page `cjhelper/app.py` (28 tests), screenshots judged by the lead; UX review done.
 - End-of-level review loop, part 1 (coverage and data generation reviewers, 34 findings): fixed in three batches, see the
   commits "Review fixes, batch 1/2/3". Highlights: length-aware 'other' values, email and phone fields read by splits, key
   fields read by splits, unsupported outcomes instead of whole splits, remainder evaluated last, nested random splits,
@@ -67,8 +67,8 @@ Routing: Sonnet for checks and mechanical work, Haiku for trivial tasks, Opus on
 
 ## Next
 
-- Run the example loop on priority 1; fix root causes; every bug becomes an example.
-- Priority 2: scenarios.csv and report.md wording. Priority 3: engagement and random splits end to end on the pilot. Priority 4: testbook. Priority 5: Streamlit page.
+- See "Remaining plan" above. After it: hand over with the final report; the assumptions in docs/assumptions.md stay to be
+  verified with a small real run.
 
 ## To report to the user (spec corrections suggested by the Salesforce review, not changed in code)
 
@@ -85,8 +85,8 @@ Routing: Sonnet for checks and mechanical work, Haiku for trivial tasks, Opus on
   `CHANNEL3 Equal 'EMAIL'` can never be true on paths that passed `CHANNEL2 Equal 'Email'` earlier. The spec's acceptance line says the
   four engagement Yes branches after channels 2 and 3 are unreachable "because all six engagement splits reference the first email";
   that is the reason only when text comparisons ignore case (then 91 branches stay unreachable). Both readings give the same status.
-- `RUN_TIME` (nullable Date, no condition, no filter) is filled with the generation time per the spec rule "other date fields";
-  the config-update query filters `WHERE RUN_TIME IS NULL`, so null may be more realistic. Spec rule kept.
+- `RUN_TIME` (nullable Date, no condition, no entry query filter) stays empty, not the generation time of the spec rule "other date fields";
+  the config-update query filters `WHERE RUN_TIME IS NULL`, so the generator keeps it empty. This differs from the spec rule.
 
 ## Facts checked on the pilot export
 

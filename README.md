@@ -62,7 +62,7 @@ Words used in these files:
 2. Choose one entry procedure and keep it for the whole test. The two are alternatives: doing both would duplicate the entry rows.
    - Direct import, the normal way in the spec. Import the CSVs of the linked tables first and the entry CSV last. Do not run the automation that fills the entry table.
    - Through the automation. Import every CSV except the entry CSV. Run the automation once per scenario: its entry query builds the entry rows from the imported rows.
-3. Run one scenario at a time, in run order. The CSVs start with the first scenario active. To make a scenario the active one, set the activation field to True on the row of the scenario and to False on every other row. The report names the field: `ACTIVE` of `DE_NCRM_AD_HOC_CONFIG` in the pilot.
+3. Run one scenario at a time, in run order. The CSVs start with the first scenario active. To make a scenario the active one, set the activation field to True on the row of the scenario and to False on every other row. The report names the field: `ACTIVE` of `DE_NCRM_AD_HOC_CONFIG` in the pilot. The activation field is a filter of the entry query and no split reads it. It holds a scenario back only when the automation runs that query.
 4. Wait until the contacts of a scenario have left the journey before you switch to the next one. Change nothing else and import nothing again, because the journey reads the split data when a contact reaches a split.
 5. Follow the testbook, one row per case. The steps give the waits, any manual action with its deadline, and the evidence to collect. Compare what you see with the Expected result.
 6. For a new generation, use a new run identifier. Keys of an earlier run are already in the tables, and a test contact is never reused.

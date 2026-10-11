@@ -33,12 +33,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    try:
+        generation_time = datetime.strptime(args.time, "%Y-%m-%d %H:%M") if args.time else None
+    except ValueError:
+        print(f"Error: --time must be written as YYYY-MM-DD HH:MM, not {args.time!r}", file=sys.stderr)
+        return 1
     settings = Settings(
         contacts_per_case=args.contacts, contacts_per_random_case=args.random_contacts,
         real_inbox=args.inbox, real_phone=args.phone, run_id=args.run_id,
         case_insensitive_text=args.case_insensitive,
         one_active_scenario=False if args.no_single_active else None,
-        generation_time=datetime.strptime(args.time, "%Y-%m-%d %H:%M") if args.time else None,
+        generation_time=generation_time,
     )
     try:
         result = pipeline.generate(args.export, settings, with_testbook=not args.no_testbook)
