@@ -186,35 +186,69 @@ _PLAIN_FIRST_WORD = re.compile(r"[a-z]+(?=[\s,:;]|$)")
 
 # Activity kinds in words, for the expected result.
 _KIND_WORDS = {
-    KIND_DECISION: "decision split",
-    KIND_ENGAGEMENT: "engagement split",
-    KIND_RANDOM: "random split",
-    KIND_WAIT_DURATION: "wait",
-    KIND_WAIT_ATTRIBUTE: "wait",
-    KIND_WAIT_STO: "send-time wait",
-    KIND_EMAIL: "email",
-    KIND_UPDATE: "update contact step",
+    KIND_DECISION: "questo decision split",
+    KIND_ENGAGEMENT: "questo engagement split",
+    KIND_RANDOM: "questo random split",
+    KIND_WAIT_DURATION: "questo wait",
+    KIND_WAIT_ATTRIBUTE: "questo wait",
+    KIND_WAIT_STO: "questo send-time wait",
+    KIND_EMAIL: "questa email",
+    KIND_UPDATE: "questo Update contact",
 }
+
+# Duration units as the export writes them (singular, lower case) -> Italian singular and plural.
+_UNIT_WORDS = {
+    "second": ("secondo", "secondi"),
+    "minute": ("minuto", "minuti"),
+    "hour": ("ora", "ore"),
+    "day": ("giorno", "giorni"),
+    "week": ("settimana", "settimane"),
+    "month": ("mese", "mesi"),
+    "year": ("anno", "anni"),
+}
+
+# A manual action (``ManualAction.kind``) in the forms the testbook needs.
+_ACTION_INFINITIVE = {"open": "aprire", "click": "cliccare"}
+_ACTION_TO_DO = {"open": "aprire l'email", "click": "cliccare un link nell'email"}
+_ACTION_IMPERATIVE = {"open": "apri l'email", "click": "clicca un link nell'email"}
+_ACTION_SUBJUNCTIVE = {"open": "aprano l'email", "click": "clicchino un link nell'email"}
+
+# The level of a table as the report writes it.
+_LEVEL_WORDS = {"contact": "contatto", "scenario": "scenario"}
+
+# The not-covered states of ``_explain_reason`` after "che" ("which is ...").
+_STATE_WORDS = {"unreachable": "non è raggiungibile", "not covered": "non è coperto"}
 
 
 def _show(value: Value) -> str:
-    return "(empty)" if value is None or value == "" else str(value)
+    return "(vuoto)" if value is None or value == "" else str(value)
 
 
 def _plural(count: int, singular: str, plural: str) -> str:
     return f"{count} {singular if count == 1 else plural}"
 
 
-def _verb(count: int) -> str:
-    return "is" if count == 1 else "are"
+def _covered(count: int, words: str = "coperto") -> str:
+    """"1 è coperto", "8 sono coperti", "1 non è coperto"; ``words`` is the singular adjective, with a
+    leading "non " when negated."""
+    negated = words.startswith("non ")
+    adjective = words[4:] if negated else words
+    verb = "è" if count == 1 else "sono"
+    shown = adjective if count == 1 else adjective[:-1] + "i"
+    return f"{count} {'non ' if negated else ''}{verb} {shown}"
+
+
+def _lie_behind(count: int) -> str:
+    """"1 branch si trova", "3 branch si trovano"."""
+    return f"{count} branch {'si trova' if count == 1 else 'si trovano'}"
 
 
 def _join_words(items: Iterable[str]) -> str:
-    """'a', 'a and b', 'a, b and c'."""
+    """'a', 'a e b', 'a, b e c'."""
     items = list(items)
     if len(items) <= 1:
         return "".join(items)
-    return ", ".join(items[:-1]) + " and " + items[-1]
+    return ", ".join(items[:-1]) + " e " + items[-1]
 
 
 def _sentence(text: str) -> str:
@@ -274,10 +308,13 @@ def _values_parts(package: Package, values: dict, order: list) -> tuple[Optional
     return one_table, items
 
 
-def _duration_text(amount, unit: Optional[str]) -> str:
+def _duration_text(amount, unit: Optional[str], english: bool = False) -> str:
     unit_text = (unit or "").lower()
     if amount == 1 and unit_text.endswith("s"):
         unit_text = unit_text[:-1]
+    words = None if english else _UNIT_WORDS.get(unit_text[:-1] if unit_text.endswith("s") else unit_text)
+    if words is not None:
+        unit_text = words[0] if amount == 1 else words[1]
     return f"{amount if amount is not None else '?'} {unit_text}".strip()
 
 
@@ -296,7 +333,7 @@ def _human_date_format(date_format: str) -> str:
 def _activity_name(journey: Journey, key: Optional[str]) -> str:
     """An activity by its name, or its key when it has none."""
     if key is None:
-        return "(none)"
+        return "(nessuna)"
     activity = journey.activities.get(key)
     return activity.name if activity is not None and activity.name else key
 
@@ -325,25 +362,25 @@ def _step_text(journey: Journey, step: Step) -> str:
 
 def _path_text(journey: Journey, steps: Iterable[Step]) -> str:
     texts = [_step_text(journey, step) for step in steps]
-    return " > ".join(texts) if texts else "(no activity)"
+    return " > ".join(texts) if texts else "(nessuna attività)"
 
 
 def _times(count: int) -> str:
-    return "once" if count == 1 else f"{count} times"
+    return "una volta" if count == 1 else f"{count} volte"
 
 
 def _emails_text(journey: Journey, keys: Iterable[str]) -> str:
-    """The emails received, by name, with a count when one is received more than once: "Demo Sky, 2 times"."""
+    """The emails received, by name, with a count when one is received more than once: "Demo Sky, 2 volte"."""
     counts: dict[str, int] = {}
     for key in keys:
         activity = journey.activities.get(key)
         name = (activity.email_name or activity.name or key) if activity is not None else key
         counts[name] = counts.get(name, 0) + 1
     if not counts:
-        return "none"
+        return "nessuna"
     if len(counts) == 1:
         name, count = next(iter(counts.items()))
-        return name if count == 1 else f"{name}, {count} times"
+        return name if count == 1 else f"{name}, {count} volte"
     return _join_words(f"{name} {_times(count)}" for name, count in counts.items())
 
 
@@ -368,13 +405,13 @@ def _writes_text(writes: Iterable[Write], current_time: set[tuple[str, str]] = f
     for (table, field), value in final.items():
         if value == _CURRENT_TIME_VALUE or (now_text and value == now_text
                                             and (table.lower(), field.lower()) in current_time):
-            shown = "the date and time when the step runs"
+            shown = "la data e l'ora in cui viene eseguito il passo"
         else:
             shown = _show(value)
         groups.setdefault(table, []).append(f"{field} = {shown}")
     parts = [f"{table}.{items[0]}" if len(items) == 1 else f"{table}: {', '.join(items)}"
              for table, items in groups.items()]
-    return "; ".join(parts) if parts else "none"
+    return "; ".join(parts) if parts else "nessuno"
 
 
 def _ordered_scenarios(result: GenerationResult) -> list[Scenario]:
@@ -383,10 +420,10 @@ def _ordered_scenarios(result: GenerationResult) -> list[Scenario]:
 
 def _key_range(keys: list[str]) -> str:
     if not keys:
-        return "none"
+        return "nessuno"
     if len(keys) <= 3:
         return ", ".join(keys)
-    return f"{keys[0]} to {keys[-1]}"
+    return f"da {keys[0]} a {keys[-1]}"
 
 
 def _smallest_branch(case: Case):
@@ -439,8 +476,8 @@ def _end_sentence(journey: Journey, last: Optional[Step]) -> str:
     if outcome is None or outcome.next is not None:
         return ""
     if len(activity.outcomes) > 1:
-        return f"The contacts leave the journey there, on its {outcome.label or outcome.key} path."
-    return f"The contacts leave the journey after this {_KIND_WORDS.get(activity.kind, 'activity')}."
+        return f"Lì i contatti escono dal journey, sul branch {outcome.label or outcome.key}."
+    return f"I contatti escono dal journey dopo {_KIND_WORDS.get(activity.kind, 'questa attività')}."
 
 
 # ---------------------------------------------------------------------------
@@ -449,12 +486,12 @@ def _end_sentence(journey: Journey, last: Optional[Step]) -> str:
 
 def _short_label(activity: Activity, outcome: Outcome) -> str:
     """An outcome label short enough for a test name. In a two-way split whose condition has a long
-    label, the outcomes read "yes" and "no"; any other long label is cut at a word."""
+    label, the outcomes read "sì" and "no"; any other long label is cut at a word."""
     conditions = [o for o in activity.outcomes if not o.is_remainder]
     remainders = [o for o in activity.outcomes if o.is_remainder]
     if (len(conditions) == 1 and len(remainders) == 1
             and len(conditions[0].label or conditions[0].key) > _LABEL_LIMIT):
-        return "yes" if outcome is conditions[0] else "no"
+        return "sì" if outcome is conditions[0] else "no"
     label = outcome.label or outcome.key
     if len(label) > _LABEL_LIMIT:
         return label[:_LABEL_LIMIT - 3].rsplit(" ", 1)[0] + "..."
@@ -473,8 +510,8 @@ def _name_part(journey: Journey, contact_fields: set[tuple[str, str]], step: Ste
         if activity.engagement_kind in ("open", "click") and outcome.when is not None:
             email = journey.activities.get(activity.engagement_ref or "")
             name = (email.email_name or email.name) if email is not None else (activity.name or activity.key)
-            verb = "opened" if activity.engagement_kind == "open" else "clicked"
-            return (f"{name} {verb}" if outcome.when else f"{name} not {verb}"), 3
+            verb = "aperta" if activity.engagement_kind == "open" else "cliccata"
+            return (f"{name} {verb}" if outcome.when else f"{name} non {verb}"), 3
         return f"{activity.name or activity.key}: {outcome.label or outcome.key}", 3
     if activity.kind != KIND_DECISION:
         return None
@@ -571,7 +608,7 @@ def _case_summary(context: _TestbookContext, case: Case) -> str:
     that tell least about this case are dropped first (lowest weight, then the part most cases share)."""
     given = (case.summary or "").strip()
     if not given:
-        return f"Path ending at {_activity_name(context.journey, case.end_activity_key)}"
+        return f"Percorso fino a {_activity_name(context.journey, case.end_activity_key)}"
     room = _NAME_LIMIT - len(case.id) - len(" - ")
     if " > " not in given and len(given) <= room:
         return given
@@ -594,25 +631,25 @@ def _description(context: _TestbookContext, scenario: Scenario, case: Case) -> s
     package = context.result.package
     table, items = _values_parts(package, scenario.values, coverage.scenario_fields)
     if not items:
-        scenario_line = f"Scenario {scenario.key}: no scenario-level value."
+        scenario_line = f"Scenario {scenario.key}: nessun valore a livello di scenario."
     elif table:
-        scenario_line = f"Scenario {scenario.key}, values in {table}: {'; '.join(items)}."
+        scenario_line = f"Scenario {scenario.key}, valori in {table}: {'; '.join(items)}."
     else:
         scenario_line = f"Scenario {scenario.key}: {'; '.join(items)}."
     table, items = _values_parts(package, case.contact_values, coverage.contact_fields)
     if not items:
-        contact_line = "Contact profile: no contact-level value."
+        contact_line = "Profilo del contatto: nessun valore a livello di contatto."
     elif table:
-        contact_line = f"Contact profile in {table}: {'; '.join(items)}."
+        contact_line = f"Profilo del contatto in {table}: {'; '.join(items)}."
     else:
-        contact_line = f"Contact profile: {'; '.join(items)}."
-    lines = [scenario_line, contact_line, f"Expected path: {_path_text(context.journey, case.steps)}."]
+        contact_line = f"Profilo del contatto: {'; '.join(items)}."
+    lines = [scenario_line, contact_line, f"Percorso atteso: {_path_text(context.journey, case.steps)}."]
     if case.random is not None:
         random_key = case.random.activity_key
-        lines.append(f"At the random split {_activity_label(context.journey, random_key)}, each contact takes "
-                     "one branch.")
+        lines.append(f"Al random split {_activity_label(context.journey, random_key)} ogni contatto prende uno dei "
+                     "branch.")
         for branch in case.random.branches:
-            path = _path_text(context.journey, branch.steps) if branch.steps else "the contact leaves the journey"
+            path = _path_text(context.journey, branch.steps) if branch.steps else "il contatto esce dal journey"
             lines.append(f"Branch {_branch_label(context.journey, random_key, branch)}: {path}.")
     return "\n".join(lines)
 
@@ -634,12 +671,13 @@ def _activation_text(context: _TestbookContext, scenario: Scenario) -> str:
     activation field"."""
     table, field = context.activation_ref
     key_column = _scenario_key_column(context, table)
-    row_text = f"the row with {key_column} {scenario.key}" if key_column else f"the row of scenario {scenario.key}"
+    row_text = f"riga con {key_column} {scenario.key}" if key_column else f"riga dello scenario {scenario.key}"
     if scenario is context.first_scenario:
-        return (f"Check that scenario {scenario.key} is the active one: in {table}, {field} is True on {row_text} "
-                "and False on every other row, as generated.")
-    return (f"When the contacts of the previous scenario have left the journey, activate scenario {scenario.key}: "
-            f"in {table}, set {field} to True on {row_text} and to False on every other row. Change nothing else.")
+        return (f"Verifica che lo scenario {scenario.key} sia quello attivo: in {table}, {field} è True sulla "
+                f"{row_text} e False su tutte le altre righe, come generato.")
+    return (f"Quando i contatti dello scenario precedente sono usciti dal journey, attiva lo scenario {scenario.key}: "
+            f"in {table}, imposta {field} a True sulla {row_text} e a False su tutte le altre righe. Non cambiare "
+            "altro.")
 
 
 def _entry_procedures(result: GenerationResult) -> Optional[str]:
@@ -653,24 +691,24 @@ def _preconditions(context: _TestbookContext, scenario: Scenario, case: Case) ->
     """Spec: "Which CSVs must be imported, which scenario must be active, and the keys of the test
     contacts"; "The 50 contacts of a random split case are given as a key range"."""
     entry_csv = table_file_name(context.result.table_model.entry_table)
-    first = f"Import these CSV files: {', '.join(context.csv_names)}."
+    first = f"Importa questi file CSV: {', '.join(context.csv_names)}."
     if len(context.csv_names) > 1 and entry_csv in context.csv_names:
         if _entry_procedures(context.result):
-            first += (f" Import {entry_csv} last, or leave it out if you run the entry through the automation: "
-                      "see How to run in report.md.")
+            first += (f" Importa {entry_csv} per ultimo, oppure non importarlo se esegui l'ingresso tramite "
+                      "l'automation: vedi la sezione Come eseguire i test di report.md.")
         else:
-            first += f" Import {entry_csv} last."
+            first += f" Importa {entry_csv} per ultimo."
     lines = [first]
     if context.one_active:
         table, field = context.activation_ref
-        lines.append(f"Active scenario: {scenario.key}. In {table}, {field} is True on its row only.")
+        lines.append(f"Scenario attivo: {scenario.key}. In {table}, {field} è True solo sulla sua riga.")
     else:
-        lines.append(f"Scenario: {scenario.key}. Every scenario is active at the same time.")
+        lines.append(f"Scenario: {scenario.key}. Tutti gli scenari sono attivi contemporaneamente.")
     keys = case.contact_keys
     if case.random is not None and len(keys) > 3:
-        lines.append(f"Test contacts ({len(keys)}): {keys[0]} to {keys[-1]}.")
+        lines.append(f"Contatti di test ({len(keys)}): da {keys[0]} a {keys[-1]}.")
     else:
-        lines.append(f"Test contacts ({len(keys)}): {', '.join(keys) if keys else 'none'}.")
+        lines.append(f"Contatti di test ({len(keys)}): {', '.join(keys) if keys else 'nessuno'}.")
     return "\n".join(lines)
 
 
@@ -684,17 +722,18 @@ def _wait_descriptions(context: _TestbookContext, scenario: Scenario, case: Case
         name = _activity_name(context.journey, activity.key)
         if activity.kind == KIND_WAIT_DURATION:
             duration = _duration_text(activity.wait_amount, activity.wait_unit)
-            texts.append(name if name.lower() == duration.lower() else f"{name} ({duration})")
+            english = _duration_text(activity.wait_amount, activity.wait_unit, english=True)
+            texts.append(name if name.lower() in (duration.lower(), english.lower()) else f"{name} ({duration})")
         elif activity.kind == KIND_WAIT_STO:
             if activity.wait_amount:
-                texts.append(f"{name}, a send-time wait of up to "
+                texts.append(f"{name}, un send-time wait di al massimo "
                              f"{_duration_text(activity.wait_amount, activity.wait_unit)}")
             else:
-                texts.append(f"{name}, a send-time wait whose delay is not known in advance")
+                texts.append(f"{name}, un send-time wait la cui attesa non è nota in anticipo")
         elif activity.kind == KIND_WAIT_ATTRIBUTE and activity.wait_field is not None:
             table, field = activity.wait_field
             value = _written_value(context, table, field, scenario, case)
-            until = f"until {value}, the date in {table}.{field}" if value else f"until the date in {table}.{field}"
+            until = f"fino al {value}, la data in {table}.{field}" if value else f"fino alla data in {table}.{field}"
             texts.append(f"{name}, {until}")
     return texts
 
@@ -745,20 +784,23 @@ def _manual_steps(context: _TestbookContext, scenario: Scenario, case: Case) -> 
     inbox = context.settings.real_inbox.strip()
     addresses = _join_words(context.emails.get(key, key) for key in case.contact_keys)
     for action in case.manual_actions:
-        verb = "open the email" if action.kind == "open" else "click a link in the email"
+        kind = "open" if action.kind == "open" else "click"
         split = _quoted_label(context.journey, action.activity_key)
         if not inbox:
-            steps.append(f"The split {split} needs the contacts to {verb} '{action.email_name}', but no real inbox "
-                         "was set, so the emails cannot be received. This test cannot reach its expected result until "
-                         "the data is generated again with a real inbox.")
+            steps.append(f"Lo split {split} richiede che i contatti {_ACTION_SUBJUNCTIVE[kind]} '{action.email_name}', "
+                         "ma non è stata indicata un'inbox reale, quindi le email non possono essere ricevute. Questo "
+                         "test non può raggiungere il risultato atteso finché i dati non vengono generati di nuovo con "
+                         "un'inbox reale.")
             continue
         wait, deadline = _deadline_wait(context, scenario, case, action)
-        when = f"Before {deadline}" if deadline else "As soon as the email arrives"
-        text = f"{when}, {verb} '{action.email_name}' sent to each contact of this test: {addresses}."
+        when = f"Prima del {deadline}" if deadline else "Appena arriva l'email"
+        text = (f"{when}, {_ACTION_IMPERATIVE[kind]} '{action.email_name}' inviata a ogni contatto di questo test: "
+                f"{addresses}.")
         if deadline and wait is not None:
-            text += (f" At that time the wait {_quoted_label(context.journey, wait.key)} ends, and the contacts go "
-                     f"on towards the split {split}.")
-        steps.append(text + f" The emails arrive in the inbox {inbox}. Do not open or click the emails of other tests.")
+            text += (f" A quell'ora termina il wait {_quoted_label(context.journey, wait.key)} e i contatti "
+                     f"proseguono verso lo split {split}.")
+        steps.append(text + f" Le email arrivano nell'inbox {inbox}. Non aprire e non cliccare le email degli altri "
+                     "test.")
     return steps
 
 
@@ -769,22 +811,22 @@ def _detailed_steps(context: _TestbookContext, scenario: Scenario, case: Case) -
     if context.one_active:
         steps.append(_activation_text(context, scenario))
     else:
-        steps.append(f"Check that the rows of scenario {scenario.key} are imported.")
+        steps.append(f"Verifica che le righe dello scenario {scenario.key} siano state importate.")
     entry_csv = table_file_name(context.result.table_model.entry_table)
     automation = _entry_procedures(context.result)
     if automation:
-        steps.append(f"Start the entry of scenario {scenario.key} with the procedure chosen in report.md, How to run: "
-                     f"the direct import of {entry_csv}, or one run of the automation {automation}. "
-                     "All the tests of this scenario start together.")
+        steps.append(f"Avvia l'ingresso dello scenario {scenario.key} con la procedura scelta nella sezione Come "
+                     f"eseguire i test di report.md: l'import diretto di {entry_csv} oppure un run dell'automation "
+                     f"{automation}. Tutti i test di questo scenario partono insieme.")
     else:
-        steps.append(f"Start the entry of journey {context.journey.name} from the imported rows of {entry_csv}. "
-                     "All the tests of this scenario start together.")
+        steps.append(f"Avvia l'ingresso nel journey {context.journey.name} dalle righe importate di {entry_csv}. "
+                     "Tutti i test di questo scenario partono insieme.")
     waits = _wait_descriptions(context, scenario, case)
-    steps.append("Wait for the contacts to pass the waits on their path: " + "; ".join(waits) + "." if waits else
-                 "There is no wait on the path.")
+    steps.append("Attendi che i contatti superino i wait del loro percorso: " + "; ".join(waits) + "." if waits else
+                 "Il percorso non ha wait.")
     steps.extend(_manual_steps(context, scenario, case))
-    steps.append("Collect the evidence for each contact: the emails received, the values written by the journey "
-                 "and the last activity reached.")
+    steps.append("Raccogli le evidenze per ogni contatto: le email ricevute, i valori scritti dal journey e l'ultima "
+                 "attività raggiunta.")
     return "\n".join(f"{number}. {text}" for number, text in enumerate(steps, 1))
 
 
@@ -796,34 +838,34 @@ def _expected_result(context: _TestbookContext, case: Case) -> str:
     now_text = _date(context.result.generation_time, context.settings)
     base_keys = [step.activity_key for step in case.steps]
     if case.random is None:
-        last = f"- Last activity reached: {_activity_label(journey, case.end_activity_key)}."
+        last = f"- Ultima attività raggiunta: {_activity_label(journey, case.end_activity_key)}."
         end = _end_sentence(journey, case.steps[-1] if case.steps else None)
         return "\n".join([
-            f"For each of these contacts: {_join_words(keys) if keys else 'none'}.",
-            f"- Emails received: {_emails_text(journey, case.emails_sent)}.",
-            f"- Values written by the journey: "
+            f"Per ciascuno di questi contatti: {_join_words(keys) if keys else 'nessuno'}.",
+            f"- Email ricevute: {_emails_text(journey, case.emails_sent)}.",
+            f"- Valori scritti dal journey: "
             f"{_writes_text(case.writes, _current_time_fields(journey, base_keys), now_text)}.",
             f"{last} {end}" if end else last,
         ])
     random_key = case.random.activity_key
     lines = [
-        f"For each of the {len(keys)} contacts {_key_range(keys)}, up to the random split "
+        f"Per ciascuno dei {len(keys)} contatti {_key_range(keys)}, fino al random split "
         f"{_activity_label(journey, random_key)}:",
-        f"- Emails received: {_emails_text(journey, case.emails_sent)}.",
-        f"- Values written by the journey: "
+        f"- Email ricevute: {_emails_text(journey, case.emails_sent)}.",
+        f"- Valori scritti dal journey: "
         f"{_writes_text(case.writes, _current_time_fields(journey, base_keys), now_text)}.",
-        "Then each contact takes one branch of the random split:",
+        "Poi ogni contatto prende uno dei branch del random split:",
     ]
     for branch in case.random.branches:
         branch_keys = base_keys + [step.activity_key for step in branch.steps]
-        lines.append(f"- {_branch_label(journey, random_key, branch)}: emails received: "
+        lines.append(f"- {_branch_label(journey, random_key, branch)}: email ricevute: "
                      f"{_emails_text(journey, branch.emails_sent)}; "
-                     f"values written: {_writes_text(branch.writes, _current_time_fields(journey, branch_keys), now_text)}; "
-                     f"last activity reached: {_activity_label(journey, branch.end_activity_key)}.")
+                     f"valori scritti: {_writes_text(branch.writes, _current_time_fields(journey, branch_keys), now_text)}; "
+                     f"ultima attività raggiunta: {_activity_label(journey, branch.end_activity_key)}.")
     smallest = _smallest_branch(case)
     if smallest is not None:
-        lines.append(f"Accepted range: {case.random.expected_low} to {case.random.expected_high} contacts on the "
-                     f"{_branch_label(journey, random_key, smallest)} side.")
+        lines.append(f"Intervallo accettato: da {case.random.expected_low} a {case.random.expected_high} contatti sul "
+                     f"branch {_branch_label(journey, random_key, smallest)}.")
     return "\n".join(lines)
 
 
@@ -831,33 +873,33 @@ def _note(context: _TestbookContext, scenario: Scenario, case: Case) -> str:
     """Spec: "Manual engagement required, or the accepted range for a random split case"."""
     notes = []
     for action in case.manual_actions:
-        verb = "open" if action.kind == "open" else "click"
+        verb = _ACTION_TO_DO["open" if action.kind == "open" else "click"]
         if not context.settings.real_inbox.strip():
-            notes.append(f"Manual engagement required: {verb} the email '{action.email_name}'. No real inbox was "
-                         "given, so this test cannot reach its expected result.")
+            notes.append(f"Azione manuale richiesta: {verb} '{action.email_name}'. Non è stata indicata un'inbox "
+                         "reale, quindi questo test non può raggiungere il risultato atteso.")
             continue
         wait, deadline = _deadline_wait(context, scenario, case, action)
-        text = f"Manual engagement required: {verb} the email '{action.email_name}'"
-        notes.append(text + (f" before {deadline}." if deadline else " as soon as it arrives."))
+        text = f"Azione manuale richiesta: {verb} '{action.email_name}'"
+        notes.append(text + (f" prima del {deadline}." if deadline else " appena arriva."))
         if deadline:
-            notes.append("If that time has passed before the email arrives, generate the data again.")
+            notes.append("Se l'email arriva dopo quell'ora, genera di nuovo i dati.")
         zone = wait.wait_timezone if deadline and wait is not None else None
         if zone:
-            notes.append(f"The wait {_quoted_label(context.journey, wait.key)} is set to {zone}. How Salesforce "
-                         "applies this time zone to the date is an assumption to verify, so the deadline could shift "
-                         "by some hours.")
+            notes.append(f"Il wait {_quoted_label(context.journey, wait.key)} è impostato sul fuso orario {zone}. "
+                         "Come Salesforce applica questo fuso orario alla data è un'assunzione da verificare, quindi "
+                         "la scadenza potrebbe spostarsi di qualche ora.")
     if case.random is not None:
         smallest = _smallest_branch(case)
-        label = _branch_label(context.journey, case.random.activity_key, smallest) if smallest else "smaller"
+        label = _branch_label(context.journey, case.random.activity_key, smallest) if smallest else "più piccolo"
         contacts = len(case.contact_keys)
-        notes.append(f"Random split: the contacts cannot be forced down one branch. Between {case.random.expected_low} "
-                     f"and {case.random.expected_high} of the {contacts} contacts are expected on the "
-                     f"{label} side.")
+        notes.append(f"Random split: non è possibile indirizzare i contatti su un branch preciso. Sul branch {label} "
+                     f"sono attesi da {case.random.expected_low} a {case.random.expected_high} dei {contacts} "
+                     "contatti.")
         chance = _range_chance(contacts, smallest.percentage if smallest else None,
                                case.random.expected_low, case.random.expected_high)
         if chance is not None:
-            notes.append(f"With a {smallest.percentage}% chance for each contact, this range holds in about "
-                         f"{chance}% of runs.")
+            notes.append(f"Con una probabilità del {smallest.percentage}% per ogni contatto, questo intervallo si "
+                         f"verifica in circa il {chance}% dei run.")
     return " ".join(notes)
 
 
@@ -972,9 +1014,10 @@ _ONE_TO_ONE_PATTERN = re.compile(r"^The one-to-one relationship '(?P<name>.*)' j
                                  r"but its primary key also has (?P<extra>.+?): several rows can match one contact\.?$")
 _CASE_TAILS = {
     "they are different values because text comparisons are case-sensitive (setting)":
-        "With the current setting, text comparisons are case-sensitive, so these are different values.",
+        "Con l'impostazione attuale i confronti di testo distinguono maiuscole e minuscole, quindi sono valori diversi.",
     "treated as the same value because text comparisons ignore letter case":
-        "With the current setting, text comparisons ignore letter case, so these count as one value.",
+        "Con l'impostazione attuale i confronti di testo non distinguono maiuscole e minuscole, quindi contano come "
+        "un solo valore.",
 }
 _IGNORED_COLUMNS = re.compile(r"^The entry query selects columns that (?P<table>.+?) does not have, so they are "
                               r"ignored: (?P<columns>.+?)\.?$")
@@ -989,16 +1032,16 @@ _REASON_UNSUPPORTED = re.compile(r"^unsupported activity: (?P<detail>.+)$")
 _REASON_BEHIND_BRANCH = re.compile(r"^unreachable: lies behind the branch .*?, which is (?P<reason>.+)$")
 _REASON_FIXED = {
     "unreachable: the split is reached but an earlier outcome always matches":
-        ("unreachable", "an earlier outcome of the split always matches first"),
+        ("unreachable", "un branch precedente dello split è sempre soddisfatto per primo"),
     "unreachable: the split is reached but this branch is never taken":
-        ("unreachable", "no simulated path takes this branch, although the split is reached"),
+        ("unreachable", "nessun percorso simulato prende questo branch, anche se lo split viene raggiunto"),
     "unreachable: no simulated path crosses this branch":
-        ("unreachable", "no simulated path crosses it"),
+        ("unreachable", "nessun percorso simulato lo attraversa"),
     "unreachable: no path from the start reaches this activity":
-        ("unreachable", "no path from the start of the journey reaches the split"),
+        ("unreachable", "nessun percorso dall'inizio del journey raggiunge lo split"),
     "needs an open or click but no real inbox is configured; the cases exist with undeliverable addresses":
-        ("not covered", "it needs an open or a click, but no real inbox was given. Its cases exist, with "
-                        "undeliverable addresses"),
+        ("not covered", "richiede un open o un click, ma non è stata indicata un'inbox reale. I suoi casi esistono, "
+                        "con indirizzi non recapitabili"),
 }
 
 
@@ -1006,16 +1049,16 @@ def _quoted_values(text: str) -> list[str]:
     """The values of a list such as ``'DM', 'Email', null``, as they should be shown."""
     shown = []
     for single, double, null in _QUOTED.findall(text):
-        shown.append("empty" if null else (f"'{single}'" if single or not double else f'"{double}"'))
+        shown.append("vuoto" if null else (f"'{single}'" if single or not double else f'"{double}"'))
     return shown
 
 
 def _or_values(text: str) -> str:
-    """``'DM', 'Email', 'OB'`` as ``'DM', 'Email' or 'OB'``."""
+    """``'DM', 'Email', 'OB'`` as ``'DM', 'Email' o 'OB'``."""
     values = _quoted_values(text)
     if not values:
-        return "one of " + text
-    return values[0] if len(values) == 1 else ", ".join(values[:-1]) + " or " + values[-1]
+        return "uno tra " + text
+    return values[0] if len(values) == 1 else ", ".join(values[:-1]) + " o " + values[-1]
 
 
 def _quoted_labels(journey: Journey, text: str) -> list[str]:
@@ -1025,8 +1068,8 @@ def _quoted_labels(journey: Journey, text: str) -> list[str]:
 
 
 def _drop_table(detail: str, condition: str) -> str:
-    """``T.F is always ...`` as ``F is always ...`` when the quoted condition already names ``T.F``."""
-    field = detail.split(" is always ", 1)[0]
+    """``T.F è sempre ...`` as ``F è sempre ...`` when the quoted condition already names ``T.F``."""
+    field = detail.split(" è sempre ", 1)[0]
     if "." in field and field in condition:
         return field.split(".", 1)[1] + detail[len(field):]
     return detail
@@ -1059,28 +1102,28 @@ def _explain_reason(reason: str, journey: Journey, activity_key: str,
         for part in match.group("detail").split("; "):
             seen = _REASON_ALWAYS_ONE_OF.match(part)
             if seen:
-                details.append(f"{seen.group('field')} is always {_or_values(seen.group('values'))}")
+                details.append(f"{seen.group('field')} è sempre {_or_values(seen.group('values'))}")
             elif part != "the condition is never true":
                 details.append(part)
         condition = _condition_text(journey, activity_key, outcome_key)
         if condition:
             details = [_drop_table(detail, condition) for detail in details]
-        head = (f"its condition {condition} never matches" if condition
-                else f"'{match.group('label')}' never matches")
+        head = (f"la sua condizione {condition} non è mai soddisfatta" if condition
+                else f"'{match.group('label')}' non è mai soddisfatto")
         if details:
-            return "unreachable", f"{head}: where the split is reached, {_join_words(details)}"
-        return "unreachable", f"{head} where the split is reached"
+            return "unreachable", f"{head}: dove lo split viene raggiunto, {_join_words(details)}"
+        return "unreachable", f"{head} dove lo split viene raggiunto"
     match = _REASON_FOLLOWS.match(reason)
     if match:
         parents = _join_words(_quoted_labels(journey, match.group("keys")))
-        return "unreachable", f"no combination of field values reaches the split, which follows {parents}"
+        return "unreachable", f"nessuna combinazione di valori dei campi raggiunge lo split, che segue {parents}"
     match = _REASON_BEHIND_UNSUPPORTED.match(reason)
     if match:
         blockers = _join_words(_quoted_labels(journey, match.group("keys")))
-        return "unreachable", f"it lies behind the unsupported activity {blockers}"
+        return "unreachable", f"si trova a valle dell'attività non supportata {blockers}"
     match = _REASON_UNSUPPORTED.match(reason)
     if match:
-        return "not covered", f"the split itself is not supported: {match.group('detail').rstrip('.')}"
+        return "not covered", f"lo split stesso non è supportato: {match.group('detail').rstrip('.')}"
     if reason.startswith("unreachable: "):
         return "unreachable", reason[len("unreachable: "):]
     return None, reason
@@ -1089,22 +1132,22 @@ def _explain_reason(reason: str, journey: Journey, activity_key: str,
 def _reason_sentence(reason: str, journey: Journey, activity_key: str, outcome_key: str) -> str:
     state, clause = _explain_reason(reason, journey, activity_key, outcome_key)
     if state == "unreachable":
-        return _sentence(f"Unreachable because {clause.rstrip('.')}")
+        return _sentence(f"Non raggiungibile perché {clause.rstrip('.')}")
     if state == "not covered":
-        return _sentence(f"Not covered because {clause.rstrip('.')}")
-    return _sentence(reason) if reason else "No reason given."
+        return _sentence(f"Non coperto perché {clause.rstrip('.')}")
+    return _sentence(reason) if reason else "Nessun motivo indicato."
 
 
 def _section_title(result: GenerationResult) -> str:
     settings = result.settings
     journey = result.package.journey.name
-    intro = "This report says what the test data covers, how to run it, and what it cannot cover."
+    intro = "Questo report indica cosa coprono i dati di test, come eseguire i test e cosa i dati non possono coprire."
     if TESTBOOK_FILE in result.files:
-        intro += f" The steps and the expected result of each test are in {TESTBOOK_FILE}."
+        intro += f" I passi e il risultato atteso di ogni test sono in {TESTBOOK_FILE}."
     return "\n\n".join([
-        f"# Test data report: {journey}",
-        f"Journey {journey}, from the package {result.package.name}. Generated on "
-        f"{_date(result.generation_time, settings)} with the run identifier {settings.run_id}.",
+        f"# Report dei dati di test: {journey}",
+        f"Journey {journey}, dal package {result.package.name}. Generato il "
+        f"{_date(result.generation_time, settings)} con il run identifier {settings.run_id}.",
         intro,
     ])
 
@@ -1118,58 +1161,63 @@ def _section_summary(result: GenerationResult) -> str:
     not_covered = statuses.count(STATUS_NOT_COVERED)
     statistical = sum(1 for b in coverage.branches if b.statistical and b.status != STATUS_NOT_COVERED)
     rows = [
-        ["Scenarios", len(coverage.scenarios)],
-        ["Statistical scenarios", sum(1 for s in coverage.scenarios if s.is_statistical)],
-        ["Cases", len(cases)],
-        ["Cases with a manual action", sum(1 for c in cases if c.manual_actions)],
-        ["Statistical cases, for a random split", sum(1 for c in cases if c.random is not None)],
-        ["Contacts", len(data.contacts)],
-        ["Contacts using the real inbox", sum(1 for c in data.contacts if c.uses_real_inbox)],
-        ["Branches", len(coverage.branches)],
-        ["Branches covered", covered],
-        ["Branches covered with manual action", manual],
-        ["Branches not covered", not_covered],
-        ["Branches covered only through a random split", statistical],
+        ["Scenari", len(coverage.scenarios)],
+        ["Scenari statistici", sum(1 for s in coverage.scenarios if s.is_statistical)],
+        ["Casi", len(cases)],
+        ["Casi con un'azione manuale", sum(1 for c in cases if c.manual_actions)],
+        ["Casi statistici, per un random split", sum(1 for c in cases if c.random is not None)],
+        ["Contatti", len(data.contacts)],
+        ["Contatti con l'inbox reale", sum(1 for c in data.contacts if c.uses_real_inbox)],
+        ["Branch", len(coverage.branches)],
+        ["Branch coperti", covered],
+        ["Branch coperti con un'azione manuale", manual],
+        ["Branch non coperti", not_covered],
+        ["Branch coperti solo tramite un random split", statistical],
     ]
-    text = (f"The test data has {_plural(len(coverage.scenarios), 'scenario', 'scenarios')}, "
-            f"{_plural(len(cases), 'case', 'cases')} and {_plural(len(data.contacts), 'contact', 'contacts')}. "
-            f"Of {_plural(len(coverage.branches), 'branch', 'branches')}, {covered} {_verb(covered)} covered, "
-            f"{manual} {_verb(manual)} covered with a manual action and {not_covered} {_verb(not_covered)} not covered.")
+    text = (f"I dati di test comprendono {_plural(len(coverage.scenarios), 'scenario', 'scenari')}, "
+            f"{_plural(len(cases), 'caso', 'casi')} e {_plural(len(data.contacts), 'contatto', 'contatti')}. "
+            f"Su {len(coverage.branches)} branch, {_covered(covered)}, "
+            f"{_covered(manual)} con un'azione manuale e {_covered(not_covered, 'non coperto')}.")
     tables = list(result.table_model.scenario_tables)
     if len(tables) == 1:
-        terms = f"A scenario is one row of {tables[0]}, shared by all its contacts."
+        terms = f"Uno scenario è una riga di {tables[0]}, condivisa da tutti i suoi contatti."
     elif tables:
-        terms = f"A scenario is one row in each of {_join_words(tables)}, shared by all its contacts."
+        terms = (f"Uno scenario è una riga in ciascuna delle tabelle {_join_words(tables)}, condivisa da tutti i "
+                 "suoi contatti.")
     else:
-        terms = "A scenario groups the cases that run together."
-    terms += (" A case groups contacts with the same contact values and the same manual actions, so they take the "
-              "same path up to any random split.")
+        terms = "Uno scenario raggruppa i casi che vengono eseguiti insieme."
+    terms += (" Un caso raggruppa contatti con gli stessi valori di contatto e le stesse azioni manuali, che quindi "
+              "seguono lo stesso percorso fino all'eventuale random split.")
     if TESTBOOK_FILE in result.files:
-        terms += f" Each case is one test in {TESTBOOK_FILE}."
-    return "\n\n".join(["## Summary", text, terms, _md_table(["Item", "Count"], rows)])
+        terms += f" Ogni caso è un test di {TESTBOOK_FILE}."
+    return "\n\n".join(["## Riepilogo", text, terms, _md_table(["Voce", "Numero"], rows)])
 
 
 def _section_checks(result: GenerationResult) -> str:
     if not result.checks:
-        return "## Trust checks\n\nNo trust check was run on these files."
+        return "## Trust check\n\nSu questi file non è stato eseguito alcun trust check."
     failed = [check for check in result.checks if not check.passed]
     total = len(result.checks)
     if failed:
-        text = f"{total - len(failed)} of the {total} trust checks passed. {len(failed)} failed: the details are below."
+        passed = total - len(failed)
+        text = (f"{passed} trust check su {total} {'è superato' if passed == 1 else 'sono superati'}, "
+                f"{len(failed)} {'non è superato' if len(failed) == 1 else 'non sono superati'}: i dettagli sono "
+                "qui sotto.")
     else:
-        text = "The trust check passed." if total == 1 else f"All {total} trust checks passed."
-    meaning = ("After writing the files, the generator reads them back and checks them. A failed check means that "
-               "the files may not do what this report and the testbook say. Do not import them until the failure "
-               "is explained.")
-    rows = [[check.name, "passed" if check.passed else "FAILED", len(check.details)] for check in result.checks]
-    parts = ["## Trust checks", text, meaning, _md_table(["Check", "Result", "Details"], rows)]
+        text = "Il trust check è superato." if total == 1 else f"Tutti i {total} trust check sono superati."
+    meaning = ("Dopo aver scritto i file, il generatore li rilegge e li controlla. Un check non superato significa che "
+               "i file potrebbero non fare quello che dicono questo report e il testbook. Non importarli finché la "
+               "causa non è chiarita.")
+    rows = [[check.name, "superato" if check.passed else "NON SUPERATO", len(check.details)]
+            for check in result.checks]
+    parts = ["## Trust check", text, meaning, _md_table(["Trust check", "Esito", "Dettagli"], rows)]
     for check in result.checks:
         if not check.details:
             continue
         shown = check.details[:_REPORT_DETAIL_LIMIT]
         lines = [f"### {check.name}", _bullets(_sentence(detail) for detail in shown)]
         if len(check.details) > len(shown):
-            lines.append(f"There are {len(check.details) - len(shown)} more.")
+            lines.append(f"Ce ne sono altri {len(check.details) - len(shown)}.")
         parts.append("\n\n".join(lines))
     return "\n\n".join(parts)
 
@@ -1178,15 +1226,18 @@ def _section_tables(result: GenerationResult) -> str:
     rows = []
     for role in result.table_model.tables.values():
         data = result.data.tables.get(role.name)
-        rows.append([role.name, ", ".join(sorted(role.roles)) or "none", role.level or "-",
+        rows.append([role.name, ", ".join(sorted(role.roles)) or "nessuno",
+                     _LEVEL_WORDS.get(role.level, role.level) if role.level else "-",
                      table_file_name(role.name) if role.selected else "no",
                      len(data.rows) if data is not None else "-", role.reason])
     selected = [table_file_name(name) for name in result.data.tables]
-    text = f"{_plural(len(selected), 'table gets', 'tables get')} a CSV: {_join_words(selected) if selected else 'none'}."
-    meaning = ("A table gets a CSV when the journey or the entry query reads it. A contact-level table has one row "
-               "per contact. A scenario-level table has one row per scenario, shared by its contacts.")
-    return "\n\n".join(["## Tables", text, meaning,
-                        _md_table(["Table", "Role", "Level", "CSV", "Rows", "Reason"], rows)])
+    text = (f"{_plural(len(selected), 'tabella riceve', 'tabelle ricevono')} un CSV: "
+            f"{_join_words(selected) if selected else 'nessuna'}.")
+    meaning = ("Una tabella riceve un CSV quando il journey o la entry query la leggono. Una tabella a livello di "
+               "contatto ha una riga per contatto. Una tabella a livello di scenario ha una riga per scenario, "
+               "condivisa dai suoi contatti.")
+    return "\n\n".join(["## Tabelle", text, meaning,
+                        _md_table(["Tabella", "Ruolo", "Livello", "CSV", "Righe", "Motivo"], rows)])
 
 
 def _activation_is_entry_filter(result: GenerationResult, ref: FieldRef) -> bool:
@@ -1211,56 +1262,59 @@ def _how_to_run(result: GenerationResult, context: _TestbookContext) -> str:
     entry_csv = table_file_name(model.entry_table)
     others = [name for name in context.csv_names if name != entry_csv]
     automation = _entry_procedures(result)
-    runs = "once for each scenario, with only that scenario active" if context.one_active else "once"
-    parts = ["### How to run"]
+    runs = "una volta per ogni scenario, con attivo solo quello scenario" if context.one_active else "una volta"
+    parts = ["### Come eseguire i test"]
     if automation and others:
-        parts.append("Choose one entry procedure before the first run and keep it for every scenario. Do not "
-                     "combine them: doing both would duplicate the entry rows.")
+        parts.append("Scegli una procedura di ingresso prima del primo run e mantienila per tutti gli scenari. Non "
+                     "combinare le due procedure: eseguirle entrambe duplicherebbe le righe di ingresso.")
         parts.append(_bullets([
-            f"Direct import, the normal way in the spec. Import {_join_words(others)} first, then {entry_csv}, so "
-            f"that every row a contact needs is in place before it enters. Do not run the automation {automation}.",
-            f"Through the automation. Import {_join_words(others)}, but not {entry_csv}. Run the automation "
-            f"{automation} {runs}. Its entry query {model.entry_query.name} builds the entry rows from the "
-            "imported rows.",
+            f"Import diretto, la procedura normale secondo la spec. Importa prima {_join_words(others)}, poi "
+            f"{entry_csv}, così ogni riga che serve a un contatto è già presente quando entra. Non eseguire "
+            f"l'automation {automation}.",
+            f"Tramite l'automation. Importa {_join_words(others)}, ma non {entry_csv}. Esegui l'automation "
+            f"{automation} {runs}. La sua entry query {model.entry_query.name} costruisce le righe di ingresso a "
+            "partire dalle righe importate.",
         ]))
-        parts.append(f"Assumption to verify before the first run: importing {entry_csv} alone may admit nobody, "
-                     f"because the automation {automation} runs the entry of this journey. The direct import may then "
-                     "also need a Run Once of that automation with only its journey-entry activity selected. The "
-                     "Salesforce review in docs/assumptions.md explains this in rows 23 to 27.")
+        parts.append(f"Assunzione da verificare prima del primo run: importare solo {entry_csv} potrebbe non far "
+                     f"entrare nessuno, perché l'ingresso in questo journey lo esegue l'automation {automation}. In "
+                     "quel caso anche l'import diretto potrebbe richiedere un Run Once di quell'automation con "
+                     "selezionata solo l'attività di ingresso nel journey. La review Salesforce in docs/assumptions.md "
+                     "lo spiega nelle righe da 23 a 27.")
     elif others:
-        parts.append(f"Import {_join_words(others)} first, then {entry_csv}, so that every row a contact needs is in "
-                     "place before it enters.")
+        parts.append(f"Importa prima {_join_words(others)}, poi {entry_csv}, così ogni riga che serve a un contatto è "
+                     "già presente quando entra.")
     else:
-        parts.append(f"Import {entry_csv}.")
+        parts.append(f"Importa {entry_csv}.")
     if context.one_active and context.first_scenario is not None:
         table, field = context.activation_ref
         key_column = _scenario_key_column(context, table)
-        row = f" The row of a scenario is the one whose {key_column} is the scenario key." if key_column else ""
-        parts.append("Run one scenario at a time, in run order. Scenarios with a manual action come first, because "
-                     f"their deadline is a fixed date and time. To make a scenario the active one, set {field} in "
-                     f"{table} to True on the row of the scenario and to False on every other row.{row}")
+        row = f" La riga di uno scenario è quella in cui {key_column} è la chiave dello scenario." if key_column else ""
+        parts.append("Esegui uno scenario alla volta, in ordine di esecuzione. Gli scenari con un'azione manuale "
+                     "vengono per primi, perché la loro scadenza è una data e un'ora fisse. Per rendere attivo uno "
+                     f"scenario, imposta {field} in {table} a True sulla riga dello scenario e a False su tutte le "
+                     f"altre righe.{row}")
         parts.append(_numbered([
-            f"The CSVs start with {context.first_scenario.key} as the active scenario, so the first run needs no "
-            "change.",
-            "Wait until the contacts of a scenario have left the journey.",
-            "Then make the next scenario the active one. Change nothing else and import nothing again, because the "
-            "journey reads these rows while contacts are in it.",
+            f"I CSV partono con {context.first_scenario.key} come scenario attivo, quindi il primo run non richiede "
+            "modifiche.",
+            "Aspetta che i contatti di uno scenario siano usciti dal journey.",
+            "Poi rendi attivo lo scenario successivo. Non cambiare altro e non reimportare nulla, perché il journey "
+            "legge queste righe mentre i contatti sono al suo interno.",
         ]))
         if automation and _activation_is_entry_filter(result, context.activation_ref):
-            parts.append(f"{field} is a filter of the entry query, and no split reads it: it holds a scenario back "
-                         "only when the automation runs that query.")
+            parts.append(f"{field} è un filtro della entry query e nessuno split lo legge: trattiene uno scenario "
+                         "solo quando l'automation esegue quella query.")
     elif result.coverage.scenarios:
-        parts.append("Every scenario is active in the CSVs, so the scenarios run together.")
+        parts.append("Nei CSV tutti gli scenari sono attivi, quindi vengono eseguiti insieme.")
     parts.extend(_contact_address_text(result))
     for case in result.coverage.cases:
         smallest = _smallest_branch(case)
         if case.random is None or smallest is None:
             continue
         journey = result.package.journey
-        parts.append(f"The statistical case {case.id} has {len(case.contact_keys)} contacts for the random split "
-                     f"{_activity_label(journey, case.random.activity_key)}. Each contact takes a branch at random. "
-                     f"The accepted range is {case.random.expected_low} to {case.random.expected_high} contacts on "
-                     f"the {_branch_label(journey, case.random.activity_key, smallest)} side.")
+        parts.append(f"Il caso statistico {case.id} ha {len(case.contact_keys)} contatti per il random split "
+                     f"{_activity_label(journey, case.random.activity_key)}. Ogni contatto prende un branch a caso. "
+                     f"L'intervallo accettato è da {case.random.expected_low} a {case.random.expected_high} contatti "
+                     f"sul branch {_branch_label(journey, case.random.activity_key, smallest)}.")
     return "\n\n".join(parts)
 
 
@@ -1268,18 +1322,18 @@ def _contact_address_text(result: GenerationResult) -> list[str]:
     """Spec, "Email": the real inbox with plus-addressing for contacts that must open or click; an
     undeliverable address for all others."""
     kinds = _unique(action.kind for case in result.coverage.cases for action in case.manual_actions)
-    actions = _join_words(kinds).replace(" and ", " or ") if kinds else ""
+    actions = _join_words(_ACTION_INFINITIVE.get(kind, kind) for kind in kinds).replace(" e ", " o ") if kinds else ""
     inbox = result.settings.real_inbox.strip()
     real = [contact for contact in result.data.contacts if contact.uses_real_inbox]
-    undeliverable = f"an undeliverable address ending in @{UNDELIVERABLE_DOMAIN}"
+    undeliverable = f"un indirizzo non recapitabile che termina con @{UNDELIVERABLE_DOMAIN}"
     if kinds and inbox and real:
-        return [f"Contacts that must {actions} an email get the real inbox {inbox} with plus-addressing, for "
-                f"example {real[0].email}. Every other contact gets {undeliverable}."]
+        return [f"I contatti che devono {actions} un'email ricevono l'inbox reale {inbox} con plus-addressing, per "
+                f"esempio {real[0].email}. Tutti gli altri contatti ricevono {undeliverable}."]
     if kinds:
-        return [f"No real inbox was given. The contacts that must {actions} an email get {undeliverable}, so "
-                "those branches are not covered."]
+        return [f"Non è stata indicata un'inbox reale. I contatti che devono {actions} un'email ricevono "
+                f"{undeliverable}, quindi quei branch non sono coperti."]
     if result.data.contacts:
-        return [f"No contact needs to open or click an email, so every contact gets {undeliverable}."]
+        return [f"Nessun contatto deve aprire o cliccare un'email, quindi tutti i contatti ricevono {undeliverable}."]
     return []
 
 
@@ -1294,14 +1348,14 @@ def _section_scenarios(result: GenerationResult) -> str:
         one_table = one_table or table
         keys = [key for case in scenario.cases for key in case.contact_keys]
         active = not context.one_active or scenario is context.first_scenario
-        scenario_rows.append([scenario.key, scenario.run_order, "yes" if active else "no",
+        scenario_rows.append([scenario.key, scenario.run_order, "sì" if active else "no",
                               str(bool(scenario.has_manual_action)), str(bool(scenario.is_statistical)),
                               len(scenario.cases), len(keys),
-                              f"{keys[0] if keys else '-'} to {keys[-1] if keys else '-'}",
-                              "; ".join(items) or "none"])
-    list_intro = "The scenarios in run order, as in scenarios.csv."
+                              f"da {keys[0] if keys else '-'} a {keys[-1] if keys else '-'}",
+                              "; ".join(items) or "nessuno"])
+    list_intro = "Gli scenari in ordine di esecuzione, come in scenarios.csv."
     if one_table:
-        list_intro += f" The values are fields of {one_table}."
+        list_intro += f" I valori sono campi di {one_table}."
     case_rows = []
     for scenario in _ordered_scenarios(result):
         for case in scenario.cases:
@@ -1309,38 +1363,39 @@ def _section_scenarios(result: GenerationResult) -> str:
                 smallest = _smallest_branch(case)
                 label = _branch_label(journey, case.random.activity_key, smallest) if smallest else "?"
                 special = (f"random split {_activity_label(journey, case.random.activity_key)}: "
-                           f"{case.random.expected_low} to {case.random.expected_high} contacts expected on the "
-                           f"{label} side")
+                           f"da {case.random.expected_low} a {case.random.expected_high} contatti attesi sul "
+                           f"branch {label}")
             else:
                 actions = []
                 for action in case.manual_actions:
                     deadline = _deadline(context, scenario, case, action)
-                    when = f"before {deadline}" if deadline else "as soon as it arrives"
-                    actions.append(f"{action.kind} '{action.email_name}' {when}")
+                    when = f"prima del {deadline}" if deadline else "appena arriva"
+                    actions.append(f"{action.kind} di '{action.email_name}' {when}")
                 special = "; ".join(actions)
             case_rows.append([case.id, scenario.key, len(case.contact_keys), _key_range(case.contact_keys),
-                              special or "none", _activity_label(journey, case.end_activity_key),
+                              special or "nessuna", _activity_label(journey, case.end_activity_key),
                               _case_summary(context, case)])
-    cases_intro = "A case is a group of contacts that share one expected result."
+    cases_intro = "Un caso è un gruppo di contatti con lo stesso risultato atteso."
     if TESTBOOK_FILE in result.files:
-        cases_intro += f" Each case is one test in {TESTBOOK_FILE}, under the same name."
+        cases_intro += f" Ogni caso è un test di {TESTBOOK_FILE}, con lo stesso nome."
     return "\n\n".join([
-        "## Scenarios",
+        "## Scenari",
         _how_to_run(result, context),
-        "### Scenario list",
+        "### Elenco degli scenari",
         list_intro,
-        _md_table(["Scenario", "Run order", "Active at start", "Manual action", "Statistical", "Cases", "Contacts",
-                   "Contact keys", "Values"], scenario_rows),
-        "### Cases",
+        _md_table(["Scenario", "Ordine di esecuzione", "Attivo all'inizio", "Azione manuale", "Statistico", "Casi",
+                   "Contatti", "Chiavi dei contatti", "Valori"], scenario_rows),
+        "### Casi",
         cases_intro,
-        _md_table(["Case", "Scenario", "Contacts", "Contact keys", "Manual action or random split",
-                   "Last activity", "Summary"], case_rows),
+        _md_table(["Caso", "Scenario", "Contatti", "Chiavi dei contatti", "Azione manuale o random split",
+                   "Ultima attività", "Sintesi"], case_rows),
     ])
 
 
 def _root_text(journey: Journey, root: tuple[str, str], branches: list[BranchStatus],
                by_ref: dict) -> str:
-    """One line per root cause: "N branches lie behind 'split: outcome' (KEY), which is unreachable because ..."."""
+    """One line per root cause: "N branch si trovano a valle di 'split: outcome' (KEY), che non è raggiungibile
+    perché ..."."""
     activity = journey.activities.get(root[0])
     name = (activity.name or root[0]) if activity is not None else root[0]
     label = _outcome_label(journey, root[0], root[1])
@@ -1350,12 +1405,12 @@ def _root_text(journey: Journey, root: tuple[str, str], branches: list[BranchSta
         inherited = _REASON_BEHIND_BRANCH.match(branches[0].reason or "")
         reason = inherited.group("reason") if inherited else ""
     state, clause = _explain_reason(reason, journey, root[0], root[1])
-    count = _plural(len(branches), "branch lies", "branches lie")
+    count = _lie_behind(len(branches))
     if state is None:
-        tail = f"which is not covered: {clause}" if clause else "which is not covered"
+        tail = f"che non è coperto: {clause}" if clause else "che non è coperto"
     else:
-        tail = f"which is {state} because {clause}"
-    return f"{count} behind '{name}: {label}' ({root[0]}), {tail.rstrip('.')}."
+        tail = f"che {_STATE_WORDS.get(state, state)} perché {clause}"
+    return f"{count} a valle di '{name}: {label}' ({root[0]}), {tail.rstrip('.')}."
 
 
 def _behind_list(journey: Journey, branches: list[BranchStatus]) -> str:
@@ -1370,12 +1425,12 @@ def _behind_list(journey: Journey, branches: list[BranchStatus]) -> str:
         entry = key
         if activity is not None and set(keys) != {o.key for o in activity.outcomes}:
             complete = False
-            entry = f"{key} for {_join_words(repr(_outcome_label(journey, key, o)) for o in keys)}"
+            entry = f"{key} per {_join_words(repr(_outcome_label(journey, key, o)) for o in keys)}"
         name = (activity.name or key) if activity is not None else key
         by_name.setdefault(name, []).append(entry)
     count = len(outcomes)
-    which = "this split" if count == 1 else f"these {count} splits"
-    lead = f"They are all the outcomes of {which}:" if complete else f"They are outcomes of {which}:"
+    which = "questo split" if count == 1 else f"questi {count} split"
+    lead = f"Sono tutti i branch di {which}:" if complete else f"Sono branch di {which}:"
     items = []
     for name, keys in by_name.items():
         keys = sorted(keys, key=_natural_key)
@@ -1387,7 +1442,7 @@ def _section_not_covered(result: GenerationResult) -> str:
     journey = result.package.journey
     missing = [b for b in result.coverage.branches if b.status == STATUS_NOT_COVERED]
     if not missing:
-        return "## Branches not covered\n\nEvery branch is covered."
+        return "## Branch non coperti\n\nTutti i branch sono coperti."
     by_ref = {(b.activity_key, b.outcome_key): b for b in result.coverage.branches}
     behind_branch: dict[tuple[str, str], list[BranchStatus]] = {}
     behind_unsupported: dict[str, list[BranchStatus]] = {}
@@ -1402,28 +1457,30 @@ def _section_not_covered(result: GenerationResult) -> str:
     grouped = sum(len(v) for v in behind_branch.values()) + sum(len(v) for v in behind_unsupported.values())
     causes = []
     if behind_branch:
-        causes.append(_plural(len(behind_branch), "branch that no contact can reach",
-                              "branches that no contact can reach"))
+        causes.append(_plural(len(behind_branch), "branch che nessun contatto può raggiungere",
+                              "branch che nessun contatto può raggiungere"))
     if behind_unsupported:
-        causes.append(_plural(len(behind_unsupported), "unsupported activity", "unsupported activities"))
-    intro = f"{_plural(len(missing), 'branch is', 'branches are')} not covered."
+        causes.append(_plural(len(behind_unsupported), "attività non supportata", "attività non supportate"))
+    intro = f"{_plural(len(missing), 'branch non è coperto', 'branch non sono coperti')}."
     if grouped and own:
-        intro += (f" {grouped} of them lie behind {' or '.join(causes)}, explained first. The other {len(own)} "
-                  f"{'has a reason of its own' if len(own) == 1 else 'have reasons of their own'}, in the table at "
-                  "the end.")
+        intro += (f" Di questi, {grouped} {'si trova' if grouped == 1 else 'si trovano'} a valle di "
+                  f"{' o '.join(causes)}: le cause sono spiegate per prime. "
+                  f"{'Il restante ha un motivo proprio' if len(own) == 1 else f'I restanti {len(own)} hanno ciascuno un motivo proprio'}, "
+                  "indicato nella tabella alla fine.")
     elif grouped:
-        intro += f" {'It lies' if grouped == 1 else 'They all lie'} behind {' or '.join(causes)}, explained below."
-    parts = ["## Branches not covered", intro]
+        intro += (f" {'Si trova' if grouped == 1 else 'Si trovano tutti'} a valle di {' o '.join(causes)}, come "
+                  "spiegato di seguito.")
+    parts = ["## Branch non coperti", intro]
     if grouped:
-        parts.append("### Root causes")
+        parts.append("### Cause a monte")
         for root, branches in sorted(behind_branch.items(),
                                      key=lambda item: (-len(item[1]), _natural_key(item[0][0]), item[0][1])):
             parts.append(_root_text(journey, root, branches, by_ref))
             parts.append(_behind_list(journey, branches))
         for reason, branches in behind_unsupported.items():
             blockers = _join_words(_quoted_labels(journey, _REASON_BEHIND_UNSUPPORTED.match(reason).group("keys")))
-            parts.append(f"{_plural(len(branches), 'branch lies', 'branches lie')} behind the unsupported activity "
-                         f"{blockers}. See Unsupported elements.")
+            parts.append(f"{_lie_behind(len(branches))} a valle dell'attività non supportata {blockers}. Vedi la "
+                         "sezione Elementi non supportati.")
             parts.append(_behind_list(journey, branches))
     if own:
         rows = []
@@ -1433,11 +1490,12 @@ def _section_not_covered(result: GenerationResult) -> str:
             text = _reason_sentence(b.reason, journey, b.activity_key, b.outcome_key)
             behind = behind_branch.get((b.activity_key, b.outcome_key))
             if behind:
-                text += f" {_plural(len(behind), 'branch lies', 'branches lie')} behind it."
+                below = "si trova 1 branch" if len(behind) == 1 else f"si trovano {len(behind)} branch"
+                text += f" A valle di questo branch {below}."
             rows.append([activity, outcome, text])
         if grouped:
-            parts.append("### Branches with a reason of their own")
-        parts.append(_md_table(["Activity", "Outcome", "Reason"], rows))
+            parts.append("### Branch con un motivo proprio")
+        parts.append(_md_table(["Attività", "Branch", "Motivo"], rows))
     return "\n\n".join(parts)
 
 
@@ -1450,19 +1508,21 @@ def _section_special_branches(result: GenerationResult) -> str:
     statistical = [b for b in result.coverage.branches if b.statistical and b.status != STATUS_NOT_COVERED]
     if not manual and not statistical:
         return ""
-    parts = ["## Branches covered with a manual action or through a random split"]
+    parts = ["## Branch coperti con un'azione manuale o tramite un random split"]
     if manual:
         rows = [[f"{_activity_name(journey, b.activity_key)} ({b.activity_key})", b.outcome_label,
                  ", ".join(b.covered_by)] for b in manual]
-        parts.append(f"{len(manual)} branches are covered only by contacts that must open or click an email. "
-                     "The testbook names the action and its deadline.")
-        parts.append(_md_table(["Activity", "Outcome", "Cases"], rows))
+        covered = "è coperto" if len(manual) == 1 else "sono coperti"
+        parts.append(f"{len(manual)} branch {covered} solo da contatti che devono aprire o cliccare un'email. Il "
+                     "testbook indica l'azione e la sua scadenza.")
+        parts.append(_md_table(["Attività", "Branch", "Casi"], rows))
     if statistical:
         rows = [[f"{_activity_name(journey, b.activity_key)} ({b.activity_key})", b.outcome_label,
                  ", ".join(b.covered_by)] for b in statistical]
-        parts.append(f"{len(statistical)} branches are crossed only after a random split, by the contacts of a "
-                     "statistical case. The testbook gives the accepted range.")
-        parts.append(_md_table(["Activity", "Outcome", "Cases"], rows))
+        crossed = "viene attraversato" if len(statistical) == 1 else "vengono attraversati"
+        parts.append(f"{len(statistical)} branch {crossed} solo dopo un random split, dai contatti di un caso "
+                     "statistico. Il testbook indica l'intervallo accettato.")
+        parts.append(_md_table(["Attività", "Branch", "Casi"], rows))
     return "\n\n".join(parts)
 
 
@@ -1474,23 +1534,23 @@ def _section_unsupported(result: GenerationResult) -> str:
         label = _activity_label(journey, key)
         reason = getattr(activity, "unsupported_reason", None) if activity is not None else None
         if reason:
-            items.append(f"{label} is not supported: {reason.rstrip('.')}. Its branches and the branches behind it "
-                         "are not covered.")
+            items.append(f"L'attività {label} non è supportata: {reason.rstrip('.')}. I suoi branch e quelli a valle "
+                         "non sono coperti.")
         elif activity is not None:
-            items.append(f"{label} has the type {activity.raw_type}, which the generator does not support. Its "
-                         "branches and the branches behind it are not covered.")
+            items.append(f"L'attività {label} è di tipo {activity.raw_type}, che il generatore non supporta. I suoi "
+                         "branch e quelli a valle non sono coperti.")
         else:
-            items.append(f"Activity {key} is not supported. The branches behind it are not covered.")
+            items.append(f"L'attività {key} non è supportata. I branch a valle non sono coperti.")
     query = result.table_model.entry_query
     if query is not None:
         for flt in query.filters:
             if isinstance(flt, UnsupportedFilter):
-                items.append(f"The entry query filter `{flt.text}` is not supported, so the generated rows may not "
-                             "pass it.")
+                items.append(f"Il filtro `{flt.text}` della entry query non è supportato, quindi le righe generate "
+                             "potrebbero non soddisfarlo.")
     items.extend(f"Placeholder: {_sentence(text)}" for text in result.data.placeholders)
     if not items:
-        return "## Unsupported elements\n\nNo unsupported element was found."
-    return "\n\n".join(["## Unsupported elements", _bullets(items)])
+        return "## Elementi non supportati\n\nNon è stato trovato alcun elemento non supportato."
+    return "\n\n".join(["## Elementi non supportati", _bullets(items)])
 
 
 def _key_list(text: str) -> list[str]:
@@ -1500,24 +1560,24 @@ def _key_list(text: str) -> list[str]:
 
 def _case_line(matches: list[re.Match], tail: str, package: Package) -> str:
     """Fields compared with one value written in several letter cases."""
-    values = matches[0].group("values")
+    values = _join_words(_quoted_values(matches[0].group("values"))) or matches[0].group("values")
     refs = _ordered_refs(package, [(m.group("table"), m.group("field")) for m in matches])
     if len(refs) == 1:
-        text = f"{refs[0][0]}.{refs[0][1]} is compared with {values}."
+        text = f"{refs[0][0]}.{refs[0][1]} viene confrontato con {values}."
     elif len({table.lower() for table, _ in refs}) == 1:
-        text = f"{_join_words(field for _, field in refs)} of {refs[0][0]} are each compared with {values}."
+        text = f"{_join_words(field for _, field in refs)} di {refs[0][0]} vengono confrontati ciascuno con {values}."
     else:
-        text = f"{_join_words(f'{table}.{field}' for table, field in refs)} are each compared with {values}."
+        text = f"{_join_words(f'{table}.{field}' for table, field in refs)} vengono confrontati ciascuno con {values}."
     if tail:
-        text += f" {_CASE_TAILS.get(tail, _sentence(tail))} How Salesforce compares them is an assumption to verify."
+        text += f" {_CASE_TAILS.get(tail, _sentence(tail))} Come li confronta Salesforce è un'assunzione da verificare."
     return text
 
 
 def _same_name_line(matches: list[re.Match]) -> str:
     """Splits that share a name but test different conditions."""
-    groups = [f"'{m.group('name')}' in {m.group('count')} versions, first seen in "
+    groups = [f"'{m.group('name')}' in {m.group('count')} versioni, comparse per la prima volta in "
               f"{_join_words(_key_list(m.group('keys')))}" for m in matches]
-    return "Splits with the same name test different conditions: " + "; ".join(groups) + "."
+    return "Alcuni split con lo stesso nome verificano condizioni diverse: " + "; ".join(groups) + "."
 
 
 def _constant_key_line(matches: list[re.Match]) -> str:
@@ -1527,27 +1587,30 @@ def _constant_key_line(matches: list[re.Match]) -> str:
     if all(keys == steps[0] for keys in steps) and len(tables) == 1:
         first = matches[0]
         if len(matches) == 1:
-            what = (f"the constant {first.group('value')} into the primary-key field "
+            what = (f"la costante {first.group('value')} nel campo di chiave primaria "
                     f"{first.group('table')}.{first.group('field')}")
         else:
-            writes = _join_words(f"{m.group('value')} into {m.group('field')}" for m in matches)
-            what = f"constants into primary-key fields of {first.group('table')}: {writes}"
-        count = _plural(len(steps[0]), "update contact step writes", "update contact steps write")
-        return (f"{count} {what}. Every contact therefore gets the same key "
-                f"{'value' if len(matches) == 1 else 'values'} there. "
-                f"{'The step is' if len(steps[0]) == 1 else 'The steps are'} {_join_words(steps[0])}.")
-    parts = [f"{m.group('value')} into {m.group('table')}.{m.group('field')}, by {_join_words(keys)}"
+            writes = _join_words(f"{m.group('value')} in {m.group('field')}" for m in matches)
+            what = f"costanti nei campi di chiave primaria di {first.group('table')}: {writes}"
+        count = _plural(len(steps[0]), "attività Update contact scrive", "attività Update contact scrivono")
+        same = "lo stesso valore in quel campo" if len(matches) == 1 else "gli stessi valori in quei campi"
+        which = "L'attività è" if len(steps[0]) == 1 else "Le attività sono"
+        return f"{count} {what}. Quindi tutti i contatti hanno {same}. {which} {_join_words(steps[0])}."
+    parts = [f"{m.group('value')} in {m.group('table')}.{m.group('field')}, da {_join_words(keys)}"
              for m, keys in zip(matches, steps)]
-    return ("Update contact steps write constants into primary-key fields, so every contact gets the same key "
-            "value there: " + "; ".join(parts) + ".")
+    return ("Alcune attività Update contact scrivono costanti in campi di chiave primaria, quindi tutti i contatti "
+            "hanno lo stesso valore in quei campi: " + "; ".join(parts) + ".")
 
 
 def _one_to_one_line(matches: list[re.Match]) -> str:
     """One-to-one relationships that join on part of a primary key."""
-    parts = [f"'{m.group('name')}' joins {m.group('table')} on {m.group('fields')}, and the key of {m.group('table')} "
-             f"also has {_join_words(k.strip() for k in m.group('extra').split(','))}" for m in matches]
-    lead = "A one-to-one relationship" if len(parts) == 1 else "One-to-one relationships"
-    return f"{lead} joins on part of a primary key, so several rows can match one contact: " + "; ".join(parts) + "."
+    parts = [f"'{m.group('name')}' fa il join di {m.group('table')} su {m.group('fields')}, e la chiave di "
+             f"{m.group('table')} comprende anche {_join_words(k.strip() for k in m.group('extra').split(','))}"
+             for m in matches]
+    lead = ("Una relazione one-to-one fa il join" if len(parts) == 1
+            else "Alcune relazioni one-to-one fanno il join")
+    return (f"{lead} su una parte della chiave primaria, quindi più righe possono corrispondere a un contatto: "
+            + "; ".join(parts) + ".")
 
 
 def _merge_patterns(patterns: list[str], package: Package) -> list[str]:
@@ -1593,18 +1656,18 @@ def _reword_warning(warning: str, result: GenerationResult) -> str:
     if not match:
         return warning
     columns = [column.strip() for column in match.group("columns").split(",") if column.strip()]
-    return (f"The entry query selects {_plural(len(columns), 'column', 'columns')} that {match.group('table')} does "
-            f"not have: {_join_words(columns)}. The generator ignores {'it' if len(columns) == 1 else 'them'}. What "
-            "Salesforce does with such a query is an assumption to verify, listed under Assumptions.")
+    return (f"La entry query seleziona {_plural(len(columns), 'colonna', 'colonne')} che {match.group('table')} non "
+            f"ha: {_join_words(columns)}. Il generatore {'la' if len(columns) == 1 else 'le'} ignora. Cosa fa "
+            "Salesforce con una query del genere è un'assunzione da verificare, elencata nella sezione Assunzioni.")
 
 
 def _section_warnings(result: GenerationResult) -> str:
     query = result.table_model.entry_query
     sources = [
-        ("While reading the export", result.package.warnings),
-        ("Table selection and SQL", list(result.table_model.warnings) + (list(query.warnings) if query else [])),
+        ("Lettura dell'export", result.package.warnings),
+        ("Selezione delle tabelle e SQL", list(result.table_model.warnings) + (list(query.warnings) if query else [])),
         ("Coverage", result.coverage.warnings),
-        ("Data generation", result.data.warnings),
+        ("Generazione dei dati", result.data.warnings),
     ]
     patterns: list[str] = []
     groups: list[tuple[str, list[str]]] = []
@@ -1613,13 +1676,13 @@ def _section_warnings(result: GenerationResult) -> str:
         patterns.extend(found)
         groups.append((title, [_reword_warning(warning, result) for warning in others]))
     patterns = _merge_patterns(_unique(patterns), result.package)
-    parts = ["## Warnings and suspicious patterns"]
-    for title, items in [("Suspicious patterns", patterns)] + groups:
+    parts = ["## Warning e pattern sospetti"]
+    for title, items in [("Pattern sospetti", patterns)] + groups:
         items = _unique(_sentence(item) for item in items)
         if items:
             parts.append(f"### {title}\n\n{_bullets(items)}")
     if len(parts) == 1:
-        parts.append("No warning.")
+        parts.append("Nessun warning.")
     return "\n\n".join(parts)
 
 
@@ -1637,87 +1700,88 @@ def _section_assumptions(result: GenerationResult) -> str:
     the ones of the Salesforce review that this export triggers."""
     settings = result.settings
     if settings.case_insensitive_text:
-        case_text = ("Text comparisons ignore letter case, so `Email` and `EMAIL` are the same value. The setting "
-                     "that ignores letter case is on.")
+        case_text = ("I confronti di testo non distinguono maiuscole e minuscole, quindi `Email` e `EMAIL` sono lo "
+                     "stesso valore. L'impostazione che ignora maiuscole e minuscole è attiva.")
     else:
-        case_text = ("Text comparisons are case-sensitive, so `Email` and `EMAIL` are different values. The setting "
-                     "that ignores letter case is off.")
+        case_text = ("I confronti di testo distinguono maiuscole e minuscole, quindi `Email` e `EMAIL` sono valori "
+                     "diversi. L'impostazione che ignora maiuscole e minuscole è disattivata.")
     zones = sorted({a.wait_timezone for a in result.package.journey.activities.values()
                     if a.kind == KIND_WAIT_ATTRIBUTE and a.wait_timezone})
-    zone_text = f" The waits by attribute of this journey are set to {_join_words(zones)}." if zones else ""
+    zone_text = (f" I wait by attribute di questo journey sono impostati sul fuso orario {_join_words(zones)}."
+                 if zones else "")
     items = [
-        "Decision split outcomes are evaluated in order, and the first outcome that matches wins.",
+        "I branch di un decision split vengono valutati in ordine e vince il primo la cui condizione è soddisfatta.",
         case_text,
-        "A wait by attribute whose date is already past ends at once.",
-        f"The import accepts dates written like {_date(result.generation_time, settings)}, in the format "
-        f"{_human_date_format(settings.date_format)}, and `True` and `False` for Booleans.",
-        "An engagement split is evaluated when the contact reaches it, not when the email is sent.",
-        "The time zone applied to a wait date is not known, so the deadlines in the testbook could shift by some "
-        f"hours.{zone_text}",
+        "Un wait by attribute la cui data è già passata termina subito.",
+        f"L'import accetta date scritte come {_date(result.generation_time, settings)}, nel formato "
+        f"{_human_date_format(settings.date_format)}, e `True` e `False` per i Boolean.",
+        "Un engagement split viene valutato quando il contatto lo raggiunge, non quando l'email viene inviata.",
+        "Il fuso orario applicato alla data del wait non è noto, quindi le scadenze del testbook potrebbero "
+        f"spostarsi di qualche ora.{zone_text}",
     ]
     automation = _entry_procedures(result)
     if automation:
-        items.append(f"Importing {table_file_name(result.table_model.entry_table)} admits its contacts. The "
-                     f"automation {automation} runs the entry of this journey, and the Salesforce review says that an "
-                     "import alone may admit nobody. See How to run.")
+        items.append(f"L'import di {table_file_name(result.table_model.entry_table)} fa entrare i suoi contatti. "
+                     f"L'automation {automation} esegue l'ingresso in questo journey e la review Salesforce indica "
+                     "che il solo import potrebbe non far entrare nessuno. Vedi la sezione Come eseguire i test.")
     ignored = _ignored_entry_columns(result)
     if ignored and result.table_model.entry_query is not None:
-        items.append(f"The entry query {result.table_model.entry_query.name} runs although it selects "
-                     f"{_plural(len(ignored), 'column', 'columns')} that {result.table_model.entry_table} does not "
-                     f"have. The generator ignores {'that column' if len(ignored) == 1 else 'those columns'}.")
+        items.append(f"La entry query {result.table_model.entry_query.name} viene eseguita anche se seleziona "
+                     f"{_plural(len(ignored), 'colonna', 'colonne')} che {result.table_model.entry_table} non ha. "
+                     f"Il generatore ignora {'quella colonna' if len(ignored) == 1 else 'quelle colonne'}.")
     return "\n\n".join([
-        "## Assumptions",
-        "The expected results depend on these assumptions about how Salesforce behaves. Check each one once with a "
-        "small real run. The file docs/assumptions.md of the CJ Test Helper repository lists them all, with how to "
-        "verify each one and which to check first.",
+        "## Assunzioni",
+        "I risultati attesi dipendono da queste assunzioni sul comportamento di Salesforce. Verifica ciascuna una "
+        "volta con un piccolo run reale. Il file docs/assumptions.md del repository CJ Test Helper le elenca tutte, "
+        "con il modo di verificarle e quali controllare per prime.",
         _bullets(items),
     ])
 
 
 _SETTING_LABELS = {
-    "contacts_per_case": "Contacts per case",
-    "contacts_per_random_case": "Contacts per random-split case",
-    "real_inbox": "Real inbox for open and click tests",
-    "real_phone": "Real phone number",
-    "fake_phone": "Fake phone number",
-    "window_start_days": "Validity window start",
-    "window_end_days": "Validity window end",
-    "wait_offset_hours": "Wait date offset",
-    "wait_offset_before_engagement_hours": "Wait date offset before an engagement split",
-    "date_format": "Date format in the CSVs",
-    "one_active_scenario": "One active scenario at a time",
-    "activation_field": "Activation field",
-    "run_id": "Run identifier in keys",
-    "case_insensitive_text": "Text comparisons ignore letter case",
-    "seed": "Seed of the set cover",
-    "generation_time": "Generation time",
+    "contacts_per_case": "Contatti per caso",
+    "contacts_per_random_case": "Contatti per caso di random split",
+    "real_inbox": "Inbox reale per i test di open e click",
+    "real_phone": "Numero di telefono reale",
+    "fake_phone": "Numero di telefono fittizio",
+    "window_start_days": "Inizio della finestra di validità",
+    "window_end_days": "Fine della finestra di validità",
+    "wait_offset_hours": "Offset della data di wait",
+    "wait_offset_before_engagement_hours": "Offset della data di wait prima di un engagement split",
+    "date_format": "Formato delle date nei CSV",
+    "one_active_scenario": "Un solo scenario attivo alla volta",
+    "activation_field": "Campo di attivazione",
+    "run_id": "Run identifier nelle chiavi",
+    "case_insensitive_text": "I confronti di testo ignorano maiuscole e minuscole",
+    "seed": "Seed del set cover",
+    "generation_time": "Ora di generazione",
 }
 
 
 def _days_text(days: int) -> str:
     if days == 0:
-        return "the generation time"
-    side = "before" if days < 0 else "after"
-    return f"{_plural(abs(days), 'day', 'days')} {side} the generation time"
+        return "l'ora di generazione"
+    side = "prima" if days < 0 else "dopo"
+    return f"{_plural(abs(days), 'giorno', 'giorni')} {side} dell'ora di generazione"
 
 
 def _setting_text(name: str, value, result: GenerationResult) -> str:
     if name == "generation_time":
         return _date(result.generation_time, result.settings)
     if name == "one_active_scenario" and value is None:
-        return "on when an activation field is detected"
+        return "sì, quando viene rilevato un campo di attivazione"
     if name == "activation_field" and value is None:
-        return "suggested from the entry query filters"
+        return "suggerito dai filtri della entry query"
     if name in ("window_start_days", "window_end_days") and isinstance(value, int):
         return _days_text(value)
     if name in ("wait_offset_hours", "wait_offset_before_engagement_hours") and isinstance(value, int):
-        return _plural(value, "hour", "hours")
+        return _plural(value, "ora", "ore")
     if name == "date_format" and isinstance(value, str):
         return _human_date_format(value)
     if value is None or value == "":
-        return "none"
+        return "nessuno"
     if isinstance(value, bool):
-        return "on" if value else "off"
+        return "sì" if value else "no"
     if isinstance(value, tuple):
         return ".".join(str(part) for part in value)
     return str(value)
@@ -1727,9 +1791,9 @@ def _section_settings(result: GenerationResult) -> str:
     rows = [[_SETTING_LABELS.get(f.name, f.name), _setting_text(f.name, getattr(result.settings, f.name), result)]
             for f in dataclasses.fields(result.settings)]
     on, ref, _ = activation_setting(result.package, result.table_model, result.settings)
-    rows.append(["One active scenario at a time, as applied",
-                 f"on, activation field {ref[0]}.{ref[1]}" if on else "off"])
-    return "\n\n".join(["## Settings used", _md_table(["Setting", "Value"], rows)])
+    rows.append(["Un solo scenario attivo alla volta, come applicato",
+                 f"sì, campo di attivazione {ref[0]}.{ref[1]}" if on else "no"])
+    return "\n\n".join(["## Impostazioni usate", _md_table(["Impostazione", "Valore"], rows)])
 
 
 def write_report(result: GenerationResult) -> str:

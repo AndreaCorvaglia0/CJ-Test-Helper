@@ -58,7 +58,7 @@ Termini usati in questi file:
 
 ## Come un tester usa i file
 
-1. Apri `report.md`. Verifica che tutti i trust check siano superati, poi leggi la sezione "How to run".
+1. Apri `report.md`. Verifica che tutti i trust check siano superati, poi leggi la sezione "Come eseguire i test".
 2. Scegli una procedura di ingresso e mantienila per tutto il test. Le due procedure sono alternative: eseguirle entrambe duplicherebbe le righe di ingresso.
    - Import diretto, la procedura normale secondo la spec. Importa prima i CSV delle tabelle collegate e per ultimo il CSV di ingresso. Non eseguire l'automation che popola la tabella di ingresso.
    - Tramite l'automation. Importa tutti i CSV tranne quello di ingresso. Esegui l'automation una volta per scenario: la sua entry query costruisce le righe di ingresso a partire dalle righe importate.
@@ -149,7 +149,7 @@ Supportato nel PoC:
 In alcuni punti i risultati attesi dipendono da comportamenti di Salesforce che la spec non chiarisce: le maiuscole e minuscole nei confronti di testo, come viene letta una data di wait senza fuso orario, come entrano i contatti tramite un'automation di ingresso, e altro. Ognuno è un'assunzione da verificare una volta con un piccolo run reale, mai un dato di fatto.
 
 - `docs/assumptions.md` le elenca tutte, con la documentazione trovata e come verificare ciascuna, e pianifica un run di verifica di un giorno. Inizia dalla sezione "Check these first".
-- La sezione "Assumptions" di `report.md` elenca quelle che valgono per l'export eseguito.
+- La sezione "Assunzioni" di `report.md` elenca quelle che valgono per l'export eseguito.
 
 ## L'app a pagina singola
 

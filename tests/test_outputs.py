@@ -145,20 +145,20 @@ def test_zip_contains_every_file():
 def test_report_sections_in_order():
     report = write_report(build_result())
     titles = [line for line in report.splitlines() if line.startswith("## ")]
-    assert titles == ["## Summary", "## Trust checks", "## Tables", "## Scenarios", "## Branches not covered",
-                      "## Branches covered with a manual action or through a random split",
-                      "## Unsupported elements", "## Warnings and suspicious patterns", "## Assumptions",
-                      "## Settings used"]
+    assert titles == ["## Riepilogo", "## Trust check", "## Tabelle", "## Scenari", "## Branch non coperti",
+                      "## Branch coperti con un'azione manuale o tramite un random split",
+                      "## Elementi non supportati", "## Warning e pattern sospetti", "## Assunzioni",
+                      "## Impostazioni usate"]
 
 
 def test_report_totals_match_the_data():
     result = build_result()
     report = write_report(result)
-    assert "The test data has 2 scenarios, 3 cases and 56 contacts." in report
-    assert "Of 10 branches, 8 are covered, 1 is covered with a manual action and 1 is not covered." in report
-    assert "| Contacts | 56 |" in report
-    assert "| Contacts using the real inbox | 3 |" in report
-    assert "| Branches not covered | 1 |" in report
+    assert "I dati di test comprendono 2 scenari, 3 casi e 56 contatti." in report
+    assert "Su 10 branch, 8 sono coperti, 1 è coperto con un'azione manuale e 1 non è coperto." in report
+    assert "| Contatti | 56 |" in report
+    assert "| Contatti con l'inbox reale | 3 |" in report
+    assert "| Branch non coperti | 1 |" in report
     # rows per CSV match the files
     for name in result.data.tables:
         _, rows = read_csv(result.files[table_file_name(name)])
@@ -168,8 +168,8 @@ def test_report_totals_match_the_data():
 
 def test_report_lists_checks_branches_unsupported_warnings_and_settings():
     report = write_report(build_result())
-    assert "1 of the 2 trust checks passed. 1 failed: the details are below." in report
-    assert "| Every key joins | FAILED | 2 |" in report
+    assert "1 trust check su 2 è superato, 1 non è superato: i dettagli sono qui sotto." in report
+    assert "| Every key joins | NON SUPERATO | 2 |" in report
     assert "- DE_Master row 4 has no scenario row." in report
     assert "| Clicked Promo (ENG-2) | Yes (yes) | The email Promo has no link, so a click cannot be asked. |" in report
     assert "`C.Region LIKE 'N%' OR C.Region IS NULL`" in report
@@ -177,26 +177,26 @@ def test_report_lists_checks_branches_unsupported_warnings_and_settings():
     for warning in ("Reading warning from the loader.", "Table selection warning.",
                     "Parser warning about the entry query.", "Coverage warning."):
         assert f"- {warning}" in report
-    assert "| Real inbox for open and click tests | tester@example.com |" in report
-    assert "| One active scenario at a time, as applied | on, activation field DE_Config.ACTIVE |" in report
-    assert "| Generation time | 2026-10-11 09:30 |" in report
+    assert "| Inbox reale per i test di open e click | tester@example.com |" in report
+    assert "| Un solo scenario attivo alla volta, come applicato | sì, campo di attivazione DE_Config.ACTIVE |" in report
+    assert "| Ora di generazione | 2026-10-11 09:30 |" in report
     assert "W. Europe Standard Time" in report
 
 
 def test_report_scenarios_and_cases():
     report = write_report(build_result())
-    assert ("| TST_R01_S01 | 1 | yes | True | False | 2 | 6 | TST_R01_C0001 to TST_R01_C0006 | "
+    assert ("| TST_R01_S01 | 1 | sì | True | False | 2 | 6 | da TST_R01_C0001 a TST_R01_C0006 | "
             "DE_Config.CHANNEL = Email |") in report
-    assert "| S02-C01 | TST_R01_S02 | 50 | TST_R01_C0007 to TST_R01_C0056 |" in report
-    assert "1 to 9 contacts expected on the 10% side" in report
+    assert "| S02-C01 | TST_R01_S02 | 50 | da TST_R01_C0007 a TST_R01_C0056 |" in report
+    assert "da 1 a 9 contatti attesi sul branch 10%" in report
 
 
 def test_report_without_checks_and_without_problems():
     result = build_result(checks=[])
     result.coverage.branches = [b for b in result.coverage.branches if b.status != "not covered"]
     report = write_report(result)
-    assert "No trust check was run on these files." in report
-    assert "Every branch is covered." in report
+    assert "Su questi file non è stato eseguito alcun trust check." in report
+    assert "Tutti i branch sono coperti." in report
 
 
 def test_suspicious_patterns_are_gathered_from_every_module():
@@ -204,10 +204,10 @@ def test_suspicious_patterns_are_gathered_from_every_module():
     result.coverage.warnings.append("suspicious pattern: DE_Config.CHANNEL is compared with 'Email' and 'EMAIL'.")
     result.package.warnings.append("Suspicious pattern: two splits share the name 'Channel'.")
     report = write_report(result)
-    section = report[report.index("### Suspicious patterns"):report.index("### While reading the export")]
-    assert "- DE_Config.CHANNEL is compared with 'Email' and 'EMAIL'." in section
+    section = report[report.index("### Pattern sospetti"):report.index("### Lettura dell'export")]
+    assert "- DE_Config.CHANNEL viene confrontato con 'Email' e 'EMAIL'." in section
     assert "- Two splits share the name 'Channel'." in section
-    assert "suspicious pattern:" not in report.lower().replace("suspicious patterns", "")
+    assert "suspicious pattern:" not in report.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -220,13 +220,13 @@ def test_testbook_has_one_row_per_case_and_names_every_contact():
     assert len(rows) == len(result.coverage.cases) == 3
     assert [row[0] for row in rows] == [1, 2, 3]
     assert {row[1] for row in rows} == {"SFMC"} and {row[7] for row in rows} == {"TO START"}
-    assert [row[2] for row in rows] == ["S01-C01 - Welcome opened", "S01-C02 - Path ending at Wait one minute",
+    assert [row[2] for row in rows] == ["S01-C01 - Welcome opened", "S01-C02 - Percorso fino a Wait one minute",
                                         "S02-C01 - Random split 90/10"]
     text = "\n".join(str(value) for row in rows for value in row)
     for contact in result.data.contacts:
         if contact.case_id != "S02-C01":
             assert contact.key in text
-    assert "Test contacts (50): TST_R01_C0007 to TST_R01_C0056." in rows[2][4]
+    assert "Contatti di test (50): da TST_R01_C0007 a TST_R01_C0056." in rows[2][4]
     random_keys = [c.key for c in result.data.contacts if c.case_id == "S02-C01"]
     assert random_keys == [f"TST_R01_C{n:04d}" for n in range(7, 57)]   # the range names exactly these
 
@@ -234,38 +234,38 @@ def test_testbook_has_one_row_per_case_and_names_every_contact():
 def test_testbook_preconditions_steps_and_expected_result():
     rows = build_testbook_rows(build_result())
     first = dict(zip(TESTBOOK_COLUMNS, rows[0]))
-    assert "Import these CSV files: DE_Entry.csv, DE_Master.csv, DE_Config.csv." in first["Pre conditions"]
-    assert "Active scenario: TST_R01_S01" in first["Pre conditions"]
-    assert "Expected path: Channel [Email] > Welcome > Wait campaign date > Wait reminder date > " \
+    assert "Importa questi file CSV: DE_Entry.csv, DE_Master.csv, DE_Config.csv." in first["Pre conditions"]
+    assert "Scenario attivo: TST_R01_S01" in first["Pre conditions"]
+    assert "Percorso atteso: Channel [Email] > Welcome > Wait campaign date > Wait reminder date > " \
            "Opened Welcome [Yes] > Log open." in first["Description"]
     steps = first["Detailed steps"].split("\n")
     assert [step.split(".")[0] for step in steps] == ["1", "2", "3", "4", "5"]
-    assert "Before 2026-10-12 09:30, open the email 'Welcome'" in steps[3]
+    assert "Prima del 2026-10-12 09:30, apri l'email 'Welcome'" in steps[3]
     assert "tester+TST_R01_C0001@example.com" in steps[3]
-    assert "- Emails received: Welcome." in first["Expected result"]
-    assert "- Values written by the journey: DE_Log.Status = Opened." in first["Expected result"]
-    assert "- Last activity reached: Log open (UPD-1)." in first["Expected result"]
-    assert first["Note"].startswith("Manual engagement required: open the email 'Welcome' before 2026-10-12 09:30.")
+    assert "- Email ricevute: Welcome." in first["Expected result"]
+    assert "- Valori scritti dal journey: DE_Log.Status = Opened." in first["Expected result"]
+    assert "- Ultima attività raggiunta: Log open (UPD-1)." in first["Expected result"]
+    assert first["Note"].startswith("Azione manuale richiesta: aprire l'email 'Welcome' prima del 2026-10-12 09:30.")
 
     second = dict(zip(TESTBOOK_COLUMNS, rows[1]))
-    assert "Contact profile: DE_Master.Perm = True." in second["Description"]     # CSV form of "true"
-    assert "Wait one minute (1 minute)" in second["Detailed steps"]
+    assert "Profilo del contatto: DE_Master.Perm = True." in second["Description"]     # CSV form of "true"
+    assert "Wait one minute (1 minuto)" in second["Detailed steps"]
     assert second["Note"] == ""
 
     third = dict(zip(TESTBOOK_COLUMNS, rows[2]))
-    assert "activate scenario TST_R01_S02: in DE_Config, set ACTIVE to True on the row with CampaignName " \
-           "TST_R01_S02 and to False on every other row." in third["Detailed steps"]
-    assert "- 10%: emails received: Promo; values written: none; last activity reached: Clicked Promo (ENG-2)." \
+    assert "attiva lo scenario TST_R01_S02: in DE_Config, imposta ACTIVE a True sulla riga con CampaignName " \
+           "TST_R01_S02 e a False su tutte le altre righe." in third["Detailed steps"]
+    assert "- 10%: email ricevute: Promo; valori scritti: nessuno; ultima attività raggiunta: Clicked Promo (ENG-2)." \
            in third["Expected result"]
-    assert "Accepted range: 1 to 9 contacts on the 10% side." in third["Expected result"]
-    assert "Between 1 and 9 of the 50 contacts are expected on the 10% side." in third["Note"]
+    assert "Intervallo accettato: da 1 a 9 contatti sul branch 10%." in third["Expected result"]
+    assert "Sul branch 10% sono attesi da 1 a 9 dei 50 contatti." in third["Note"]
 
 
 def test_testbook_without_one_active_scenario_or_real_inbox():
     rows = build_testbook_rows(build_result(one_active_scenario=False, real_inbox=""))
     first = dict(zip(TESTBOOK_COLUMNS, rows[0]))
-    assert "Every scenario is active at the same time." in first["Pre conditions"]
-    assert "no real inbox was set" in first["Detailed steps"]
+    assert "Tutti gli scenari sono attivi contemporaneamente." in first["Pre conditions"]
+    assert "non è stata indicata un'inbox reale" in first["Detailed steps"]
 
 
 def test_testbook_xlsx_layout():

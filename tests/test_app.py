@@ -280,7 +280,7 @@ def test_activity_counts_and_roles_use_plain_names():
                                             ("new_kind", 1)]
     assert app.role_text({"source", "split"}) == "source, split"      # as report.md writes it
     assert app.role_text({"written"}) == "written"
-    assert app.role_text(set()) == "none"
+    assert app.role_text(set()) == "nessuno"
 
 
 def test_warning_lines_put_patterns_first_and_leave_key_lists_to_the_report():
@@ -438,7 +438,7 @@ def test_summary_import_and_download_notes():
         "recapitabili e i branch relativi risultano non coperti."]
     assert app.summary_notes(_stub_result(real_inbox="tester@example.com"))[1:] == []
     assert app.import_notes(result) == [
-        "Apri prima report.md: la sezione How to run indica l'ordine di import.",
+        "Apri prima report.md: la sezione Come eseguire i test indica l'ordine di import.",
         "Nei CSV è attivo solo TST_R01_S01, il primo scenario in ordine di esecuzione.",
         "Esegui gli scenari uno alla volta, in ordine di esecuzione. Quando i contatti di uno scenario sono usciti "
         "dal journey, attiva il successivo: imposta DE_Config.ACTIVE a True sulla sua riga e a False su tutte le "
@@ -471,7 +471,7 @@ def test_result_step_shows_summary_import_previews_download_checks_and_warnings(
     captions = _captions(at)
     assert "3 dei 4 branch non coperti stanno dietro a 2 branch che nessun contatto può raggiungere (vedi report.md)." in captions
     assert any(c.startswith("Non è stata indicata un'inbox reale: i contatti che devono aprire un'email") for c in captions)
-    assert "1. Apri prima report.md: la sezione How to run indica l'ordine di import." in text
+    assert "1. Apri prima report.md: la sezione Come eseguire i test indica l'ordine di import." in text
     assert "2. Nei CSV è attivo solo TST_R01_S01, il primo scenario in ordine di esecuzione." in text
     assert "- :green-badge[Superato] Every key joins" in text and "a note on a passed check" not in text
     assert "- :red-badge[Non superato] Values respect the schema" in text

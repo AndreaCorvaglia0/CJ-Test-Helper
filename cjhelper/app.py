@@ -206,7 +206,7 @@ _LIST_SEPARATOR = re.compile(r",\s*|\s+and\s+")
 class TableLine:
     """One table of the export as step 2 shows it, in the words of report.md's Tables section."""
     name: str
-    role: str              # report.md's role names, e.g. "source, split", "written", "none"
+    role: str              # report.md's role names, e.g. "source, split", "written", "nessuno"
     level: str             # "contact", "scenario", or "-" for a table without a CSV
     csv: bool              # gets a CSV
 
@@ -235,7 +235,7 @@ def activity_counts(journey: Journey) -> list[tuple[str, int]]:
 
 def role_text(roles: Iterable[str]) -> str:
     """The roles of a table as report.md writes them, e.g. ``{"split", "source"}`` -> "source, split"."""
-    return ", ".join(sorted(roles)) or "none"
+    return ", ".join(sorted(roles)) or "nessuno"
 
 
 def table_lines(table_model: TableModel) -> list[TableLine]:
@@ -450,7 +450,7 @@ def import_notes(result: GenerationResult) -> list[str]:
 
     The active scenario and its activation field come from the generated scenarios.csv rows.
     """
-    notes = [f"Apri prima {outputs.REPORT_FILE}: la sezione How to run indica l'ordine di import."]
+    notes = [f"Apri prima {outputs.REPORT_FILE}: la sezione Come eseguire i test indica l'ordine di import."]
     rows = result.data.scenarios_rows
     active = [row for row in rows if str(row.get("active_at_start", "")).lower() == "yes"]
     field = next((row.get("activation_field") for row in rows if row.get("activation_field")), None)
