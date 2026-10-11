@@ -53,11 +53,11 @@ class Table:
 
     def field(self, name: str) -> Optional[Field]:
         """Case-insensitive lookup, because SQL and split criteria do not always match the schema's case."""
-        low = name.lower()
-        for f in self.fields:
-            if f.name.lower() == low:
-                return f
-        return None
+        index = self.__dict__.get("_by_lower")
+        if index is None or len(index) != len(self.fields):
+            index = {f.name.lower(): f for f in self.fields}
+            self.__dict__["_by_lower"] = index
+        return index.get(name.lower())
 
     @property
     def primary_key(self) -> list[str]:

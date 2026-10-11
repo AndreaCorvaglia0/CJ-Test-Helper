@@ -73,8 +73,8 @@ def test_random_split_statistical_case(result):
 def test_counts_in_the_expected_range(result):
     s = result.coverage.stats
     assert 15 <= s["scenarios"] <= 80, s
-    assert 60 <= s["cases"] <= 300, s
-    assert 200 <= s["contacts"] <= 1000, s
+    assert 25 <= s["cases"] <= 300, s
+    assert 100 <= s["contacts"] <= 1000, s
     assert s["contact_classes"] == 8
 
 

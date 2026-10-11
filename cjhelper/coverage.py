@@ -210,14 +210,19 @@ Node = BranchNode | ChoiceNode | LeafNode
 
 
 def lookup_leaves(node: Node, assignment: dict[FieldRef, Value]) -> list[Leaf]:
-    if isinstance(node, LeafNode):
-        return [node.leaf]
-    if isinstance(node, BranchNode):
-        child = node.children.get(assignment.get(node.field))
-        return lookup_leaves(child, assignment) if child is not None else []
+    """The leaves a full scenario assignment reaches in one class's tree (several through choice nodes)."""
     out: list[Leaf] = []
-    for child in node.children:
-        out.extend(lookup_leaves(child, assignment))
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, LeafNode):
+            out.append(n.leaf)
+        elif isinstance(n, BranchNode):
+            child = n.children.get(assignment.get(n.field))
+            if child is not None:
+                stack.append(child)
+        else:
+            stack.extend(n.children)
     return out
 
 

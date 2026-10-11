@@ -75,26 +75,35 @@ class Schema:
 
     def __init__(self, tables: dict[str, Table]):
         self._tables = {name.lower(): t for name, t in tables.items()}
+        self._canonical: dict[FieldRef, FieldRef] = {}
+        self._types: dict[FieldRef, str] = {}
 
     def table(self, name: str) -> Optional[Table]:
         return self._tables.get(name.lower())
 
     def canonical(self, ref: FieldRef) -> FieldRef:
         """``(table, field)`` spelled as in the schema; unknown names are returned unchanged."""
+        hit = self._canonical.get(ref)
+        if hit is not None:
+            return hit
         table = self.table(ref[0])
         if table is None:
-            return ref
-        f = table.field(ref[1])
-        if f is None:
-            return (table.name, ref[1])
-        return (table.name, f.name)
+            out = ref
+        else:
+            f = table.field(ref[1])
+            out = (table.name, ref[1]) if f is None else (table.name, f.name)
+        self._canonical[ref] = out
+        return out
 
     def field_type(self, ref: FieldRef) -> str:
+        hit = self._types.get(ref)
+        if hit is not None:
+            return hit
         table = self.table(ref[0])
-        if table is None:
-            return "Text"
-        f = table.field(ref[1])
-        return f.type if f is not None else "Text"
+        f = table.field(ref[1]) if table is not None else None
+        out = f.type if f is not None else "Text"
+        self._types[ref] = out
+        return out
 
     def is_nullable(self, ref: FieldRef) -> bool:
         table = self.table(ref[0])

@@ -8,12 +8,28 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
 - `cjhelper/model.py`: the shared data model and module contract.
 - `docs/plan.md`: module responsibilities and function signatures. `docs/export-format.md`: export shape for hand-made examples.
 
+- `loader.py` + `criteria.py` (195 tests), `sqlparse_lite.py` (143 tests), `tables.py` (27 tests): delivered and reviewed.
+- `graph.py`, `coverage.py`, `checks.py`, `pipeline.py`, `__main__.py` (lead): first integrated run on the pilot passes all 7 trust checks.
+  `python -m cjhelper "fixtures/CJ template complesso-v1.json" --out output --inbox tester@example.com` takes about 30 s.
+
 ## In progress (priority 1, core)
 
-- loader.py + criteria.py, sqlparse_lite.py, tables.py, datagen.py + outputs.py (CSV part): delegated, one developer each.
-- graph.py, coverage.py, checks.py, pipeline.py: lead.
-- examples/: test engineer writes small journeys with hand-derived expected answers.
-- Salesforce review of the model and data rules: expert lists assumptions to verify.
+- datagen.py + outputs.py: delivered on disk, developer's report pending.
+- examples/: test engineer writes small journeys with hand-derived expected answers (pending).
+- Salesforce review (docs/assumptions.md): pending.
+- Then: the example loop on priority 1.
+
+## Design readings taken by the lead (not Salesforce assumptions)
+
+- Cases inside a scenario: the spec asks for "the smallest set of paths that crosses every branch" and "the fewest scenarios".
+  The generator picks the fewest scenarios, then the fewest cases inside them (a second greedy pass). It does not add every
+  contact class to every scenario. On the pilot this gives 23 scenarios / 33 cases / 146 contacts (case-sensitive) and
+  41 / 59 / 224 (case-insensitive); the earlier tool reported 41 / 148 / 494. The scenario count matches, the case count is lower
+  by design. To confirm with the user.
+- Contact classes group contact-level value combinations by the truth of every pure contact-level outcome formula (and of each
+  contact-level condition of a mixed formula): 8 classes on the pilot, as the spec says.
+- "Other" text value is `OTHER` (or `OTHER_2`, ... when taken); Booleans always take both values; null is added when the schema allows.
+- Statistical case: engagement splits downstream of the random split take the No branch (no manual action is asked in a statistical case).
 
 ## Next
 
@@ -22,7 +38,12 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
 
 ## Open questions
 
-- None yet.
+- Pilot under the default case-sensitive comparison: 137 of 259 split branches are unreachable because `CHANNEL2 Equal 'EMAIL'` /
+  `CHANNEL3 Equal 'EMAIL'` can never be true on paths that passed `CHANNEL2 Equal 'Email'` earlier. The spec's acceptance line says the
+  four engagement Yes branches after channels 2 and 3 are unreachable "because all six engagement splits reference the first email";
+  that is the reason only when text comparisons ignore case (then 91 branches stay unreachable). Both readings give the same status.
+- `RUN_TIME` (nullable Date, no condition, no filter) is filled with the generation time per the spec rule "other date fields";
+  the config-update query filters `WHERE RUN_TIME IS NULL`, so null may be more realistic. Spec rule kept.
 
 ## Facts checked on the pilot export
 
