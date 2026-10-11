@@ -29,14 +29,18 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
   unsupported .NET date tokens, entry columns copied from scenario-level columns, waits before the email get no extra time,
   unique primary-key placeholders, email-typed contact keys, scenarios.csv `active_at_start` and `activation_field` columns.
 
-## Remaining plan (11 October evening)
+## Remaining plan
 
-1. Translation of the generator's messages and output files into Italian (report.md, testbook text, warnings, trust check
-   names, loader errors, CLI): four Opus agents on disjoint modules, glossary in docs/brand.md ("Glossario"). In progress.
-2. Final acceptance run on the pilot, full suite, 39 examples, commit, final report to the user.
+Nothing scheduled. Possible next steps, to decide with the user: verify the Salesforce assumptions with a small real run
+(docs/assumptions.md), the postponed findings below, the open design readings (docs/final-report.md).
 
-Dropped or postponed: a third review loop, a second UX pass, more examples. Postponed triage findings (medium, not in the
-pilot): RB-1/RB-10 (Journey Data wait and condition mapping), RB-2 (entry-source criteria warning); all low findings.
+Done in the evening of 11 October: translation of the generator's messages and output files into Italian (four Opus agents on
+disjoint modules, glossary in docs/brand.md "Glossario"; patterns in outputs.py reconciled with the new texts; one shared
+prefix "pattern sospetto:"), tests/test_checks.py (18 tests), RB-5, RB-15 (single query prefix). Fast suite (~700 tests),
+39 examples and the pilot acceptance test pass; pilot CLI run 7/7 checks, 23/33/146 as before.
+
+Postponed findings (not in the pilot): RB-1/RB-10 (Journey Data wait and condition mapping), RB-2 (entry-source criteria
+warning), CK-9 (inbox local part not checked); all low findings of the triage.
 Routing: Opus for code and Italian text, Sonnet for checks and mechanical work, Haiku for trivial tasks.
 
 ## State after the merge of PR #1 (upstream main)
@@ -47,8 +51,7 @@ Routing: Opus for code and Italian text, Sonnet for checks and mechanical work, 
   the generator. The branch was fast-forwarded onto main; the page's look is not to be changed.
 - Triage fixes committed on top (4e5e01a): every query filling the entry table is followed (RB-4/CP-4), LEFT JOIN exclusion
   form in the entry check (RB-13), trust checks read the files and follow scenario links (CK-1, CK-4, CK-5, CK-6, CK-8,
-  CK-11, CK-12). CK-18 (tests/test_checks.py) and RB-5 (unknown statsTypeId: both branches not covered) are in the
-  translation agents' briefs.
+  CK-11, CK-12). CK-18 (tests/test_checks.py) and RB-5 (unknown statsTypeId: both branches not covered) done with the translation.
 
 ## Working rules from the user
 

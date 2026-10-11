@@ -968,7 +968,8 @@ class CoverageEngine:
             if others:
                 ref = self.journey.activities.get(activity.engagement_ref)
                 ref_name = ref.email_name if ref is not None and ref.email_name else activity.engagement_ref
-                shown = ", ".join(f"'{self.journey.activities[k].email_name or k}' ({k})" for k in others)
+                names = [f"'{self.journey.activities[k].email_name or k}' ({k})" for k in others]
+                shown = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " oppure " + names[-1]
                 out.append(f"pattern sospetto: l'engagement split '{activity.name or activity.key}' ({activity.key}) "
                            f"misura l'email '{ref_name}' ({activity.engagement_ref}), ma su alcuni percorsi l'ultima "
                            f"email inviata prima dello split è {shown}")

@@ -1,6 +1,6 @@
 # Final report: CJ Test Helper PoC
 
-11 October 2026. Branch `claude/dazzling-ramanujan-l38jta`. Resume from `docs/progress.md`.
+11 October 2026, evening. Branch `claude/dazzling-ramanujan-l38jta`, on top of the merged main (PR #1 plus the Lutech brand and the Italian page). Resume from `docs/progress.md`.
 
 ## What passes
 
@@ -12,10 +12,16 @@ On the pilot export (`fixtures/CJ template complesso-v1.json`), with the default
 - The four engagement Yes branches after channels 2 and 3 are reported as unreachable. The three contacts that must open an email use the real inbox with plus-addressing; the other 143 use `@example.invalid`.
 - `testbook.xlsx` has one test per case and names every contact; the totals of `report.md` match the files. Two runs with the same settings give identical files.
 - All seven trust checks pass, including an independent re-simulation of every contact from the written files. A fresh test engineer confirmed the same by their own simulator, with no code from the package.
-- 39 hand-derived examples (17 from the first test engineer, 22 from the fresh one) pass. The unit suite has about 680 tests.
+- 39 hand-derived examples (17 from the first test engineer, 22 from the fresh one) pass. The unit suite has about 700 tests, including 18 that feed bad data to every trust check (each check fails on the mutation it is meant to catch).
 - The one-page Streamlit app works end to end (upload, review, settings, generate, download); a UX review passed it with changes, which were applied.
 
 Default run on the pilot: 23 scenarios, 33 cases, 146 contacts; 120 branches covered, 2 covered with a manual action, 137 not covered. With text comparisons ignoring letter case: 41 scenarios (the earlier tool's 40 plus 1), 59 cases, 224 contacts, 91 branches not covered.
+
+## Done in the last step (after the merge of main)
+
+- Review findings fixed: every query that fills the entry table is followed, not only the last one (a post-processing query no longer hides the real entry query); the trust checks read the written files and follow the scenario links instead of trusting the in-memory objects (a contact re-linked, duplicated, dropped or added in a CSV now fails a check); dates must be written in the configured format; the entry check understands the LEFT JOIN exclusion form; an engagement split with an unknown statistics type claims no branch; parser warnings carry their query prefix once.
+- Italian: the generator's messages (warnings, suspicious patterns, unsupported reasons, trust check names and details, loader errors, command line) and the texts of `report.md` and `testbook.xlsx` are in Italian, with the glossary in `docs/brand.md`. File names, the column headers of `scenarios.csv` and of the testbook, export identifiers and generated values stay in English, as do the developer documents under `docs/` (this report included) and docstrings. The page look from main is untouched.
+- Postponed, not in the pilot: Journey Data waits and conditions are reported as warnings but not mapped to a table (RB-1/RB-10); entry-source filter criteria set in the event definition are not read (RB-2); the real-inbox check accepts any local part before `+key@` (CK-9); and the low findings of the review (listed in the scratchpad triage, see `docs/progress.md`).
 
 ## What does not pass, or differs from the spec text
 
