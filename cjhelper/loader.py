@@ -500,7 +500,7 @@ class _ExportReader:
                     continue   # a placeholder such as {{DateTime.Now}} is not a constant
                 found.setdefault((table.name, field.name, write.value), []).append(activity.key)
         for (table, field, value), keys in found.items():
-            self.warn(f"suspicious pattern: la costante {value!r} è scritta nel campo di chiave primaria "
+            self.warn(f"pattern sospetto: la costante {value!r} è scritta nel campo di chiave primaria "
                       f"{table}.{field} da {len(keys)} attività Update contact, quindi tutti i contatti hanno lo "
                       f"stesso valore di chiave in quel campo ({', '.join(keys)}).")
 
@@ -521,7 +521,7 @@ class _ExportReader:
             pk = [f.name for f in table.fields if f.is_primary_key]
             extra = [f for f in pk if f.lower() not in join_fields]
             if extra:
-                self.warn(f"suspicious pattern: la relazione uno a uno '{name}' collega {table.name} tramite "
+                self.warn(f"pattern sospetto: la relazione uno a uno '{name}' collega {table.name} tramite "
                           f"{', '.join(sorted(r.right_field for r in rels))}, ma la chiave primaria della tabella "
                           f"comprende anche {', '.join(extra)}: a un contatto possono corrispondere più righe.")
 

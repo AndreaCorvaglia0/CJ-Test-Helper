@@ -59,7 +59,7 @@ def test_engagement_yes_after_channels_2_and_3_unreachable(result):
     assert by_key[("ENGAGEMENTSPLITV2-1", "branchResult-1")].status == STATUS_MANUAL
     assert by_key[("ENGAGEMENTSPLITV2-1", "branchResult-2")].status == STATUS_COVERED
     click = by_key[("ENGAGEMENTSPLITV2-2", "branchResult-1")]
-    assert click.status == STATUS_NOT_COVERED and "no link" in click.reason
+    assert click.status == STATUS_NOT_COVERED and "non contiene link" in click.reason
 
 
 def test_random_split_statistical_case(result):

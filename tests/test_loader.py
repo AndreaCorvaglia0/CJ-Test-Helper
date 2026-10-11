@@ -1078,7 +1078,7 @@ def test_pilot_update_contact_write_to_the_entry_table(pilot):
 def test_pilot_warnings(pilot):
     # two reading warnings plus the carried-over checks: constant writes into the Log table's three
     # primary-key fields and the one-to-one relationship to the entry table with a wider primary key
-    plain = [w for w in pilot.warnings if not w.startswith("suspicious pattern")]
+    plain = [w for w in pilot.warnings if not w.startswith("pattern sospetto")]
     assert len(plain) == 2, pilot.warnings
     assert has_warning(pilot, "assets/1806207", "legacyId")
     assert has_warning(pilot, "mobileNumber", "CJ_SkYDE_NCRM_Demo", "DEAudience-6021dd4c")

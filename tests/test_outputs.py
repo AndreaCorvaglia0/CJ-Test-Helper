@@ -167,11 +167,15 @@ def test_report_totals_match_the_data():
 
 
 def test_report_lists_checks_branches_unsupported_warnings_and_settings():
-    report = write_report(build_result())
+    result = build_result()
+    promo = next(b for b in result.coverage.branches if b.status == "not covered")
+    promo.reason = "non raggiungibile: l'email di riferimento 'Promo' (EMAIL-2) non contiene link da cliccare"   # graph.py
+    report = write_report(result)
     assert "1 trust check su 2 è superato, 1 non è superato: i dettagli sono qui sotto." in report
     assert "| Every key joins | NON SUPERATO | 2 |" in report
     assert "- DE_Master row 4 has no scenario row." in report
-    assert "| Clicked Promo (ENG-2) | Yes (yes) | The email Promo has no link, so a click cannot be asked. |" in report
+    assert ("| Clicked Promo (ENG-2) | Yes (yes) | Non raggiungibile perché l'email di riferimento 'Promo' (EMAIL-2) "
+            "non contiene link da cliccare. |") in report
     assert "`C.Region LIKE 'N%' OR C.Region IS NULL`" in report
     assert "Placeholder: DE_Entry.Weird" in report and "Placeholder: DE_Entry.Mandatory" in report
     for warning in ("Reading warning from the loader.", "Table selection warning.",
@@ -201,13 +205,73 @@ def test_report_without_checks_and_without_problems():
 
 def test_suspicious_patterns_are_gathered_from_every_module():
     result = build_result()
-    result.coverage.warnings.append("suspicious pattern: DE_Config.CHANNEL is compared with 'Email' and 'EMAIL'.")
-    result.package.warnings.append("Suspicious pattern: two splits share the name 'Channel'.")
+    # The texts as coverage.py and loader.py write them.
+    result.coverage.warnings += [
+        "pattern sospetto: DE_Config.CHANNEL è confrontato con 'Email' e 'EMAIL'; sono valori diversi perché i "
+        "confronti di testo distinguono maiuscole e minuscole (impostazione)",
+        "pattern sospetto: 2 split con condizioni diverse hanno lo stesso nome 'Channel' (DEC-9, DEC-1)",
+    ]
+    result.package.warnings += [
+        "pattern sospetto: la costante 'X' è scritta nel campo di chiave primaria DE_Log.Id da 2 attività Update "
+        "contact, quindi tutti i contatti hanno lo stesso valore di chiave in quel campo (UPD-2, UPD-1).",
+        "pattern sospetto: la relazione uno a uno 'M -> E' collega DE_Entry tramite ContactId, ma la chiave primaria "
+        "della tabella comprende anche ActionId, CampaignName: a un contatto possono corrispondere più righe.",
+        "Pattern sospetto: due split hanno lo stesso nome 'Channel'.",
+    ]
     report = write_report(result)
     section = report[report.index("### Pattern sospetti"):report.index("### Lettura dell'export")]
-    assert "- DE_Config.CHANNEL viene confrontato con 'Email' e 'EMAIL'." in section
-    assert "- Two splits share the name 'Channel'." in section
-    assert "suspicious pattern:" not in report.lower()
+    assert section.count("\n- ") == 5
+    assert ("- DE_Config.CHANNEL viene confrontato con 'Email' e 'EMAIL'. Con l'impostazione attuale i confronti di "
+            "testo distinguono maiuscole e minuscole, quindi sono valori diversi. Come li confronta Salesforce è "
+            "un'assunzione da verificare.") in section
+    assert ("- Alcuni split con lo stesso nome verificano condizioni diverse: 'Channel' in 2 versioni, comparse per la "
+            "prima volta in DEC-1 e DEC-9.") in section
+    assert ("- 2 attività Update contact scrivono la costante 'X' nel campo di chiave primaria DE_Log.Id. Quindi tutti "
+            "i contatti hanno lo stesso valore in quel campo. Le attività sono UPD-1 e UPD-2.") in section
+    assert ("- Una relazione uno a uno collega una tabella su una parte della sua chiave primaria, quindi a un "
+            "contatto possono corrispondere più righe: 'M -> E' collega DE_Entry tramite ContactId, ma la chiave "
+            "primaria di DE_Entry comprende anche ActionId e CampaignName.") in section
+    assert "- Due split hanno lo stesso nome 'Channel'." in section
+    assert "pattern sospetto:" not in report.lower()             # the prefix is dropped once the line is placed
+    coverage = report[report.index("### Coverage"):report.index("### Generazione dei dati")]
+    assert "confrontato" not in coverage and "stesso nome" not in coverage
+
+
+def test_not_covered_reasons_from_coverage_are_reworded_and_grouped():
+    result = build_result()
+    by_ref = {(b.activity_key, b.outcome_key): b for b in result.coverage.branches}
+    root_reason = ("non raggiungibile: lo split è raggiunto, ma su quei percorsi la condizione di 'Has permission' "
+                   "non è mai vera (DE_Master.Perm vale sempre uno tra 'False', null)")
+    root = by_ref[("DEC-2", "perm")]
+    root.status, root.reason, root.covered_by = "not covered", root_reason, []
+    for outcome in ("yes", "no"):
+        branch = by_ref[("ENG-2", outcome)]
+        branch.status, branch.covered_by, branch.behind = "not covered", [], ("DEC-2", "perm")
+        branch.reason = ("non raggiungibile: si trova a valle del branch 'Permission: Has permission' (DEC-2), che "
+                         "non è coperto per questo motivo: " + root_reason)
+    after = by_ref[("DEC-1", "remainder_path")]
+    after.status, after.covered_by = "not covered", []
+    after.reason = ("a valle di un elemento non supportato: questo branch viene dopo il branch non supportato 'Email' "
+                    "dello stesso split, quindi non viene mai valutato")
+    rb5 = by_ref[("ENG-1", "no")]
+    rb5.status, rb5.covered_by = "not covered", []
+    rb5.reason = ("branch non supportato: lo split misura un tipo di statistica che non è né un open né un click, "
+                  "quindi nessuno dei suoi branch può essere considerato coperto")
+    report = write_report(result)
+    section = report[report.index("## Branch non coperti"):report.index("## Branch coperti con")]
+    assert ("5 branch non sono coperti. Di questi, 3 si trovano a valle di 1 branch che nessun contatto può "
+            "raggiungere o 1 elemento non supportato: le cause sono spiegate per prime. I restanti 2 hanno ciascuno "
+            "un motivo proprio, indicato nella tabella alla fine.") in section
+    assert "### Cause a monte" in section
+    assert ("2 branch si trovano a valle di 'Permission: Has permission' (DEC-2), che non è raggiungibile perché la "
+            "sua condizione") in section
+    assert "dove lo split viene raggiunto, Perm vale sempre 'False' o vuoto." in section
+    assert ("1 branch viene dopo il branch non supportato 'Email' dello stesso split, quindi non viene mai valutato. "
+            "Vedi la sezione Elementi non supportati.") in section
+    assert ("| Opened Welcome (ENG-1) | No (no) | Non coperto perché il branch non è supportato: lo split misura un "
+            "tipo di statistica che non è né un open né un click, quindi nessuno dei suoi branch può essere "
+            "considerato coperto. |") in section
+    assert "A valle di questo branch si trovano 2 branch." in section
 
 
 # ---------------------------------------------------------------------------

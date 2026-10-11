@@ -85,7 +85,7 @@ ZIP_DATE_TIME = (1980, 1, 1, 0, 0, 0)    # fixed, so the same files always give 
 _CORE_TIMESTAMP = re.compile(r"(<dcterms:(?:created|modified)\b[^>]*>)[^<]*(</dcterms:(?:created|modified)>)")
 _CURRENT_TIME_VALUE = "{{DateTime.Now}}"
 _REPORT_DETAIL_LIMIT = 50
-SUSPICIOUS_PREFIX = "suspicious pattern:"   # how other modules mark a suspicious pattern
+SUSPICIOUS_PREFIX = "pattern sospetto:"    # how other modules mark a suspicious pattern
 
 
 def table_file_name(table_name: str) -> str:
@@ -991,7 +991,7 @@ def _unique(items: Iterable[str]) -> list[str]:
 
 def _split_suspicious(warnings: Iterable[str]) -> tuple[list[str], list[str]]:
     """Spec, "Outputs": the report "lists suspicious patterns found while parsing, such as the same value
-    written in two letter cases". Other modules mark them with the prefix ``suspicious pattern:``."""
+    written in two letter cases". Other modules mark them with the prefix ``pattern sospetto:``."""
     patterns, others = [], []
     for warning in warnings:
         if warning.lower().startswith(SUSPICIOUS_PREFIX):
@@ -1003,43 +1003,52 @@ def _split_suspicious(warnings: Iterable[str]) -> tuple[list[str], list[str]]:
 
 
 # Texts written by other modules that the report rewords. A text that no longer matches is shown as it is.
-_CASE_PATTERN = re.compile(r"^(?P<table>[^.]+)\.(?P<field>.+?) is compared with (?P<values>.+?)"
+# Suspicious patterns arrive with their first letter in upper case (``_split_suspicious``), hence ``[Ll]``.
+_CASE_PATTERN = re.compile(r"^(?P<table>[^.]+)\.(?P<field>.+?) è confrontato con (?P<values>.+?)"
                            r"(?:; (?P<tail>.+?))?\.?$")
-_SAME_NAME_PATTERN = re.compile(r"^(?P<count>\d+) different conditions share the split name '(?P<name>.*)' "
+_SAME_NAME_PATTERN = re.compile(r"^(?P<count>\d+) split con condizioni diverse hanno lo stesso nome '(?P<name>.*)' "
                                 r"\((?P<keys>.*)\)\.?$")
-_CONSTANT_KEY_PATTERN = re.compile(r"^(?P<count>\d+) update contact step\(s\) write the constant (?P<value>.+?) "
-                                   r"into the primary-key field (?P<table>[^.]+)\.(?P<field>.+?), so every contact "
-                                   r"gets the same key value there \((?P<keys>.*)\)\.?$")
-_ONE_TO_ONE_PATTERN = re.compile(r"^The one-to-one relationship '(?P<name>.*)' joins (?P<table>.+?) on (?P<fields>.+?), "
-                                 r"but its primary key also has (?P<extra>.+?): several rows can match one contact\.?$")
+_CONSTANT_KEY_PATTERN = re.compile(r"^[Ll]a costante (?P<value>.+?) è scritta nel campo di chiave primaria "
+                                   r"(?P<table>[^.]+)\.(?P<field>.+?) da (?P<count>\d+) attività Update contact, "
+                                   r"quindi tutti i contatti hanno lo stesso valore di chiave in quel campo "
+                                   r"\((?P<keys>.*)\)\.?$")
+_ONE_TO_ONE_PATTERN = re.compile(r"^[Ll]a relazione uno a uno '(?P<name>.*)' collega (?P<table>.+?) tramite "
+                                 r"(?P<fields>.+?), ma la chiave primaria della tabella comprende anche (?P<extra>.+?): "
+                                 r"a un contatto possono corrispondere più righe\.?$")
 _CASE_TAILS = {
-    "they are different values because text comparisons are case-sensitive (setting)":
+    "sono valori diversi perché i confronti di testo distinguono maiuscole e minuscole (impostazione)":
         "Con l'impostazione attuale i confronti di testo distinguono maiuscole e minuscole, quindi sono valori diversi.",
-    "treated as the same value because text comparisons ignore letter case":
+    "sono trattati come un solo valore perché i confronti di testo non distinguono maiuscole e minuscole":
         "Con l'impostazione attuale i confronti di testo non distinguono maiuscole e minuscole, quindi contano come "
         "un solo valore.",
 }
-_IGNORED_COLUMNS = re.compile(r"^The entry query selects columns that (?P<table>.+?) does not have, so they are "
-                              r"ignored: (?P<columns>.+?)\.?$")
+_IGNORED_COLUMNS = re.compile(r"^La entry query seleziona colonne che (?P<table>.+?) non ha\. Queste colonne "
+                              r"vengono ignorate: (?P<columns>.+?)\.?$")
 _QUOTED = re.compile(r"'((?:[^'\\]|\\.)*)'|\"((?:[^\"\\]|\\.)*)\"|\b(null)\b")
-_REASON_NEVER_MATCHES = re.compile(r"^unreachable: the split is reached but '(?P<label>.*)' never matches on those "
-                                   r"paths \((?P<detail>.*)\)$")
-_REASON_ALWAYS_ONE_OF = re.compile(r"^(?P<field>.+?) is always one of (?P<values>.+)$")
-_REASON_FOLLOWS = re.compile(r"^unreachable: no combination of field values reaches this activity "
-                             r"\(it follows (?P<keys>.*)\)$")
-_REASON_BEHIND_UNSUPPORTED = re.compile(r"^unreachable: lies behind the unsupported activit(?:y|ies) (?P<keys>.+)$")
-_REASON_UNSUPPORTED = re.compile(r"^unsupported activity: (?P<detail>.+)$")
-_REASON_BEHIND_BRANCH = re.compile(r"^unreachable: lies behind the branch .*?, which is (?P<reason>.+)$")
+_UNREACHABLE_PREFIX = "non raggiungibile: "
+_REASON_NEVER_MATCHES = re.compile(r"^non raggiungibile: lo split è raggiunto, ma su quei percorsi la condizione di "
+                                   r"'(?P<label>.*)' non è mai vera \((?P<detail>.*)\)$")
+_REASON_ALWAYS_ONE_OF = re.compile(r"^(?P<field>.+?) vale sempre uno tra (?P<values>.+)$")
+_REASON_NEVER_TRUE = "la condizione non è mai vera"
+_REASON_FOLLOWS = re.compile(r"^non raggiungibile: nessuna combinazione di valori dei campi raggiunge questa attività "
+                             r"\(segue (?P<keys>.*)\)$")
+_REASON_BEHIND_UNSUPPORTED = re.compile(r"^a valle di un elemento non supportato: (?P<detail>.+)$")
+_REASON_AFTER_UNSUPPORTED = re.compile(r"^questo branch viene dopo il branch non supportato '(?P<label>.*)' dello "
+                                       r"stesso split, quindi non viene mai valutato$")
+_REASON_UNSUPPORTED = re.compile(r"^(?P<what>attività non supportata|branch non supportato): (?P<detail>.+)$")
+_REASON_BEHIND_BRANCH = re.compile(r"^(?:non raggiungibile|a valle di un elemento non supportato): si trova a valle "
+                                   r"del branch .*?, che non è coperto per questo motivo: (?P<reason>.+)$")
+_REASON_BLOCKED = re.compile(r"^richiede un open o un click che non si può fare: (?P<detail>.+); i casi esistono$")
 _REASON_FIXED = {
-    "unreachable: the split is reached but an earlier outcome always matches":
-        ("unreachable", "un branch precedente dello split è sempre soddisfatto per primo"),
-    "unreachable: the split is reached but this branch is never taken":
-        ("unreachable", "nessun percorso simulato prende questo branch, anche se lo split viene raggiunto"),
-    "unreachable: no simulated path crosses this branch":
+    "non raggiungibile: lo split è raggiunto, ma la condizione di un branch precedente è sempre vera":
+        ("unreachable", "la condizione di un branch precedente dello split è sempre vera"),
+    "non raggiungibile: lo split è raggiunto, ma nessun contatto prende questo branch":
+        ("unreachable", "nessun contatto prende questo branch, anche se lo split viene raggiunto"),
+    "non raggiungibile: nessun percorso simulato attraversa questo branch":
         ("unreachable", "nessun percorso simulato lo attraversa"),
-    "unreachable: no path from the start reaches this activity":
+    "non raggiungibile: nessun percorso dall'inizio del journey raggiunge questa attività":
         ("unreachable", "nessun percorso dall'inizio del journey raggiunge lo split"),
-    "needs an open or click but no real inbox is configured; the cases exist with undeliverable addresses":
+    "richiede un open o un click, ma non è configurata un'inbox reale; i casi esistono, con indirizzi non recapitabili":
         ("not covered", "richiede un open o un click, ma non è stata indicata un'inbox reale. I suoi casi esistono, "
                         "con indirizzi non recapitabili"),
 }
@@ -1068,8 +1077,8 @@ def _quoted_labels(journey: Journey, text: str) -> list[str]:
 
 
 def _drop_table(detail: str, condition: str) -> str:
-    """``T.F è sempre ...`` as ``F è sempre ...`` when the quoted condition already names ``T.F``."""
-    field = detail.split(" è sempre ", 1)[0]
+    """``T.F vale sempre ...`` as ``F vale sempre ...`` when the quoted condition already names ``T.F``."""
+    field = detail.split(" vale sempre ", 1)[0]
     if "." in field and field in condition:
         return field.split(".", 1)[1] + detail[len(field):]
     return detail
@@ -1102,8 +1111,8 @@ def _explain_reason(reason: str, journey: Journey, activity_key: str,
         for part in match.group("detail").split("; "):
             seen = _REASON_ALWAYS_ONE_OF.match(part)
             if seen:
-                details.append(f"{seen.group('field')} è sempre {_or_values(seen.group('values'))}")
-            elif part != "the condition is never true":
+                details.append(f"{seen.group('field')} vale sempre {_or_values(seen.group('values'))}")
+            elif part != _REASON_NEVER_TRUE:
                 details.append(part)
         condition = _condition_text(journey, activity_key, outcome_key)
         if condition:
@@ -1119,13 +1128,18 @@ def _explain_reason(reason: str, journey: Journey, activity_key: str,
         return "unreachable", f"nessuna combinazione di valori dei campi raggiunge lo split, che segue {parents}"
     match = _REASON_BEHIND_UNSUPPORTED.match(reason)
     if match:
-        blockers = _join_words(_quoted_labels(journey, match.group("keys")))
-        return "unreachable", f"si trova a valle dell'attività non supportata {blockers}"
+        return "not covered", match.group("detail")
     match = _REASON_UNSUPPORTED.match(reason)
     if match:
-        return "not covered", f"lo split stesso non è supportato: {match.group('detail').rstrip('.')}"
-    if reason.startswith("unreachable: "):
-        return "unreachable", reason[len("unreachable: "):]
+        what = ("lo split stesso non è supportato" if match.group("what").startswith("attività")
+                else "il branch non è supportato")
+        return "not covered", f"{what}: {match.group('detail').rstrip('.')}"
+    match = _REASON_BLOCKED.match(reason)
+    if match:
+        return "not covered", (f"richiede un open o un click che non si può fare: {match.group('detail')}. I suoi "
+                               "casi esistono")
+    if reason.startswith(_UNREACHABLE_PREFIX):
+        return "unreachable", reason[len(_UNREACHABLE_PREFIX):]
     return None, reason
 
 
@@ -1460,7 +1474,7 @@ def _section_not_covered(result: GenerationResult) -> str:
         causes.append(_plural(len(behind_branch), "branch che nessun contatto può raggiungere",
                               "branch che nessun contatto può raggiungere"))
     if behind_unsupported:
-        causes.append(_plural(len(behind_unsupported), "attività non supportata", "attività non supportate"))
+        causes.append(_plural(len(behind_unsupported), "elemento non supportato", "elementi non supportati"))
     intro = f"{_plural(len(missing), 'branch non è coperto', 'branch non sono coperti')}."
     if grouped and own:
         intro += (f" Di questi, {grouped} {'si trova' if grouped == 1 else 'si trovano'} a valle di "
@@ -1478,9 +1492,16 @@ def _section_not_covered(result: GenerationResult) -> str:
             parts.append(_root_text(journey, root, branches, by_ref))
             parts.append(_behind_list(journey, branches))
         for reason, branches in behind_unsupported.items():
-            blockers = _join_words(_quoted_labels(journey, _REASON_BEHIND_UNSUPPORTED.match(reason).group("keys")))
-            parts.append(f"{_lie_behind(len(branches))} a valle dell'attività non supportata {blockers}. Vedi la "
-                         "sezione Elementi non supportati.")
+            detail = _REASON_BEHIND_UNSUPPORTED.match(reason).group("detail")
+            after = _REASON_AFTER_UNSUPPORTED.match(detail)
+            count = len(branches)
+            if after:
+                text = (f"{count} branch {'viene' if count == 1 else 'vengono'} dopo il branch non supportato "
+                        f"'{after.group('label')}' dello stesso split, quindi non "
+                        f"{'viene mai valutato' if count == 1 else 'vengono mai valutati'}.")
+            else:
+                text = f"{_lie_behind(count)} a valle di un elemento non supportato: {detail.rstrip('.')}."
+            parts.append(text + " Vedi la sezione Elementi non supportati.")
             parts.append(_behind_list(journey, branches))
     if own:
         rows = []
@@ -1604,12 +1625,12 @@ def _constant_key_line(matches: list[re.Match]) -> str:
 
 def _one_to_one_line(matches: list[re.Match]) -> str:
     """One-to-one relationships that join on part of a primary key."""
-    parts = [f"'{m.group('name')}' fa il join di {m.group('table')} su {m.group('fields')}, e la chiave di "
+    parts = [f"'{m.group('name')}' collega {m.group('table')} tramite {m.group('fields')}, ma la chiave primaria di "
              f"{m.group('table')} comprende anche {_join_words(k.strip() for k in m.group('extra').split(','))}"
              for m in matches]
-    lead = ("Una relazione one-to-one fa il join" if len(parts) == 1
-            else "Alcune relazioni one-to-one fanno il join")
-    return (f"{lead} su una parte della chiave primaria, quindi più righe possono corrispondere a un contatto: "
+    lead = ("Una relazione uno a uno collega una tabella" if len(parts) == 1
+            else "Alcune relazioni uno a uno collegano una tabella")
+    return (f"{lead} su una parte della sua chiave primaria, quindi a un contatto possono corrispondere più righe: "
             + "; ".join(parts) + ".")
 
 
