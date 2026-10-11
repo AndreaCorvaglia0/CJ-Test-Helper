@@ -116,7 +116,7 @@ def test_scenarios_csv():
     header, rows = read_csv(result.files[SCENARIOS_FILE])
     assert header == SCENARIO_COLUMNS + [f"{CONFIG}.CHANNEL"]
     assert [r["scenario_key"] for r in rows] == ["TST_R01_S01", "TST_R01_S02"]
-    assert [r["activate"] for r in rows] == ["yes", "no"]
+    assert [r["active_at_start"] for r in rows] == ["yes", "no"]
     assert rows[1]["contact_count"] == "50"
 
 

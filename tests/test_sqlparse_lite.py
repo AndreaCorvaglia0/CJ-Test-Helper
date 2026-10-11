@@ -780,7 +780,6 @@ def test_format_keeps_the_dotnet_format_as_written():
     "FORMAT(GETDATE(), M.City)",
     "CONVERT(VARCHAR(8), GETDATE(), 112)",
     "DATEADD(day, 1, GETDATE())",
-    "NULL",
     "CASE WHEN M.City = 'Rome' THEN 'Y' ELSE 'N' END",
     "(SELECT MAX(C.CampaignName) FROM [DE_NCRM_AD_HOC_CONFIG] C)",
 ])
@@ -1028,3 +1027,19 @@ def test_dotnet_to_strftime_gives_what_format_would_write():
     moment = datetime(2026, 10, 11, 9, 5, 7)
     assert moment.strftime(dotnet_to_strftime("yyyyMMdd_HHmm")) == "20261011_0905"
     assert moment.strftime(dotnet_to_strftime("dd/MM/yyyy hh:mm:ss tt")) == "11/10/2026 09:05:07 AM"
+
+
+def test_null_select_gives_an_empty_entry_column():
+    from cjhelper.model import SelectNull
+    parsed = parse(f"SELECT NULL AS X {FROM_MASTER}")
+    assert parsed.select == [SelectItem("X", SelectNull())]
+    assert not parsed.warnings
+
+
+def test_format_with_tokens_the_poc_cannot_write_is_unsupported():
+    from cjhelper.sqlparse_lite import unsupported_dotnet_tokens
+    assert unsupported_dotnet_tokens("yyyyMMdd_HHmm") == []
+    assert unsupported_dotnet_tokens("d/M/yyyy HH:mm:ss.fff") == ["d", "M", "fff"]
+    parsed = parse(f"SELECT FORMAT(GETUTCDATE(), 'd/M/yyyy') AS X {FROM_MASTER}")
+    assert isinstance(parsed.select[0].expr, SelectUnsupported)
+    assert warned(parsed, "column X", "tokens")

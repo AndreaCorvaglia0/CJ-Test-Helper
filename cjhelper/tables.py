@@ -118,7 +118,7 @@ def build_table_model(package: Package) -> TableModel:
     keys = _link_keys(contact_key, package, source_queries, names, warnings)
     levels, level_reasons = _table_levels(entry, selected, package.tables, keys, contact_key, warnings)
     key_groups = _key_groups(keys, contact_key, levels, entry, selected, package.tables)
-    field_levels = _field_levels(selected, package.tables, levels, key_groups)
+    field_levels = _field_levels(selected, package.tables, levels, key_groups, entry, entry_parsed, names)
     activation, activation_note = _activation_field(entry_parsed, levels, names, warnings)
 
     entry_query_name = entry_query.name if entry_query else None
@@ -683,10 +683,13 @@ def _key_groups(keys: _KeyUnion, contact_key: FieldRef, levels: dict[str, str], 
 
 
 def _field_levels(selected: list[str], tables: dict[str, Table], levels: dict[str, str],
-                  key_groups: list[KeyGroup]) -> dict[FieldRef, str]:
+                  key_groups: list[KeyGroup], entry: Optional[str] = None,
+                  entry_parsed: Optional[ParsedQuery] = None, names=None) -> dict[FieldRef, str]:
     """Every field of every selected table takes its table's level, except the fields of a
     contact-level table that belong to a scenario key group: they hold the scenario key (the pilot's
-    Target.Description and the entry table's CampaignName), so they are scenario-level."""
+    Target.Description and the entry table's CampaignName), so they are scenario-level. An entry
+    column that the entry query copies from a scenario-level column is scenario-level too: every
+    contact of the scenario gets the same value."""
     scenario_key_fields = {ref for group in key_groups if group.kind == GROUP_SCENARIO for ref in group.fields}
     out: dict[FieldRef, str] = {}
     for name in selected:
@@ -696,6 +699,16 @@ def _field_levels(selected: list[str], tables: dict[str, Table], levels: dict[st
             if level == LEVEL_CONTACT and ref in scenario_key_fields:
                 level = LEVEL_SCENARIO
             out[ref] = level
+    if entry is not None and entry_parsed is not None and names is not None and entry in tables:
+        for item in entry_parsed.select:
+            if not isinstance(item.expr, SelectColumn):
+                continue
+            target = tables[entry].field(item.target_column)
+            source = names.field_ref(item.expr.source.table, item.expr.source.column)
+            if target is None or source is None:
+                continue
+            if levels.get(source[0]) == LEVEL_SCENARIO:
+                out[(entry, target.name)] = LEVEL_SCENARIO
     return out
 
 

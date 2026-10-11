@@ -472,14 +472,14 @@ def test_one_active_scenario_activates_only_the_first_in_run_order():
     configs = by_key(rows_of(data, CONFIG), "CampaignName")
     assert configs["TST_R01_S01"]["ACTIVE"] == "True"
     assert configs["TST_R01_S02"]["ACTIVE"] == "False"
-    assert [r["activate"] for r in data.scenarios_rows] == ["yes", "no"]
+    assert [r["active_at_start"] for r in data.scenarios_rows] == ["yes", "no"]
     assert not any("ACTIVE" in w and "instead of" in w for w in data.warnings)
 
 
 def test_one_active_scenario_off_activates_every_scenario():
     data = run(build_world(one_active_scenario=False))
     assert [r["ACTIVE"] for r in rows_of(data, CONFIG)] == ["True", "True"]
-    assert [r["activate"] for r in data.scenarios_rows] == ["yes", "yes"]
+    assert [r["active_at_start"] for r in data.scenarios_rows] == ["yes", "yes"]
 
 
 def test_activation_field_from_settings_must_be_boolean():
@@ -488,7 +488,7 @@ def test_activation_field_from_settings_must_be_boolean():
     assert (on, field) == (False, None)
     assert any("not Boolean" in w for w in warnings)
     data = run(world)
-    assert [r["activate"] for r in data.scenarios_rows] == ["yes", "yes"]
+    assert [r["active_at_start"] for r in data.scenarios_rows] == ["yes", "yes"]
     assert any("Region" in w and "not Boolean" in w for w in data.warnings)
 
 
@@ -707,7 +707,7 @@ def test_without_entry_query_the_entry_table_uses_the_general_rules():
     assert len(rows) == 56
     assert rows[0]["ContactId"] == "TST_R01_C0001"
     assert rows[0]["CampaignName"] == "TST_R01_S01"
-    assert rows[0]["ActionId"] == "TST_ActionId_1"
+    assert rows[0]["ActionId"] == "TST_R01_P0001"   # a primary key: unique and with the run identifier
     assert rows[0]["Email"] == "tester+TST_R01_C0001@example.com"
     assert any("No entry query" in w for w in data.warnings)
     assert data.placeholders == []
@@ -729,7 +729,7 @@ def test_scenarios_rows_content():
     assert first == {
         "scenario_key": "TST_R01_S01", "run_order": "1", "has_manual_action": "True", "is_statistical": "False",
         "case_count": "2", "contact_count": "6", "first_contact_key": "TST_R01_C0001",
-        "last_contact_key": "TST_R01_C0006", "activate": "yes", f"{CONFIG}.CHANNEL": "Email",
+        "last_contact_key": "TST_R01_C0006", "active_at_start": "yes", "activation_field": f"{CONFIG}.ACTIVE", f"{CONFIG}.CHANNEL": "Email",
     }
     assert second["scenario_key"] == "TST_R01_S02"
     assert second["is_statistical"] == "True"

@@ -53,13 +53,14 @@ from cjhelper.model import (
     SelectExpr,
     SelectItem,
     SelectLiteral,
+    SelectNull,
     SelectUnsupported,
     Table,
     TableRef,
     UnsupportedFilter,
 )
 
-__all__ = ["parse_query", "dotnet_to_strftime", "CURRENT_DATE_FUNCTIONS", "DOTNET_DATE_TOKENS"]
+__all__ = ["parse_query", "dotnet_to_strftime", "unsupported_dotnet_tokens", "CURRENT_DATE_FUNCTIONS", "DOTNET_DATE_TOKENS"]
 
 
 # T-SQL calls that return the current date and time (plan: "the current date").
@@ -159,6 +160,32 @@ DOTNET_DATE_TOKENS: dict[str, str] = {
 }
 
 _TOKEN_LETTERS = set("".join(DOTNET_DATE_TOKENS))
+
+
+def unsupported_dotnet_tokens(fmt: str) -> list[str]:
+    """The .NET date tokens in ``fmt`` that dotnet_to_strftime cannot convert (``d``, ``M``, ``H``,
+    ``h``, ``m``, ``s``, ``fff``, ``z``, ``K`` and so on), in order of appearance; empty when all fit."""
+    bad: list[str] = []
+    i = 0
+    letters = set("yMdHhmstfFzK")
+    while i < len(fmt):
+        char = fmt[i]
+        if char in ("'", '"'):
+            end = fmt.find(char, i + 1)
+            i = len(fmt) if end == -1 else end + 1
+        elif char == "\\":
+            i += 2
+        elif char in letters:
+            end = i
+            while end < len(fmt) and fmt[end] == char:
+                end += 1
+            run = fmt[i:end]
+            if run not in DOTNET_DATE_TOKENS and run not in bad:
+                bad.append(run)
+            i = end
+        else:
+            i += 1
+    return bad
 
 
 def dotnet_to_strftime(fmt: str) -> str:
@@ -584,6 +611,8 @@ def _select_expr(node: exp.Expression, target: str, context: _Context) -> Select
     node = _without_parens(node)
     if _is_plain_column(node):
         return SelectColumn(context.resolve(node))
+    if isinstance(node, exp.Null):
+        return SelectNull()
     value = _literal_text(node)
     if value is not None:
         return SelectLiteral(value)
@@ -591,6 +620,12 @@ def _select_expr(node: exp.Expression, target: str, context: _Context) -> Select
         return SelectCurrentDate(None)
     date_format = _current_date_format(node)
     if date_format is not None:
+        bad = unsupported_dotnet_tokens(date_format)
+        if bad:
+            text = _sql(node)
+            context.warn(f"column {target}: the date format {date_format!r} uses tokens the PoC cannot write "
+                         f"({', '.join(bad)}); the column gets a placeholder")
+            return SelectUnsupported(text)
         return SelectCurrentDate(date_format)
     if isinstance(node, exp.Concat):
         return SelectConcat(tuple(_select_expr(part, target, context) for part in node.expressions))

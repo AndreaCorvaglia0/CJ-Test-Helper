@@ -20,11 +20,20 @@ Resume from this file. Spec: `docs/spec.md`. Contract: `docs/plan.md`.
 - `docs/assumptions.md`: Salesforce review, 35 assumptions to verify, 16 suspicious patterns, a one-day verification run plan.
   Acted on: the filters of the followed automation queries are applied to the generated rows (RUN_TIME stays empty).
 
+- Technical writer: README.md, report.md with a how-to-run section and root-cause grouping, testbook wording. Done.
+- Streamlit page `cjhelper/app.py` (22 tests), screenshots judged by the lead; UX review pending.
+- End-of-level review loop, part 1 (coverage and data generation reviewers, 34 findings): fixed in three batches, see the
+  commits "Review fixes, batch 1/2/3". Highlights: length-aware 'other' values, email and phone fields read by splits, key
+  fields read by splits, unsupported outcomes instead of whole splits, remainder evaluated last, nested random splits,
+  statistical cases with manual actions, branches before a random split, SELECT * with extra items, NULL in select,
+  unsupported .NET date tokens, entry columns copied from scenario-level columns, waits before the email get no extra time,
+  unique primary-key placeholders, email-typed contact keys, scenarios.csv `active_at_start` and `activation_field` columns.
+
 ## In progress
 
-- End-of-level-1 review loop: five adversarial reviewers plus skeptic verification (workflow), findings to be fixed by the lead.
-- Technical writer: README.md, wording of report.md and testbook.xlsx.
-- Next: priority 2 wording done, then confirm priority 3 (engagement and random splits) on the pilot, priority 4 testbook polish, priority 5 page.
+- Review loop, part 2 (trust checks, export robustness, spec compliance) with skeptic verification: running.
+- UX review of the page: running.
+- Then: fix confirmed findings, re-run every example and the pilot, a fresh test engineer tries to break the output, final report.
 
 ## Design readings taken by the lead (not Salesforce assumptions)
 

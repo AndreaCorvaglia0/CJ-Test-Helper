@@ -41,6 +41,7 @@ from .model import (
     SelectConcat,
     SelectCurrentDate,
     SelectLiteral,
+    SelectNull,
     SelectUnsupported,
     Settings,
     Step,
@@ -308,9 +309,13 @@ class Checker:
             for col, v in exp.items():
                 if row.get(col) != v:
                     details.append(f"{entry}.csv row {key}: {col} is {row.get(col)!r} but the entry query gives {v!r}")
+            wait_fields = {a.wait_field[1].lower() for a in self.package.journey.activities.values()
+                           if a.wait_field is not None and a.wait_field[0].lower() == entry.lower()}
             for f in table.fields:
                 if f.name in exp:
                     continue
+                if f.name.lower() in wait_fields:
+                    continue   # a wait date the journey needs, filled by the generator although the query does not
                 v = row.get(f.name)
                 allowed = {None}
                 if f.default is not None:
@@ -364,6 +369,8 @@ class Checker:
             return self._combo_value(combo, expr.source)
         if isinstance(expr, SelectLiteral):
             return expr.value
+        if isinstance(expr, SelectNull):
+            return None
         if isinstance(expr, SelectCurrentDate):
             if expr.format:
                 from .sqlparse_lite import dotnet_to_strftime
@@ -398,7 +405,7 @@ class Checker:
                 checked += 1
             else:
                 for branch in case.random.branches:
-                    steps = self._simulate(walker, lookup, case, branch.outcome_key)
+                    steps = self._simulate_branch(walker, lookup, case, branch)
                     expected = list(case.steps[:-1]) + [Step(case.random.activity_key, branch.outcome_key)] + list(branch.steps)
                     if steps != expected:
                         details.append(f"contact {contact.key} (case {case.id}, random outcome {branch.outcome_key}) takes "
@@ -433,8 +440,14 @@ class Checker:
             return row.get(ref[1])
         return lookup
 
-    def _simulate(self, walker: graph.Walker, lookup, case: Case, random_outcome: Optional[str]) -> list[Step]:
+    def _simulate_branch(self, walker: graph.Walker, lookup, case: Case, branch) -> list[Step]:
+        """Simulate one branch of a statistical case: every random split on it takes the branch's outcome."""
         manual_keys = {m.activity_key for m in case.manual_actions}
+        choices = {case.random.activity_key: branch.outcome_key}
+        for s in branch.steps:
+            act = self.package.journey.activities.get(s.activity_key)
+            if act is not None and act.kind == KIND_RANDOM and s.outcome_key is not None:
+                choices[s.activity_key] = s.outcome_key
 
         def choose(activity, state):
             if activity.kind == KIND_ENGAGEMENT:
@@ -444,9 +457,36 @@ class Checker:
                         return o
                 return activity.outcomes[-1] if activity.outcomes else None
             if activity.kind == KIND_RANDOM:
-                if case.random is not None and activity.key == case.random.activity_key and random_outcome is not None:
-                    return activity.outcome(random_outcome)
-                return activity.outcomes[0] if activity.outcomes else None
+                chosen = activity.outcome(choices[activity.key]) if activity.key in choices else None
+                return chosen or (activity.outcomes[0] if activity.outcomes else None)
+            return None
+
+        state = walker.start()
+        walker.run(state, lookup, choose)
+        return list(state.steps)
+
+    def _simulate(self, walker: graph.Walker, lookup, case: Case, random_outcome: Optional[str]) -> list[Step]:
+        manual_keys = {m.activity_key for m in case.manual_actions}
+        random_choices: dict[str, str] = {}
+        if case.random is not None and random_outcome is not None:
+            random_choices[case.random.activity_key] = random_outcome
+            branch = next((b for b in case.random.branches if b.outcome_key == random_outcome), None)
+            if branch is not None:
+                for s in branch.steps:
+                    act = self.package.journey.activities.get(s.activity_key)
+                    if act is not None and act.kind == KIND_RANDOM and s.outcome_key is not None:
+                        random_choices[s.activity_key] = s.outcome_key
+
+        def choose(activity, state):
+            if activity.kind == KIND_ENGAGEMENT:
+                want_yes = activity.key in manual_keys
+                for o in activity.outcomes:
+                    if o.when is want_yes:
+                        return o
+                return activity.outcomes[-1] if activity.outcomes else None
+            if activity.kind == KIND_RANDOM:
+                chosen = activity.outcome(random_choices[activity.key]) if activity.key in random_choices else None
+                return chosen or (activity.outcomes[0] if activity.outcomes else None)
             return None
 
         state = walker.start()

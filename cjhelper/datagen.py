@@ -36,6 +36,8 @@ from typing import Optional
 from .model import (
     KIND_DECISION,
     KIND_WAIT_ATTRIBUTE,
+    KIND_WAIT_DURATION,
+    KIND_WAIT_STO,
     LEVEL_CONTACT,
     LEVEL_SCENARIO,
     Case,
@@ -75,7 +77,8 @@ SCENARIO_COLUMNS = [
     "contact_count",
     "first_contact_key",
     "last_contact_key",
-    "activate",
+    "active_at_start",
+    "activation_field",
 ]
 
 UNDELIVERABLE_DOMAIN = "example.invalid"   # spec: "<contact key>@example.invalid"
@@ -109,6 +112,8 @@ _RULE_NAMES = {
 }
 
 # Requirements an entry column passes back to the source column the select copies into it.
+_WAIT_KINDS = (KIND_WAIT_ATTRIBUTE, KIND_WAIT_DURATION, KIND_WAIT_STO)
+
 _PUSHED_BACK_KINDS = ("key", "split", "activation", "wait", "email", "phone", "date")
 
 # Rules whose value is a requirement: when a higher rule wins over one of them, a warning says so.
@@ -285,22 +290,28 @@ def case_paths(case: Case) -> list[list[str]]:
     return [base]
 
 
-def wait_precedes_manual_action(wait_key: str, case: Case) -> bool:
-    """True when the case crosses the wait and later needs a manual action.
+def wait_precedes_manual_action(wait_key: str, case: Case, activities: Optional[dict] = None) -> bool:
+    """True when this wait is the one that leaves the tester time for a manual action.
 
     Spec, "Dates": "Wait date before an engagement split | Wait-by-attribute on the path to an
-    engagement split | Generation time plus 24 hours, leaving time to open the email". Read as: the
-    case crosses the wait, and an engagement split where the case needs a manual action (open or
-    click) comes after the wait on its path.
+    engagement split | Generation time plus 24 hours, leaving time to open the email". Read as: on
+    the case's path, the wait lies between the email to open or click and the engagement split
+    that needs the action. A wait before the email is sent gets no extra time: it would only delay
+    the send, and a later wait set to the same date would then end at once.
     """
     if not case.manual_actions:
         return False
     for keys in case_paths(case):
         if wait_key not in keys:
             continue
-        after = keys[keys.index(wait_key) + 1:]
-        if any(action.activity_key in after for action in case.manual_actions):
-            return True
+        for action in case.manual_actions:
+            if action.activity_key not in keys:
+                continue
+            end = keys.index(action.activity_key)
+            start = keys.index(action.email_activity_key) if action.email_activity_key in keys[:end] else -1
+            between = keys[start + 1:end]
+            if wait_key in between:
+                return True
     return False
 
 
@@ -349,6 +360,13 @@ class _Generator:
         self._row_index: dict[str, dict[str, dict[str, Value]]] = {}
         self._other_keys: dict[tuple[int, str], str] = {}
         self._contact_email: dict[str, str] = {}
+        # The contact key is an email address when a field of the contact key group has that type.
+        self._email_keys = any(
+            _field_type(f) == "emailaddress"
+            for group in model.key_groups if group.kind == "contact"
+            for (table_name, field_name) in group.fields
+            for t in [_find_table(package.tables, table_name)] if t is not None
+            for f in [t.field(field_name)] if f is not None)
         self._active_scenario: Optional[Scenario] = None
 
         self._entry = _find_table(package.tables, model.entry_table)
@@ -538,6 +556,11 @@ class _Generator:
                     continue
                 filter_source.setdefault(key, label)
                 same_field.append(flt)
+                if query is not self.model.entry_query:
+                    self._warn(
+                        f"{label}, which the automation runs on {table.name}, filters {table.name}.{field.name}; the "
+                        "generated rows pass that filter too (assumption: the automation's own queries must find them)."
+                    )
         return filters
 
     def _resolve_activation(self) -> tuple[bool, Optional[FieldRef]]:
@@ -576,19 +599,21 @@ class _Generator:
                     if source_field is not None:
                         self._entry_plan[field.name] = SelectColumn(ColumnRef(table.name, source_field.name))
                         break
-        else:
+        if query.select:
             ignored: list[str] = []
+            explicit: set[str] = set()
             for item in query.select:
                 field = entry.field(item.target_column)
                 if field is None:
                     ignored.append(item.target_column)
                     continue
-                if field.name in self._entry_plan:
+                if field.name in explicit:
                     self._warn(
                         f"The entry query fills {entry.name}.{field.name} twice; the first expression is used."
                     )
                     continue
-                self._entry_plan[field.name] = item.expr
+                explicit.add(field.name)
+                self._entry_plan[field.name] = item.expr   # an explicit item wins over a column copied by *
             if ignored:
                 self._warn(
                     f"The entry query selects columns that {entry.name} does not have, so they are ignored: "
@@ -619,7 +644,7 @@ class _Generator:
         if ref in self._wait_fields:
             rules.append(_Rule("wait", tuple(self._wait_fields[ref])))
         field_type = _field_type(field)
-        if field_type == "emailaddress":
+        if field_type == "emailaddress" or self._is_default_email_field(table, field):
             rules.append(_Rule("email"))
         elif field_type == "phone":
             rules.append(_Rule("phone"))
@@ -627,6 +652,12 @@ class _Generator:
             rules.append(_Rule("date"))
         rules.append(_Rule("placeholder"))
         return sorted(rules, key=lambda rule: rule.priority)
+
+    def _is_default_email_field(self, table: Table, field: Field) -> bool:
+        """The entry table field the journey sends emails to (``defaults.email`` in the export)."""
+        name = self.package.journey.default_email_field
+        return (name is not None and self._entry is not None and table is self._entry
+                and field.name.lower() == name.lower())
 
     def _rules(self, table: Table, field: Field) -> list[_Rule]:
         """Own rules plus the requirements of the entry columns this field is selected into."""
@@ -654,8 +685,8 @@ class _Generator:
             value = self._normalise(_as_text(value), table, field)
             if rule.kind == "key" and field.length and value and len(value) > field.length:
                 self._warn(
-                    f"The key {value} is longer than {table.name}.{field.name} ({field.length} characters); "
-                    "it is not cut, so that the tables still join."
+                    f"The generated keys ({len(value)} characters) are longer than {table.name}.{field.name} "
+                    f"({field.length} characters); they are not cut, so that the tables still join."
                 )
             self._report_overridden(table, field, row, rule, value, rules[position + 1:])
             return value
@@ -672,7 +703,7 @@ class _Generator:
             if isinstance(rule.detail, IsNullFilter) and rule.detail.negated:
                 if value is None or value == "":
                     self._warn(
-                        f"{table.name}.{field.name} gets the {chosen.describe()} (empty on row {row.number}), so the "
+                        f"{table.name}.{field.name} gets the {chosen.describe()} (empty on some rows), so the "
                         "entry query filter IS NOT NULL on it is not met, following the spec's priority order."
                     )
                 continue
@@ -682,7 +713,7 @@ class _Generator:
             other = self._normalise(_as_text(other), table, field)
             if other != value:
                 self._warn(
-                    f"{table.name}.{field.name} gets the {chosen.describe()} ({value!r} on row {row.number}) "
+                    f"{table.name}.{field.name} gets the {chosen.describe()} "
                     f"instead of the {rule.describe()} ({other!r}), following the spec's priority order."
                 )
 
@@ -759,14 +790,14 @@ class _Generator:
                 self._warn(f"The coverage gives no value for {ref[0]}.{ref[1]} in scenario {row.scenario.id}, "
                            "so the lower-priority rules fill it.")
                 return _SKIP
-            return value
+            return self._other_or_value(ref, value)
         if row.case is not None:
             found, value = _lookup(row.case.contact_values, ref)
             if not found:
                 self._warn(f"The coverage gives no value for {ref[0]}.{ref[1]} in case {row.case.id}, "
                            "so the lower-priority rules fill it.")
                 return _SKIP
-            return value
+            return self._other_or_value(ref, value)
         # A row shared by the whole scenario holds a contact-level field: its cases must agree.
         values = [value for case in row.scenario.cases for found, value in [_lookup(case.contact_values, ref)] if found]
         if not values:
@@ -777,6 +808,18 @@ class _Generator:
                 f"whose cases need different values; the value of the first case ({values[0]!r}) is written."
             )
         return values[0]
+
+    def _other_or_value(self, ref: FieldRef, value: Value) -> object:
+        """The coverage's 'other' value of an email or phone field only means "not one of the
+        condition values": the address or number rules (spec, "Email" and "Phone") give it."""
+        other = self.coverage.other_values.get(ref)
+        if other is None or value != other:
+            return value
+        table = self._table(ref[0])
+        field = table.field(ref[1]) if table is not None else None
+        if field is not None and _field_type(field) in ("emailaddress", "phone"):
+            return _SKIP
+        return value
 
     # -- rule 3: entry query filters --------------------------------------------------------
 
@@ -800,7 +843,8 @@ class _Generator:
         when a case crosses the wait and later needs a manual action. A scenario-level field is decided
         over all the cases of its scenario, a contact-level field for the contact's own case."""
         cases = [row.case] if row.case is not None else list(row.scenario.cases)
-        before_engagement = any(wait_precedes_manual_action(key, case) for case in cases for key in wait_keys)
+        activities = self.package.journey.activities
+        before_engagement = any(wait_precedes_manual_action(key, case, activities) for case in cases for key in wait_keys)
         hours = (self.settings.wait_offset_before_engagement_hours if before_engagement
                  else self.settings.wait_offset_hours)
         return self._format_date(self.generation_time + timedelta(hours=hours))
@@ -837,6 +881,14 @@ class _Generator:
                 f"{table.name}.{field.name} is a Text field named like an email address; only EmailAddress fields get "
                 "addresses, so it gets a text placeholder."
             )
+        if field.is_primary_key:
+            # Spec, "Keys": primary keys are unique within each table and carry the run identifier.
+            text = f"TST_{self.settings.run_id}_P{number:04d}"
+            if field.length and len(text) > field.length:
+                self._warn(f"{table.name}.{field.name} is a primary key of {field.length} characters, too short "
+                           "for unique generated keys; its values are cut and may repeat.")
+                return text[:field.length]
+            return text
         text = f"TST_{field.name}_{number}"
         return text[:field.length] if field.length else text
 
@@ -856,15 +908,22 @@ class _Generator:
         """Spec, "Keys": scenario keys TST_<run>_S01..., contact keys TST_<run>_C0001... The contact number
         counts up over the whole run, scenarios in run order and cases in the order given."""
         number = 0
+        inbox = self._real_inbox()
         for scenario in scenarios:
             scenario.key = self.settings.scenario_key(scenario.run_order)
             for case in scenario.cases:
                 if case.contact_count <= 0:
                     self._warn(f"Case {case.id} asks for {case.contact_count} contacts, so it gets none.")
                 keys = []
+                real = bool(case.manual_actions) and inbox is not None
                 for _ in range(max(case.contact_count, 0)):
                     number += 1
-                    keys.append(self.settings.contact_key(number))
+                    key = self.settings.contact_key(number)
+                    if self._email_keys:
+                        # The contact key is an email address field: the address forms of the spec already
+                        # contain the key and are unique, so they serve as the key itself.
+                        key = f"{inbox[0]}+{key}@{inbox[1]}" if real else f"{key}@{UNDELIVERABLE_DOMAIN}"
+                    keys.append(key)
                 case.contact_keys = keys
         scenario_keys = [scenario.key for scenario in scenarios]
         if len(set(scenario_keys)) != len(scenario_keys):
@@ -920,7 +979,10 @@ class _Generator:
                 if case.manual_actions and inbox is None:
                     manual_without_inbox += 1
                 for key in case.contact_keys:
-                    email = f"{inbox[0]}+{key}@{inbox[1]}" if real else f"{key}@{UNDELIVERABLE_DOMAIN}"
+                    if self._email_keys:
+                        email = key
+                    else:
+                        email = f"{inbox[0]}+{key}@{inbox[1]}" if real else f"{key}@{UNDELIVERABLE_DOMAIN}"
                     self._contact_email[key] = email
                     contacts.append(Contact(key=key, case_id=case.id, scenario_id=scenario.id,
                                             uses_real_inbox=real, uses_real_phone=self._uses_real_phone(case),
@@ -941,7 +1003,7 @@ class _Generator:
                 for action in case.manual_actions:
                     if not self._has_wait_before(case, action, activities):
                         self._warn(
-                            f"Case {case.id}: no wait by attribute lies between the email {action.email_name!r} "
+                            f"Case {case.id}: no wait lies between the email {action.email_name!r} "
                             f"and the engagement split {action.activity_key}, so the tester may not have time to "
                             f"{action.kind} the email before the split is evaluated."
                         )
@@ -953,7 +1015,7 @@ class _Generator:
                 continue
             end = keys.index(action.activity_key)
             start = keys.index(action.email_activity_key) if action.email_activity_key in keys[:end] else -1
-            if any(activities.get(key) is not None and activities[key].kind == KIND_WAIT_ATTRIBUTE
+            if any(activities.get(key) is not None and activities[key].kind in _WAIT_KINDS
                    for key in keys[start + 1:end]):
                 return True
         return False
@@ -1043,6 +1105,15 @@ class _Generator:
             return self._entry_absent_value(entry, field, row)
         value, problem = self._evaluate(expr, sources)
         if problem is not None:
+            rules = self._own_rules(entry, field)
+            if rules and rules[0].kind == "key":
+                key = self._rule_value(rules[0], entry, field, row)
+                if key is not _SKIP:
+                    self._warn(
+                        f"{entry.name}.{field.name} is a key field filled by an expression the PoC does not read "
+                        f"({problem}); the generated key is written so that the tables join."
+                    )
+                    return _as_text(key)
             self._note_placeholder(entry, field, problem)
             return self._fallback_value(entry, field, row)
         value = self._normalise(_as_text(value), entry, field)
@@ -1113,6 +1184,13 @@ class _Generator:
                 f"{entry.name}.{field.name} is read by a split but the entry query does not fill it, so the entry "
                 "row gets what the query would produce (its default or an empty cell), not the case's value."
             )
+        for rule in rules:
+            if rule.kind == "wait":
+                self._warn(
+                    f"{entry.name}.{field.name} is the date of a wait by attribute but the entry query does not fill "
+                    "it; the wait date is written so that the contacts can pass the wait (the entry check allows it)."
+                )
+                return self._normalise(_as_text(self._rule_value(rule, entry, field, row)), entry, field)
         default = self._default_value(entry, field)
         if default is not None:
             return default
@@ -1141,8 +1219,8 @@ class _Generator:
             required = self._normalise(_as_text(required), entry, field)
             if required != value:
                 self._warn(
-                    f"The entry query fills {entry.name}.{field.name} with {value!r} (row {row.number}) but the "
-                    f"{rule.describe()} is {required!r}; the entry row keeps what the query produces."
+                    f"The entry query fills {entry.name}.{field.name} with another value than the "
+                    f"{rule.describe()} ({required!r}); the entry row keeps what the query produces."
                 )
             return   # only the highest requirement counts
 
@@ -1150,7 +1228,8 @@ class _Generator:
 
     def _scenario_rows(self, scenarios: list[Scenario]) -> list[dict[str, Value]]:
         """Spec, "Outputs": "scenarios.csv: One row per scenario: its key, its scenario-level values, run
-        order, what to activate". Under one active scenario at a time, only the first is "yes"."""
+        order, what to activate". Under one active scenario at a time, only the first is active at the
+        start; ``activation_field`` names the field to set to True on the scenario's row when its turn comes."""
         rows: list[dict[str, Value]] = []
         for scenario in scenarios:
             keys = [key for case in scenario.cases for key in case.contact_keys]
@@ -1164,7 +1243,9 @@ class _Generator:
                 "contact_count": str(len(keys)),
                 "first_contact_key": keys[0] if keys else None,
                 "last_contact_key": keys[-1] if keys else None,
-                "activate": "yes" if active else "no",
+                "active_at_start": "yes" if active else "no",
+                "activation_field": (f"{self._activation_ref[0]}.{self._activation_ref[1]}"
+                                     if self._one_active and self._activation_ref is not None else None),
             }
             for ref in self.coverage.scenario_fields:
                 column, value = self._scenario_field(ref, scenario)
