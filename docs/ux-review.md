@@ -1,5 +1,7 @@
 # UX review of the one-page app
 
+Note, 11 October 2026, later the same day: the page has since been translated into Italian and restyled with the Lutech brand (docs/brand.md). Where this review asks for a 736-pixel column, no metric tiles and the numbered steps as the only headings, the new layout replaces it: a column of about 1080 pixels, a stepper, one card per step that closes with a one-line summary, a strip of counts in step 4, and the CSV previews as tables in tabs with the table toolbar hidden. The other findings still apply, and the page keeps them. The quotes below are the English texts of the page at the time of the review.
+
 11 October 2026. Two readers in one: a UX designer, and a Marketing Cloud tester who has never seen the code. The page was started with `streamlit run cjhelper/app.py --server.headless true --server.port 8602` and driven with Playwright in Chromium at 1280 and 900 pixels wide. The inputs were `fixtures/CJ template complesso-v1.json`, a `.txt` file, a `.json` file holding plain text, and `{"entities": {}}`. The yardsticks were the spec's sections "The app" and "Outputs", plus the README.
 
 Screenshots are in `/tmp/claude-0/-home-user-CJ-Test-Helper/47c9992c-056a-5408-a219-f7db1a48a3b0/scratchpad/ux/`. The names below start with `1280-`. The `900-` file with the same name looks the same, because the page keeps a 736-pixel column at both widths. `05c` and `07` exist at 1280 only.

@@ -17,17 +17,19 @@ package). Every decision comes from the package: ``loader`` and ``tables`` for w
 ``model.Settings`` for the defaults, ``pipeline.generate`` for the files and checks, the generated
 rows (``scenarios.csv``) for the active scenario and its activation field, ``outputs`` for reading
 the CSVs back, for the file names and for the zip. This module only turns their results into
-widgets and text. The look follows docs/ux-review.md.
+widgets and text. The look follows docs/brand.md (layout, colours, fonts) and docs/ux-review.md.
 
 Run it with ``streamlit run cjhelper/app.py`` from the repository root, so that
-``.streamlit/config.toml`` applies. ``main()`` draws the title and step 1 and passes the uploaded
+``.streamlit/config.toml`` applies. ``main()`` draws the header, the stepper and step 1 and passes the uploaded
 bytes to ``render()``, which draws steps 2 to 4; the tests drive ``render()`` directly.
 """
 
 from __future__ import annotations
 
+import base64
 import csv
 import hashlib
+import html
 import io
 import json
 import logging
@@ -35,10 +37,11 @@ import re
 import sys
 import traceback
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Iterator, Mapping, Optional
 
 import streamlit as st
 
@@ -71,12 +74,14 @@ from cjhelper.model import (  # noqa: E402
 LOG = logging.getLogger(__name__)
 
 TITLE = "CJ Test Helper"
-DESCRIPTION = ("Carica l'export di un package di Marketing Cloud e scarica i dati di test in CSV per ogni branch "
-               "del suo journey.")
-STEP_UPLOAD = "1. Carica l'export del package"
-STEP_REVIEW = "2. Verifica cosa è stato rilevato"
-STEP_SETTINGS = "3. Modifica le impostazioni"
-STEP_GENERATE = "4. Genera e scarica"
+HEADER_NOTE = "Il file viene letto in memoria e poi scartato. Non viene salvato nulla."
+# The spec's four steps: the title of each card, and its name and description in the stepper.
+STEP_UPLOAD = "Carica l'export"
+STEP_REVIEW = "Verifica il rilevamento"
+STEP_SETTINGS = "Impostazioni"
+STEP_GENERATE = "Genera e scarica"
+STEPPER = (("1 · Carica", "Export del package"), ("2 · Verifica", "Cosa è stato rilevato"),
+           ("3 · Imposta", "Valori modificabili"), ("4 · Genera e scarica", ""))
 UPLOAD_LABEL = "Export del package (JSON)"
 UPLOAD_NOTE = ("Il file JSON che Package Manager esporta per il journey. Viene letto in memoria e poi scartato: "
                "non viene salvato nulla.")
@@ -98,6 +103,20 @@ DETAIL_LIMIT = 20        # details shown under a failed trust check
 DETECTION_KEY = "cjhelper.detection"   # st.session_state: (file digest, DetectionSummary)
 RESULT_KEY = "cjhelper.result"         # st.session_state: StoredRun of the last generation
 PENDING_KEY = "cjhelper.pending"       # st.session_state: (file digest, Settings) from the click to the generation
+UPLOAD_KEY = "cjhelper.upload"         # the file uploader
+
+# Where the page is, from the file and the session state. It decides which cards are open and what the stepper shows.
+PHASE_EMPTY = "empty"          # no file
+PHASE_ERROR = "error"          # the file cannot be read
+PHASE_REVIEW = "review"        # read; nothing generated for it yet
+PHASE_RUNNING = "running"      # Generate was clicked; this run generates
+PHASE_DONE = "done"            # generated
+PHASE_FAILED = "failed"        # the generation failed
+
+STATIC = Path(__file__).resolve().parent / "static"
+STYLE_FILE = Path(__file__).resolve().parent / "app.css"
+LOGO_FILE = STATIC / "lutech-logo.svg"
+ICON_FILE = STATIC / "lutech-pictogram.svg"
 
 # The page is in Italian; the messages of the generator (warnings, trust check names, loader errors) stay in
 # English, as in report.md, until the downloaded files are translated too. Salesforce's own names (activity
@@ -350,31 +369,47 @@ class StoredRun:
     details: str = ""                           # the exception and where it happened
 
 
-def done_line(result: GenerationResult) -> str:
-    """The line that ends a generation: when, with which run identifier, and the trust checks' result."""
+def done_summary(result: GenerationResult) -> str:
+    """Step 4's summary line once the data is generated: when, and with which run identifier."""
     run_id = result.settings.run_id
-    text = f"Completato alle {result.generation_time:%H:%M}" + (f", run identifier {run_id}." if run_id else ".")
+    return f"Completato alle {result.generation_time:%H:%M}" + (f" · run {run_id}" if run_id else "")
+
+
+def checks_banner(result: GenerationResult) -> tuple[str, str, bool]:
+    """The trust checks' result at the top of step 4: a short count, one sentence, and whether all passed."""
     total = len(result.checks)
-    failed = sum(1 for check in result.checks if not check.passed)
+    passed = sum(1 for check in result.checks if check.passed)
+    failed = total - passed
     if failed:
-        text += (f" {failed} trust check su {total} {'non superato' if failed == 1 else 'non superati'}: leggi i "
-                 "trust check qui sotto prima di importare.")
-    elif total:
-        text += f" {total} trust check su {total} {'superato' if total == 1 else 'superati'}."
-    return text
+        what = "trust check non superato" if failed == 1 else "trust check non superati"
+        return (f"{passed} di {total}", f"{failed} {what}: leggi i dettagli qui sotto prima di importare.", False)
+    if total:
+        return f"{total} di {total}", "Tutti i trust check sono superati.", True
+    return "0 di 0", "Nessun trust check è stato eseguito.", False
 
 
-def summary_rows(result: GenerationResult) -> list[tuple[str, int]]:
-    """Spec, "Outputs": "number of scenarios, cases and contacts, and branches covered, covered with manual
-    action, and not covered" (the counts of the coverage, as in report.md and the command line)."""
+def branch_counts(result: GenerationResult) -> tuple[int, int, int, int]:
+    """Covered (with or without a manual action), of which with a manual action, not covered, and all branches."""
     stats = result.coverage.stats
+    covered, manual, missing = stats.get("covered", 0), stats.get("covered_manual", 0), stats.get("not_covered", 0)
+    return covered + manual, manual, missing, covered + manual + missing
+
+
+def summary_cells(result: GenerationResult) -> list[tuple[str, str, str]]:
+    """Spec, "Outputs": "number of scenarios, cases and contacts, and branches covered, covered with manual
+    action, and not covered" (the counts of the coverage, as in report.md and the command line).
+
+    One cell per count: (value, what it is out of, label). The branches covered count those covered with a
+    manual action too, which the label then names.
+    """
+    stats = result.coverage.stats
+    covered, manual, missing, total = branch_counts(result)
     return [
-        ("Scenari", stats.get("scenarios", 0)),
-        ("Casi", stats.get("cases", 0)),
-        ("Contatti", stats.get("contacts", 0)),
-        ("Branch coperti", stats.get("covered", 0)),
-        ("Branch coperti con azione manuale", stats.get("covered_manual", 0)),
-        ("Branch non coperti", stats.get("not_covered", 0)),
+        (str(stats.get("scenarios", 0)), "", "Scenari"),
+        (str(stats.get("cases", 0)), "", "Casi"),
+        (str(stats.get("contacts", 0)), "", "Contatti"),
+        (str(covered), f"/ {total}", f"Branch coperti, {manual} con azione manuale"),
+        (str(missing), "", "Branch non coperti"),
     ]
 
 
@@ -439,15 +474,13 @@ def generation_warnings(result: GenerationResult) -> tuple[list[str], bool]:
     return warning_lines(warnings, result.package.journey.activities)
 
 
-def csv_preview(content: bytes, limit: int = PREVIEW_ROWS) -> tuple[str, int]:
-    """The header and the first ``limit`` rows of a written CSV, as the file writes them (comma-separated,
-    minimal quoting, outputs.py's format), and the number of rows."""
+def csv_table(content: bytes, limit: int = PREVIEW_ROWS) -> tuple[list[str], list[list[str]], int]:
+    """The header and the first ``limit`` rows of a written CSV, every value as the file writes it, and the
+    number of rows."""
     records = [record for record in csv.reader(io.StringIO(content.decode("utf-8-sig"), newline="")) if record]
     if not records:
-        return "", 0
-    text = io.StringIO()
-    csv.writer(text, lineterminator="\n").writerows(records[:limit + 1])
-    return text.getvalue().rstrip("\n"), len(records) - 1
+        return [], [], 0
+    return records[0], records[1:limit + 1], len(records) - 1
 
 
 def preview_files(result: GenerationResult) -> list[str]:
@@ -523,27 +556,46 @@ def _json_error_behind(error: BaseException) -> Optional[json.JSONDecodeError]:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """Title, description and step 1; the uploaded bytes go to ``render``."""
-    st.set_page_config(page_title=TITLE)
-    st.title(TITLE)
-    st.write(DESCRIPTION)
-    st.header(STEP_UPLOAD)
-    uploaded = st.file_uploader(UPLOAD_LABEL)
-    st.caption(_md(UPLOAD_NOTE))
-    render(uploaded.getvalue() if uploaded is not None else None)
+    """Header, stepper and step 1; the uploaded bytes go to ``render``, which draws steps 2 to 4.
+
+    The look is docs/brand.md's: a header with the logo, a stepper, and one card per step that closes
+    with a one-line summary once its step is done.
+    """
+    st.set_page_config(page_title=TITLE, page_icon=str(ICON_FILE), layout="wide")
+    st.html(STYLE_FILE)   # a .css path: Streamlit wraps it in <style>
+    st.html(_header_html())
+    stepper = st.empty()
+    uploaded = st.session_state.get(UPLOAD_KEY)
+    data = uploaded.getvalue() if uploaded is not None else None
+    phase = _phase(data)
+    stepper.html(_stepper_html(phase))   # drawn now, so that it shows during a generation too
+    if uploaded is None:
+        summary = _md("il file JSON che Package Manager esporta per il journey")
+    else:
+        summary = _md(f"{uploaded.name} · {_size_text(len(data))}")
+    with _card(1, "upload", STEP_UPLOAD, summary, expanded=phase in (PHASE_EMPTY, PHASE_ERROR),
+               state="now" if phase in (PHASE_EMPTY, PHASE_ERROR) else "done"):
+        st.file_uploader(UPLOAD_LABEL, key=UPLOAD_KEY)
+        st.caption(_md(UPLOAD_NOTE))
+    final = render(data)
+    if final != phase:
+        stepper.html(_stepper_html(final))
 
 
-def render(data: Optional[bytes]) -> None:
-    """Steps 2 to 4 for the uploaded bytes (None: no file, so nothing to show).
+def render(data: Optional[bytes]) -> str:
+    """Steps 2 to 4 for the uploaded bytes (None: no file, so nothing to show). Returns the phase.
 
     Generate takes three short runs of the page, so that its button is disabled while it works: the
     click keeps the settings as pending, the next run shows the button disabled and generates, and a
     last run shows the result with the button enabled again. (Streamlit ignores a click on a button
     that is drawn disabled in the same run, so the click and the generation cannot share one run.)
+
+    Each card's ``expanded`` follows the phase, so a card opens or closes when the phase changes and
+    otherwise stays as the tester left it.
     """
     if data is None:
         _forget()
-        return
+        return PHASE_EMPTY
     try:
         digest, summary = _detection(data)
     except Exception as error:   # spec: a plain error message and nothing else
@@ -553,75 +605,108 @@ def render(data: Optional[bytes]) -> None:
         else:
             LOG.exception("The export could not be read")
             _show_failure(UNEXPECTED_READ, technical_details(error))
-        return
-    _show_detection(summary)
+        return PHASE_ERROR
+    phase = _phase(data)
+    review = phase == PHASE_REVIEW
+    with _card(2, "review", STEP_REVIEW, _detection_summary(summary), expanded=review, state="done"):
+        _show_detection(summary)
     pending = st.session_state.get(PENDING_KEY)
     running = pending is not None and pending[0] == digest
-    settings, submitted = _settings_form(summary, running)
+    with _card(3, "settings", STEP_SETTINGS, _settings_summary(phase), expanded=review,
+               state="now" if review else "done"):
+        settings, submitted = _settings_form(summary, running)
     if submitted:
         st.session_state.pop(RESULT_KEY, None)
         st.session_state[PENDING_KEY] = (digest, settings)
         st.rerun()
-    if running:
-        st.session_state.pop(PENDING_KEY, None)
-        _generate(data, digest, pending[1])
     stored = st.session_state.get(RESULT_KEY)
-    if stored is not None and stored.digest == digest and stored.settings == settings:
-        if stored.result is None:
-            _show_failure(stored.error, stored.details)
+    shown = stored if stored is not None and stored.digest == digest and stored.settings == settings else None
+    with _card(4, "generate", STEP_GENERATE, _generate_summary(phase, shown), expanded=not review,
+               state="todo" if review else "now"):
+        slot = st.empty()   # the waiting note, then the spinner in its place: no faded note during a generation
+        if running:
+            st.session_state.pop(PENDING_KEY, None)
+            with slot.container():
+                _generate(data, digest, pending[1])
+        if shown is None:
+            slot.caption("I dati di test compaiono qui dopo che premi Genera nelle impostazioni.")
+        elif shown.result is None:
+            _show_failure(shown.error, shown.details)
         else:
-            render_result(stored.result, stored.zip_bytes)
+            render_result(shown.result, shown.zip_bytes)
+    return phase
 
 
 def render_result(result: GenerationResult, zip_bytes: bytes) -> None:
-    """Step 4 after a generation, in the order a tester needs it: the done line with the trust checks'
-    result, the summary, what to do before importing, a preview of each CSV, the download, then the
-    trust checks one by one and the warnings of the generation."""
-    st.markdown(_md(done_line(result)))
-
-    _label("Riepilogo")
-    st.markdown(_markdown_table(["Voce", "Numero"], summary_rows(result), right=(1,)))
+    """Step 4 after a generation, in the order a tester needs it: the trust checks' result, the counts,
+    what to do before importing beside the trust checks one by one, a preview of each CSV, the download,
+    and the warnings of the generation."""
+    chip, sentence, ok = checks_banner(result)
+    st.markdown(f'<div class="cj-banner{"" if ok else " failed"}"><span class="cj-chip">{_html(chip)}</span>'
+                f'<span>{_html(sentence)}</span></div>', unsafe_allow_html=True)
+    st.markdown(_strip_html(result), unsafe_allow_html=True)
     for note in summary_notes(result):
-        st.markdown(_md(note))
+        st.caption(_md(note))
 
-    _label("Prima di importare")
-    _show_list(import_notes(result), empty="")
+    left, right = st.columns([1.1, 0.9], gap="large")
+    with left:
+        _label("Prima di importare")
+        st.markdown("\n".join(f"{n}. {_md(_one_line(note))}" for n, note in enumerate(import_notes(result), 1)))
+    with right:
+        _label("Trust check")
+        checks_box = st.container(key="checks")
+        lines: list[str] = []
+        for check in result.checks:
+            badge = ":green-badge[Superato]" if check.passed else ":red-badge[Non superato]"
+            lines.append(f"- {badge} {_md(_one_line(check.name))}")
+            if not check.passed:
+                lines.extend(f"    - {_md(_one_line(detail))}" for detail in check.details[:DETAIL_LIMIT])
+                if len(check.details) > DETAIL_LIMIT:
+                    lines.append(f"    - e altri {len(check.details) - DETAIL_LIMIT}")
+        if lines:
+            checks_box.markdown("\n".join(lines))
 
     _label("Anteprima dei CSV")
-    for name in preview_files(result):
-        text, total = csv_preview(result.files[name])
-        title = f"{name}: il piano di esecuzione" if name == outputs.SCENARIOS_FILE else name
-        with st.expander(_md(f"{title} ({_count(total, 'riga', 'righe')})")):
-            if total > PREVIEW_ROWS:
-                st.caption(f"Le prime {PREVIEW_ROWS} di {total} righe.")
-            # The file's own lines: a preview holds only its first rows, so it offers no CSV download of its own.
-            st.code(text, language=None)
+    names = preview_files(result)
+    with st.container(key="previews"):
+        for tab, name in zip(st.tabs(names), names):
+            with tab:
+                header, rows, total = csv_table(result.files[name])
+                st.dataframe(_frame(header, rows), hide_index=True)
+                shown = f"Prime {len(rows)} di {total} righe" if total > len(rows) else _count(total, "riga", "righe")
+                st.caption(f"{shown} · {_count(len(header), 'colonna', 'colonne')}. Il file completo è nello zip.")
 
-    _label("Download")
     file_name = zip_file_name(result.package.journey.name)
-    st.download_button(DOWNLOAD_LABEL, data=zip_bytes, file_name=file_name, mime="application/zip", type="primary")
-    st.markdown(_md(f"{file_name} contiene {len(result.files)} file:"))
-    _show_list(download_lines(result), empty="")
-
-    _label("Trust check")
-    checks = result.checks
-    passed = sum(1 for check in checks if check.passed)
-    st.markdown(f"{passed} trust check su {len(checks)} {'superato' if passed == 1 else 'superati'}.")
-    lines: list[str] = []
-    for check in checks:
-        lines.append(f"- {'Superato' if check.passed else 'Non superato'}: {_md(_one_line(check.name))}")
-        if not check.passed:
-            lines.extend(f"    - {_md(_one_line(detail))}" for detail in check.details[:DETAIL_LIMIT])
-            if len(check.details) > DETAIL_LIMIT:
-                lines.append(f"    - e altri {len(check.details) - DETAIL_LIMIT}")
-    if lines:
-        st.markdown("\n".join(lines))
+    with st.container(horizontal=True, vertical_alignment="center", gap="medium"):
+        st.download_button(DOWNLOAD_LABEL, data=zip_bytes, file_name=file_name, mime="application/zip",
+                           type="primary")
+        st.markdown(_md(f"{file_name} contiene {len(result.files)} file:"))
+    st.markdown("\n".join(f"- {_md(_one_line(line))}" for line in download_lines(result)))
 
     warnings, left_out = generation_warnings(result)
-    _label("Warning della generazione")
-    _show_list(warnings, empty="Nessun warning.")
-    if left_out:
-        st.markdown(_md(f"{outputs.REPORT_FILE} elenca le attività coinvolte."))
+    if warnings:
+        with st.expander(f"Warning della generazione ({len(warnings)})"):
+            _show_list(warnings, empty="")
+            if left_out:
+                st.caption(_md(f"{outputs.REPORT_FILE} elenca le attività coinvolte."))
+    else:
+        st.caption("Nessun warning dalla generazione.")
+
+
+def _phase(data: Optional[bytes]) -> str:
+    if data is None:
+        return PHASE_EMPTY
+    try:
+        digest, _ = _detection(data)
+    except Exception:   # render() says why
+        return PHASE_ERROR
+    pending = st.session_state.get(PENDING_KEY)
+    if pending is not None and pending[0] == digest:
+        return PHASE_RUNNING
+    stored = st.session_state.get(RESULT_KEY)
+    if stored is not None and stored.digest == digest:
+        return PHASE_DONE if stored.result is not None else PHASE_FAILED
+    return PHASE_REVIEW
 
 
 def _detection(data: bytes) -> tuple[str, DetectionSummary]:
@@ -643,40 +728,91 @@ def _forget() -> None:
     st.session_state.pop(PENDING_KEY, None)
 
 
+@contextmanager
+def _card(number: int, name: str, title: str, summary: str, expanded: bool, state: str) -> Iterator[None]:
+    """One step as a card: an expander whose label is the step's title and a one-line summary (Markdown).
+
+    ``state`` ("done", "now" or "todo") picks the icon and, through the container's key, its colour.
+    """
+    icon = ":material/check_circle:" if state == "done" else f":material/counter_{number}:"
+    with st.container(key=f"card-{name}-{state}"):
+        with st.expander(f"**{_md(title)}** {summary}", expanded=expanded, icon=icon):
+            yield
+
+
+def _detection_summary(summary: DetectionSummary) -> str:
+    warnings = len(summary.warnings)
+    return (f"{_md(summary.journey_name)} · {_count(summary.activity_count, 'attività', 'attività')} · "
+            f"{_count(len(summary.csv_files), 'tabella', 'tabelle')} con CSV · "
+            + (f":yellow-badge[{warnings} warning]" if warnings else "nessun warning"))
+
+
+def _settings_summary(phase: str) -> str:
+    stored = st.session_state.get(RESULT_KEY)
+    if phase in (PHASE_DONE, PHASE_FAILED) and stored is not None:
+        used = stored.settings
+        # The address as inline code: Markdown would make it a mailto link.
+        inbox = f"inbox `{used.real_inbox.replace('`', '')}`" if used.real_inbox else _md("nessuna inbox reale")
+        rest = _md(f" · run {used.run_id} · {_count(used.contacts_per_case, 'contatto', 'contatti')} per caso")
+        return inbox + rest
+    if phase == PHASE_RUNNING:
+        return _md("generazione in corso con le impostazioni scelte")
+    return _md("ogni impostazione ha un valore di default")
+
+
+def _generate_summary(phase: str, stored: Optional[StoredRun]) -> str:
+    if phase == PHASE_RUNNING:
+        return _md("in corso")
+    if stored is not None and stored.result is not None:
+        return _md(done_summary(stored.result))
+    if stored is not None:
+        return _md("non riuscita")
+    return _md("da avviare")
+
+
 def _show_detection(summary: DetectionSummary) -> None:
-    st.header(STEP_REVIEW)
-    st.markdown(_md(f"L'export contiene il journey {summary.journey_name}, con "
-                    f"{_count(summary.activity_count, 'attività', 'attività')}."))
-    _label("Attività per tipo")
-    st.markdown(_markdown_table(["Tipo di attività", "Numero"], summary.activities, right=(1,)))
-    _label("Tabelle")
-    files = summary.csv_files
-    if files:
-        st.markdown(_md(f"{_count(len(files), 'tabella ha', 'tabelle hanno')} un CSV: {_join_words(files)}."))
+    """Spec, step 2: "journey name, number of activities by type, the tables with their role, and any warnings"."""
+    left, right = st.columns([1, 1.4], gap="large")
+    with left:
+        _label("Attività per tipo")
+        st.markdown(_markdown_table(["Tipo di attività", "Numero"], summary.activities, right=(1,)))
+    with right:
+        _label("Tabelle con CSV")
+        with_csv = [line for line in summary.tables if line.csv]
+        if with_csv:
+            rows = [(line.name, line.role, _level_text(line.level)) for line in with_csv]
+            st.markdown(_markdown_table(["Tabella", "Ruolo", "Livello"], rows))
+        else:
+            st.markdown("Nessuna tabella ha un CSV.")
+        without = [f"{line.name} ({line.role})" for line in summary.tables if not line.csv]
+        if without:
+            st.caption(_md(f"Senza CSV: {_join_words(without)}."))
+    if summary.warnings:
+        with st.expander(f"Warning trovati nell'export ({len(summary.warnings)})"):
+            _show_list(summary.warnings, empty="")
+            if summary.ids_left_out:
+                st.caption(_md(f"{outputs.REPORT_FILE} elenca le attività coinvolte, una volta generati i dati di "
+                               "test."))
     else:
-        st.markdown("Nessuna tabella ha un CSV.")
-    rows = [(line.name, line.role, _level_text(line.level), "sì" if line.csv else "no") for line in summary.tables]
-    st.markdown(_markdown_table(["Tabella", "Ruolo", "Livello", "CSV"], rows))
-    _label("Warning trovati nell'export")
-    _show_list(summary.warnings, empty="Nessun warning.")
-    if summary.ids_left_out:
-        st.markdown(_md(f"{outputs.REPORT_FILE} elenca le attività coinvolte, una volta generati i dati di test."))
+        st.caption("Nessun warning nell'export.")
 
 
 def _settings_form(summary: DetectionSummary, running: bool) -> tuple[Settings, bool]:
-    """Step 3 in a form whose submit button is step 4's Generate, so the settings apply together.
+    """Step 3 in a form whose submit button is Generate, so the settings apply together.
 
     The real inbox and the run identifier come first; the other settings wait in a closed expander.
     The Generate button is disabled while a generation runs (``running``).
     """
-    st.header(STEP_SETTINGS)
     defaults = default_form_values(summary.activation_field)
     values: dict[str, Any] = {}
     with st.form("settings", border=False):
-        values["real_inbox"] = _text("real_inbox", defaults, placeholder="nome@dominio")
-        st.caption(_md(SETTING_NOTES["real_inbox"]))
-        values["run_id"] = _text("run_id", defaults)
-        st.caption(_md(SETTING_NOTES["run_id"]))
+        left, right = st.columns(2, gap="large")
+        with left:
+            values["real_inbox"] = _text("real_inbox", defaults, placeholder="nome@dominio")
+            st.caption(_md(SETTING_NOTES["real_inbox"]))
+        with right:
+            values["run_id"] = _text("run_id", defaults)
+            st.caption(_md(SETTING_NOTES["run_id"]))
         with st.expander(MORE_SETTINGS):
             _label("Contatti")
             left, right = st.columns(2, vertical_alignment="bottom")
@@ -685,9 +821,12 @@ def _settings_form(summary: DetectionSummary, running: bool) -> tuple[Settings, 
             with right:
                 values["contacts_per_random_case"] = _number("contacts_per_random_case", defaults, min_value=1)
             _label("Recapiti")
-            values["real_phone"] = _text("real_phone", defaults)
-            st.caption(_md(SETTING_NOTES["real_phone"]))
-            values["fake_phone"] = _text("fake_phone", defaults)
+            left, right = st.columns(2, vertical_alignment="top")
+            with left:
+                values["real_phone"] = _text("real_phone", defaults)
+                st.caption(_md(SETTING_NOTES["real_phone"]))
+            with right:
+                values["fake_phone"] = _text("fake_phone", defaults)
             _label("Date")
             left, right = st.columns(2, vertical_alignment="bottom")
             with left:
@@ -720,7 +859,6 @@ def _settings_form(summary: DetectionSummary, running: bool) -> tuple[Settings, 
             values["case_insensitive_text"] = st.checkbox(SETTING_LABELS["case_insensitive_text"],
                                                           value=defaults["case_insensitive_text"],
                                                           help=SETTING_HELP["case_insensitive_text"])
-        st.header(STEP_GENERATE)
         submitted = st.form_submit_button(GENERATE_LABEL, type="primary", disabled=running)
         st.caption(GENERATE_NOTE)
     return settings_from_form(values), submitted
@@ -784,8 +922,65 @@ def _one_line(text: str) -> str:
 
 
 def _label(text: str) -> None:
-    """A label at body size: the four numbered steps are the only headings."""
-    st.markdown(f"**{_md(text)}**")
+    """A small section label inside a card: the four steps are the only headings."""
+    st.markdown(f'<p class="cj-label">{_html(text)}</p>', unsafe_allow_html=True)
+
+
+def _html(text: str) -> str:
+    return html.escape(str(text))
+
+
+def _header_html() -> str:
+    """Logo (docs/brand.md: primary version, at least 90 px wide), app name, and the privacy note."""
+    logo = base64.b64encode(LOGO_FILE.read_bytes()).decode("ascii")
+    return (f'<div class="cj-header"><img src="data:image/svg+xml;base64,{logo}" alt="Lutech">'
+            f'<span class="cj-sep"></span><span class="cj-name">{_html(TITLE)}</span>'
+            f'<span class="cj-note">{_html(HEADER_NOTE)}</span></div><div class="cj-rule"></div>')
+
+
+def _stepper_html(phase: str) -> str:
+    """The four steps in a row: done, now (the step the tester is on) or todo."""
+    if phase in (PHASE_EMPTY, PHASE_ERROR):
+        states = ["now", "todo", "todo", "todo"]
+    elif phase == PHASE_REVIEW:
+        states = ["done", "done", "now", "todo"]
+    else:
+        states = ["done", "done", "done", "now"]
+    last = {PHASE_RUNNING: "In corso", PHASE_DONE: "Completato", PHASE_FAILED: "Non riuscita"}.get(phase, "Da avviare")
+    cells = []
+    for (name, note), state in zip(STEPPER, states):
+        cells.append(f'<div class="{state}"><b>{_html(name)}</b>{_html(note or last)}</div>')
+    return f'<div class="cj-stepper">{"".join(cells)}</div>'
+
+
+def _strip_html(result: GenerationResult) -> str:
+    cells = "".join(f'<div><b>{_html(value)}' + (f' <small>{_html(out_of)}</small>' if out_of else "")
+                    + f'</b><span>{_html(label)}</span></div>' for value, out_of, label in summary_cells(result))
+    return f'<div class="cj-strip">{cells}</div>'
+
+
+def _frame(header: list[str], rows: list[list[str]]) -> Any:
+    """A table of strings for st.dataframe, every value as the CSV writes it. Repeated column names get a
+    suffix, because a table cannot show two columns with the same name."""
+    import pandas as pd   # a Streamlit dependency
+
+    names: list[str] = []
+    for name in header:
+        unique, n = name, 2
+        while unique in names:
+            unique, n = f"{name} ({n})", n + 1
+        names.append(unique)
+    width = len(names)
+    cells = [(row + [""] * width)[:width] for row in rows]
+    return pd.DataFrame(cells, columns=names, dtype="string")
+
+
+def _size_text(size: int) -> str:
+    if size < 1024:
+        return f"{size} byte"
+    if size < 1024 * 1024:
+        return f"{round(size / 1024)} KB"
+    return f"{size / (1024 * 1024):.1f} MB".replace(".", ",")
 
 
 def _show_list(items: list[str], empty: str) -> None:

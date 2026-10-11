@@ -9,8 +9,10 @@ Dove questo file prende una decisione che le linee guida non coprono (gli stati,
 | File | Cosa contiene |
 | --- | --- |
 | `.streamlit/config.toml` | Tema: colori, font, raggi, colori degli stati |
+| `cjhelper/app.css` | Header, stepper, card degli step, tabelle, banner e riepilogo numerico. Non deve contenere il carattere "minore di", nemmeno nei commenti: il sanitizer HTML di Streamlit scarterebbe l'intero foglio di stile |
 | `cjhelper/static/fonts/` | Montserrat in WOFF2 (pesi 300, 400, 500, 600, 700) e la licenza `OFL.txt` |
 | `cjhelper/static/lutech-logo.svg` | Logo in versione primaria, per fondi chiari |
+| `cjhelper/static/lutech-pictogram.svg` | Solo pittogramma (1.5.1), per l'icona della scheda del browser |
 | `assets/brand/` | File originali forniti: logo RGB per fondi scuri, logo CMYK, logo con claim |
 
 La pagina va avviata dalla cartella del repository (`streamlit run cjhelper/app.py`), altrimenti Streamlit non legge `config.toml` e la pagina perde tema e font.
