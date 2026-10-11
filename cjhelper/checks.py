@@ -311,11 +311,12 @@ class Checker:
                     details.append(f"{entry}.csv row {key}: {col} is {row.get(col)!r} but the entry query gives {v!r}")
             wait_fields = {a.wait_field[1].lower() for a in self.package.journey.activities.values()
                            if a.wait_field is not None and a.wait_field[0].lower() == entry.lower()}
+            default_email = (self.package.journey.default_email_field or "").lower()
             for f in table.fields:
                 if f.name in exp:
                     continue
-                if f.name.lower() in wait_fields:
-                    continue   # a wait date the journey needs, filled by the generator although the query does not
+                if f.name.lower() in wait_fields or (default_email and f.name.lower() == default_email):
+                    continue   # a wait date or the send address the journey needs, filled although the query does not
                 v = row.get(f.name)
                 allowed = {None}
                 if f.default is not None:

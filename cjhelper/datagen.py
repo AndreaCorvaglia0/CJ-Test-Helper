@@ -1202,6 +1202,12 @@ class _Generator:
                 "row gets what the query would produce, which is its default or an empty cell, not the case's value."
             )
         for rule in rules:
+            if rule.kind == "email" and self._is_default_email_field(entry, field):
+                self._warn(
+                    f"{entry.name}.{field.name} is the address the journey sends to, but the entry query does not "
+                    "fill it. The address is written so that the emails can be sent. The entry check allows this."
+                )
+                return self._normalise(_as_text(self._rule_value(rule, entry, field, row)), entry, field)
             if rule.kind == "wait":
                 self._warn(
                     f"{entry.name}.{field.name} is the date of a wait by attribute, but the entry query does not fill "
