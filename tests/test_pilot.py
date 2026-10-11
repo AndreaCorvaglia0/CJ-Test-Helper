@@ -43,7 +43,7 @@ def test_every_reachable_decision_branch_is_covered(result):
     assert len({b.activity_key for b in decisions}) == 106
     for b in decisions:
         if b.status == STATUS_NOT_COVERED:
-            assert b.reason.startswith("unreachable"), (b.activity_key, b.outcome_key, b.reason)
+            assert b.reason.startswith("non raggiungibile"), (b.activity_key, b.outcome_key, b.reason)
         else:
             assert b.covered_by
     for case in result.coverage.cases:
@@ -54,7 +54,7 @@ def test_engagement_yes_after_channels_2_and_3_unreachable(result):
     by_key = {(b.activity_key, b.outcome_key): b for b in result.coverage.branches}
     for split in ("ENGAGEMENTSPLITV2-3", "ENGAGEMENTSPLITV2-4", "ENGAGEMENTSPLITV2-5", "ENGAGEMENTSPLITV2-6"):
         b = by_key[(split, "branchResult-1")]
-        assert b.status == STATUS_NOT_COVERED and b.reason.startswith("unreachable"), (split, b.reason)
+        assert b.status == STATUS_NOT_COVERED and b.reason.startswith("non raggiungibile"), (split, b.reason)
     # channel 1: open is covered with a manual action, click has no link
     assert by_key[("ENGAGEMENTSPLITV2-1", "branchResult-1")].status == STATUS_MANUAL
     assert by_key[("ENGAGEMENTSPLITV2-1", "branchResult-2")].status == STATUS_COVERED

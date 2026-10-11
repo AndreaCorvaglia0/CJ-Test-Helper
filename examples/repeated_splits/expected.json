@@ -6,11 +6,11 @@
   "branches": {
     "SPLIT-1/path_a": {"status": "covered"},
     "SPLIT-1/remainder_path": {"status": "covered"},
-    "SPLIT-2/path_a": {"status": "not covered", "reason_contains": "unreachable"},
+    "SPLIT-2/path_a": {"status": "not covered", "reason_contains": "non raggiungibile"},
     "SPLIT-2/path_b": {"status": "covered"},
-    "SPLIT-2/remainder_path": {"status": "not covered", "reason_contains": "unreachable"},
+    "SPLIT-2/remainder_path": {"status": "not covered", "reason_contains": "non raggiungibile"},
     "SPLIT-3/path_a": {"status": "covered"},
-    "SPLIT-3/path_b": {"status": "not covered", "reason_contains": "unreachable"},
+    "SPLIT-3/path_b": {"status": "not covered", "reason_contains": "non raggiungibile"},
     "SPLIT-3/remainder_path": {"status": "covered"}
   },
   "scenario_count": {"min": 3, "max": 3},

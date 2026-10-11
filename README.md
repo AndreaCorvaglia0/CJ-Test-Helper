@@ -155,7 +155,7 @@ In alcuni punti i risultati attesi dipendono da comportamenti di Salesforce che 
 
 L'app a pagina singola è un passo successivo, la priorità 5 della spec: carica l'export, verifica cosa è stato rilevato, modifica le impostazioni, genera e scarica lo zip. Una prima versione è in `cjhelper/app.py` e si avvia con `streamlit run cjhelper/app.py` dalla cartella del repository. Finché non viene confermata, usa la riga di comando.
 
-L'interfaccia è in italiano. I messaggi prodotti dal generatore (warning, nomi dei trust check, errori di lettura) e i file scaricati sono ancora in inglese.
+L'interfaccia, i messaggi del generatore (warning, trust check, errori di lettura) e i testi dei file scaricati sono in italiano; restano in inglese i termini d'uso comune del team, i nomi dei file e le intestazioni di colonna di scenarios.csv e del testbook (vedi docs/brand.md, "Glossario").
 
 ## Per gli sviluppatori
 

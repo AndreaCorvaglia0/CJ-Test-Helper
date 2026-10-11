@@ -143,10 +143,10 @@ def test_the_uploader_takes_any_file_and_the_page_answers_with_one_sentence():
 @pytest.mark.parametrize("data, words", [
     (b"{not json", "Il file non è un JSON valido: c'è un problema alla riga 1, colonna 2."),
     (b"", "Il file non è un JSON valido: c'è un problema alla riga 1, colonna 1."),
-    (b"[1, 2]", "a JSON object is expected."),
-    (b'{"entities": {"dataExtensions": {}}}', "The export holds no journey."),
-    (b'{"name": "x"}', "so it holds no journey."),
-    (b"\xff\xfe\x00{", "The file is not UTF-8 text"),   # the loader's own words
+    (b"[1, 2]", "deve contenere un oggetto JSON."),
+    (b'{"entities": {"dataExtensions": {}}}', "L'export non contiene alcun journey."),
+    (b'{"name": "x"}', "quindi non contiene alcun journey."),
+    (b"\xff\xfe\x00{", "Il file non è testo UTF-8"),   # the loader's own words
 ])
 def test_unreadable_file_shows_one_plain_error_and_nothing_else(data, words):
     at = AppTest.from_function(_render_page, args=(data,)).run(timeout=TIMEOUT)
@@ -171,8 +171,8 @@ def test_without_a_file_nothing_is_kept():
 
 
 def test_error_messages_are_plain_and_end_with_the_next_step():
-    assert app.error_message(LoadError("The export holds no journey.")) == (
-        "The export holds no journey. Scegli il file JSON prodotto da Package Manager.")
+    assert app.error_message(LoadError("L'export non contiene alcun journey.")) == (
+        "L'export non contiene alcun journey. Scegli il file JSON prodotto da Package Manager.")
     with pytest.raises(LoadError) as not_json:
         from cjhelper import loader
         loader.load_package(b"{oops")
@@ -234,7 +234,7 @@ def test_detection_summary_on_pilot(pilot_bytes):
     assert summary.activation_field == PILOT_ACTIVATION
     assert PILOT_ACTIVATION in summary.activation_choices
     assert all(table == "DE_NCRM_AD_HOC_CONFIG" for table, _ in summary.activation_choices)
-    patterns = [w for w in summary.warnings if w.startswith("Suspicious pattern: ")]
+    patterns = [w for w in summary.warnings if w.startswith("Pattern sospetto: ")]
     assert patterns and summary.warnings[:len(patterns)] == patterns   # suspicious patterns first
     assert all(w[:1].isupper() for w in summary.warnings)
     assert not any("UPDATECONTACTDATAV2" in w for w in summary.warnings) and summary.ids_left_out
@@ -265,7 +265,7 @@ def test_detection_step_on_pilot_shows_journey_activities_and_the_four_csv_table
             "DE_SkyDE_AdHoc_Log_partial (written).") in captions
     warnings = _expander(at, "Warning trovati nell'export (5)")
     assert warnings.proto.expanded is False
-    assert "- Suspicious pattern: 23 update contact step(s) write the constant 'DemoSKY'" in text
+    assert "- Pattern sospetto: la costante 'DemoSKY' è scritta nel campo di chiave primaria" in text
     assert "UPDATECONTACTDATAV2" not in text
     assert any(c.startswith("report.md elenca le attività coinvolte") for c in captions)
     assert [b.label for b in at.button] == [app.GENERATE_LABEL]
@@ -287,12 +287,12 @@ def test_warning_lines_put_patterns_first_and_leave_key_lists_to_the_report():
     keys = ["SPLIT-1", "SPLIT-2", "UPDATE-1"]
     lines, left_out = app.warning_lines([
         "assets/1 has no value at 'data/x'.",
-        "suspicious pattern: 2 different conditions share the split name 'Consent' (SPLIT-1, SPLIT-2)",
+        "pattern sospetto: 2 different conditions share the split name 'Consent' (SPLIT-1, SPLIT-2)",
         "Decision split Consent (SPLIT-1) is reported as unsupported.",
-        "suspicious pattern: 2 different conditions share the split name 'Consent' (SPLIT-1, SPLIT-2)",
+        "pattern sospetto: 2 different conditions share the split name 'Consent' (SPLIT-1, SPLIT-2)",
         "the note (not keys, SPLIT-1) stays",
     ], keys)
-    assert lines == ["Suspicious pattern: 2 different conditions share the split name 'Consent'",
+    assert lines == ["Pattern sospetto: 2 different conditions share the split name 'Consent'",
                      "Assets/1 has no value at 'data/x'.",
                      "Decision split Consent (SPLIT-1) is reported as unsupported.",
                      "The note (not keys, SPLIT-1) stays"]
@@ -409,10 +409,10 @@ def _stub_result(checks=None, files=None, journey_name="CJ demo", real_inbox="",
         coverage=SimpleNamespace(stats={"scenarios": 2, "cases": 3, "contacts": 9, "covered": 4,
                                         "covered_manual": 1, "not_covered": 4},
                                  branches=branches, cases=cases,
-                                 warnings=["suspicious pattern: T.F is compared with 'Email' and 'EMAIL' "
+                                 warnings=["pattern sospetto: T.F is compared with 'Email' and 'EMAIL' "
                                            "(SPLIT-1, SPLIT-2)"]),
-        data=SimpleNamespace(warnings=["No real inbox is set, so the contacts of the 1 case(s) get undeliverable "
-                                       "addresses.", "the entry query selects 2 columns it does not have."],
+        data=SimpleNamespace(warnings=["Nessuna inbox reale impostata. I contatti di 1 caso con un open o un click "
+                                       "manuale ricevono indirizzi non recapitabili.", "the entry query selects 2 columns it does not have."],
                              scenarios_rows=scenario_rows),
         checks=checks if checks is not None else [CheckResult("Every key joins", True, [])],
         files=files,
@@ -452,7 +452,7 @@ def test_summary_import_and_download_notes():
         "report.md: cosa è coperto, cosa no e perché, e come eseguire i test."]
     assert app.preview_files(result) == ["scenarios.csv", "DE_Entry.csv"]
     warnings, left_out = app.generation_warnings(result)
-    assert warnings == ["Suspicious pattern: T.F is compared with 'Email' and 'EMAIL'",
+    assert warnings == ["Pattern sospetto: T.F is compared with 'Email' and 'EMAIL'",
                         "The entry query selects 2 columns it does not have."] and left_out
 
 
@@ -488,8 +488,8 @@ def test_result_step_shows_summary_import_previews_download_checks_and_warnings(
     assert "- DE_Entry.csv: i dati da importare." in text
     warnings = _expander(at, "Warning della generazione (2)")
     assert warnings.proto.expanded is False
-    assert "- Suspicious pattern: T.F is compared with 'Email' and 'EMAIL'" in text
-    assert "No real inbox is set" not in text           # said in the summary instead
+    assert "- Pattern sospetto: T.F is compared with 'Email' and 'EMAIL'" in text
+    assert "Nessuna inbox reale impostata" not in text           # said in the summary instead
     assert "report.md elenca le attività coinvolte." in captions
     buttons = at.get("download_button")
     assert len(buttons) == 1 and buttons[0].label == app.DOWNLOAD_LABEL and buttons[0].proto.type == "primary"

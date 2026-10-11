@@ -307,7 +307,8 @@ class _Parser:
 def _parse(query: Query, package: Package, warnings: list[str]) -> ParsedQuery:
     """Parse one query; its parser warnings are repeated here, prefixed with the query name."""
     parsed = sqlparse_lite.parse_query(query, package.tables)
-    warnings.extend(f"Query {query.name}: {warning}" for warning in parsed.warnings)
+    prefix = f"Query {query.name}: "
+    warnings.extend(w if w.startswith(prefix) else prefix + w for w in parsed.warnings)
     return parsed
 
 
