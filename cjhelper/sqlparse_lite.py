@@ -60,7 +60,7 @@ from cjhelper.model import (
     UnsupportedFilter,
 )
 
-__all__ = ["parse_query", "dotnet_to_strftime", "unsupported_dotnet_tokens", "CURRENT_DATE_FUNCTIONS", "DOTNET_DATE_TOKENS"]
+__all__ = ["parse_query", "exclusion_joins", "dotnet_to_strftime", "unsupported_dotnet_tokens", "CURRENT_DATE_FUNCTIONS", "DOTNET_DATE_TOKENS"]
 
 
 # T-SQL calls that return the current date and time (plan: "the current date").
@@ -370,6 +370,12 @@ def _read_select(select: exp.Select, context: _Context, result: ParsedQuery) -> 
     where = select.args.get("where")
     if where is not None:
         _read_filters(where.this, context, result)
+    for table in _exclusion_joins(select, context, result):
+        context.warn(
+            f"{table} is excluded with a LEFT JOIN and an IS NULL filter: only contacts with no row in "
+            f"{table} enter. The filter is read as written, which no inner-joined row can meet; the "
+            f"generated contacts are new, so they are taken to meet it"
+        )
     _read_select_list(select, context, result)
 
 
@@ -431,6 +437,31 @@ def _read_joins(select: exp.Select, context: _Context, result: ParsedQuery) -> N
             continue
         for part in _and_parts(condition):
             _read_join_part(part, context, result)
+
+
+def _exclusion_joins(select: exp.Select, context: _Context, result: ParsedQuery) -> list[str]:
+    """Tables joined with a LEFT JOIN whose columns the WHERE clause keeps only when they are NULL
+    (``LEFT JOIN X ON ... WHERE X.key IS NULL``): an exclusion join. A contact enters only when it has
+    no row in X. Needs the filters of ``result`` to be read already."""
+    left_joined = [
+        _canonical_table_name(join.this.name, context.tables)
+        for join in select.args.get("joins") or []
+        if _is_table(join.this) and str(join.side or "").upper() == "LEFT"
+    ]
+    tested_null = {f.column.table for f in result.filters if isinstance(f, IsNullFilter) and not f.negated}
+    return [table for table in dict.fromkeys(left_joined) if table in tested_null]
+
+
+def exclusion_joins(query: Query, tables: dict[str, Table]) -> list[str]:
+    """The tables of ``query`` used as an exclusion join (``LEFT JOIN X ... WHERE X.key IS NULL``).
+
+    The parser reads them as inner joins plus an IS NULL filter, which no row can meet; the entry
+    check uses this list to treat the filter as met by contacts that have no row in the table.
+    """
+    parsed = parse_query(query, tables)
+    context = _Context(query.name, tables, [], [])
+    select = _parse_select(query.sql, context)
+    return _exclusion_joins(select, context, parsed) if select is not None else []
 
 
 def _read_join_part(part: exp.Expression, context: _Context, result: ParsedQuery) -> None:

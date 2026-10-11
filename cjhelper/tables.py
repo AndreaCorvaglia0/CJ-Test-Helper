@@ -101,12 +101,14 @@ def build_table_model(package: Package) -> TableModel:
     entry = _entry_table(package, names)
 
     automation_queries = _entry_automation_queries(package, warnings)
-    entry_query = _find_entry_query(package, entry, automation_queries, names, warnings)
-    entry_parsed = _parse(entry_query, package, warnings) if entry_query else None
+    parse = _Parser(package, warnings)
+    entry_queries = _find_entry_queries(package, entry, automation_queries, names, warnings)
+    entry_query = _choose_entry_query(entry_queries, entry, parse, names, warnings)
+    entry_parsed = parse(entry_query) if entry_query else None
 
     uses = {name: _Use() for name in package.tables}
     _record_split_reads(package, names, uses, warnings)
-    source_queries = _follow_sources(package, entry, entry_query, entry_parsed, automation_queries,
+    source_queries = _follow_sources(package, entry, entry_query, entry_queries, parse, automation_queries,
                                      names, uses, warnings)
     _record_writes(package, names, uses)
 
@@ -229,23 +231,19 @@ def _entry_automation_queries(package: Package, warnings: list[str]) -> list[Que
     return out
 
 
-def _find_entry_query(package: Package, entry: str, automation_queries: list[Query], names: _Names,
-                      warnings: list[str]) -> Optional[Query]:
-    """The query that fills the entry table (contract in docs/plan.md, "tables.py").
+def _find_entry_queries(package: Package, entry: str, automation_queries: list[Query], names: _Names,
+                        warnings: list[str]) -> list[Query]:
+    """Every query that fills the entry table (contract in docs/plan.md, "tables.py").
 
-    It is the query of the entry automation whose target is the entry table; when several are,
-    the last one in step order (warning). When the automation has none, every query of the export
-    is searched (warning). When no query fills the entry table there is no entry query (warning),
-    and the entry table alone is the source side.
+    Spec, source table: "Any table in the FROM or JOIN of a query that fills the entry table", so
+    all of them count, not only the last. They are the queries of the entry automation whose target
+    is the entry table, in step order. When the automation has none, every query of the export that
+    fills the entry table is taken (warning). When no query fills the entry table there is no entry
+    query (warning), and the entry table alone is the source side.
     """
     in_automation = [q for q in automation_queries if names.table(q.target_table) == entry]
     if in_automation:
-        chosen = in_automation[-1]
-        if len(in_automation) > 1:
-            warnings.append(f"Several queries of the entry automation fill the entry table {entry} "
-                            f"({_join_words([q.name for q in in_automation])}): the last one in step order, "
-                            f"{chosen.name}, is taken as the entry query")
-        return chosen
+        return in_automation
 
     if package.entry_event is None:
         why = "The journey has no entry event"
@@ -257,14 +255,51 @@ def _find_entry_query(package: Package, entry: str, automation_queries: list[Que
     if not elsewhere:
         warnings.append(f"{why}, and no other query of the export fills {entry}: there is no entry query, "
                         "so the entry table alone is the source side")
-        return None
-    chosen = elsewhere[-1]
-    if len(elsewhere) > 1:
-        warnings.append(f"{why}; queries {_join_words([q.name for q in elsewhere])} fill {entry}: "
-                        f"the last one, {chosen.name}, is taken as the entry query")
+    elif len(elsewhere) == 1:
+        warnings.append(f"{why}; query {elsewhere[0].name} fills {entry} and is taken as the entry query")
     else:
-        warnings.append(f"{why}; query {chosen.name} fills {entry} and is taken as the entry query")
+        warnings.append(f"{why}; the queries of the export that fill {entry} are taken as entry queries")
+    return elsewhere
+
+
+def _choose_entry_query(entry_queries: list[Query], entry: str, parse: "_Parser", names: _Names,
+                        warnings: list[str]) -> Optional[Query]:
+    """The one entry query that builds the entry rows: the last query in step order.
+
+    When several queries fill the entry table (warning), the tables read by all of them are source
+    tables, but the entry rows come from one query. A last query that reads only the entry table
+    (a post-processing update of the entry rows) is not the one that builds them: the last query that
+    reads some other table is taken instead.
+    """
+    if not entry_queries:
+        return None
+    chosen = entry_queries[-1]
+    if len(entry_queries) == 1:
+        return chosen
+    reading_others = [q for q in entry_queries if any(names.table(ref.table) != entry for ref in parse(q).sources)]
+    if reading_others:
+        chosen = reading_others[-1]
+    how = "the last one in step order" if chosen is entry_queries[-1] else \
+        f"the last one that reads a table other than {entry}"
+    warnings.append(f"Several queries fill the entry table {entry} ({_join_words([q.name for q in entry_queries])}): "
+                    f"the tables they read are all source tables, and the entry rows are built from "
+                    f"{chosen.name}, {how}")
     return chosen
+
+
+class _Parser:
+    """Parse each query once; its parser warnings are repeated in the table model, prefixed with the
+    query name."""
+
+    def __init__(self, package: Package, warnings: list[str]):
+        self.package = package
+        self.warnings = warnings
+        self._done: dict[str, ParsedQuery] = {}
+
+    def __call__(self, query: Query) -> ParsedQuery:
+        if query.name not in self._done:
+            self._done[query.name] = _parse(query, self.package, self.warnings)
+        return self._done[query.name]
 
 
 def _parse(query: Query, package: Package, warnings: list[str]) -> ParsedQuery:
@@ -320,28 +355,30 @@ def _record_split_reads(package: Package, names: _Names, uses: dict[str, _Use], 
         warnings.append(f"{ref_text} is read by {_short_list(keys)} but is not a field of the export")
 
 
-def _follow_sources(package: Package, entry: str, entry_query: Optional[Query], entry_parsed: Optional[ParsedQuery],
-                    automation_queries: list[Query], names: _Names, uses: dict[str, _Use],
+def _follow_sources(package: Package, entry: str, entry_query: Optional[Query], entry_queries: list[Query],
+                    parse: _Parser, automation_queries: list[Query], names: _Names, uses: dict[str, _Use],
                     warnings: list[str]) -> list[ParsedQuery]:
     """Spec, source table: "Any table in the FROM or JOIN of a query that fills the entry table,
     followed back until no query writes it".
 
-    Breadth-first from the FROM/JOIN tables of the entry query. For each new source table, every
-    query whose target it is gets parsed and its own FROM/JOIN tables are followed in turn: the
-    queries of the entry automation first (step order), then the other queries of the export.
+    Breadth-first from the FROM/JOIN tables of every query that fills the entry table (the entry
+    query first, then the others in step order). For each new source table, every query whose
+    target it is gets parsed and its own FROM/JOIN tables are followed in turn: the queries of the
+    entry automation first (step order), then the other queries of the export.
     Each table and each query is followed once, and the walk starts at the entry table, which is
     therefore never a source: cycles stop (the pilot has a query that writes its Config table from
     Config and the entry table).
 
     Returns the parsed queries followed, the entry query first.
     """
-    if entry_query is None or entry_parsed is None:
+    if entry_query is None:
         return []
     search_order = automation_queries + [q for q in package.queries if q not in automation_queries]
-    followed = [entry_parsed]
-    done_queries = {entry_query.name}
+    starting = [entry_query] + [q for q in entry_queries if q is not entry_query]
+    followed = [parse(q) for q in starting]
+    done_queries = {q.name for q in starting}
     done_tables = {entry}
-    pending = deque((ref.table, entry_parsed) for ref in entry_parsed.sources)
+    pending = deque((ref.table, parsed) for parsed in followed for ref in parsed.sources)
     while pending:
         table_name, reader = pending.popleft()
         table = names.table(table_name)
@@ -358,7 +395,7 @@ def _follow_sources(package: Package, entry: str, entry_query: Optional[Query], 
             if query.name in done_queries or names.table(query.target_table) != table:
                 continue
             done_queries.add(query.name)
-            parsed = _parse(query, package, warnings)
+            parsed = parse(query)
             followed.append(parsed)
             pending.extend((ref.table, parsed) for ref in parsed.sources)
     return followed

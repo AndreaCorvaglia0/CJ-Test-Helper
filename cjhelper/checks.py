@@ -22,7 +22,7 @@ import io
 from datetime import datetime
 from typing import Optional
 
-from . import graph
+from . import graph, sqlparse_lite
 from .model import (
     KIND_ENGAGEMENT,
     KIND_RANDOM,
@@ -76,12 +76,13 @@ def _trim(details: list[str]) -> list[str]:
 
 
 def _parse_date(value: str, date_format: str) -> Optional[datetime]:
-    for fmt in (date_format, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-    return None
+    """Spec, Settings: "Date format in the CSVs". A value is a date only when it is written exactly in
+    that format (``2026-10-10`` and ``2026-10-11 12:00:00`` are not dates in ``%Y-%m-%d %H:%M``)."""
+    try:
+        parsed = datetime.strptime(value, date_format)
+    except ValueError:
+        return None
+    return parsed if parsed.strftime(date_format) == value else None
 
 
 class Checker:
@@ -99,6 +100,23 @@ class Checker:
         for name in table_model.selected_tables:
             content = files.get(f"{name}.csv")
             self.csv[name] = read_csv_bytes(content) if content is not None else ([], [])
+        # The rows of each table by contact key (tables with a contact key field) or by scenario key
+        # (scenario-level tables), read from the files: the checks never use the generator's own lists
+        # to find a contact's rows.
+        self.rows_of_contact: dict[str, dict[str, list[dict[str, Value]]]] = {}
+        self.rows_of_scenario: dict[str, dict[str, list[dict[str, Value]]]] = {}
+        for name in table_model.selected_tables:
+            contact_field, scenario_field = self._contact_key_field(name), self._scenario_key_field(name)
+            index_field, index = (contact_field, self.rows_of_contact) if contact_field is not None else \
+                (scenario_field, self.rows_of_scenario)
+            if index_field is None:
+                continue
+            by_key = index.setdefault(name, {})
+            for row in self.csv[name][1]:
+                if row.get(index_field) is not None:
+                    by_key.setdefault(row[index_field], []).append(row)
+        self.date_formats = self._query_date_formats()
+        self._excluded: set[str] = set()
 
     def run_all(self) -> list[CheckResult]:
         return [
@@ -109,6 +127,22 @@ class Checker:
             self.check_coverage(),
             self.check_addresses(),
         ]
+
+    def _query_date_formats(self) -> dict[tuple[str, str], list[str]]:
+        """The formats an entry column may hold besides ``Settings.date_format``: a column the entry query
+        fills with ``FORMAT(GETDATE(), '<format>')`` holds that format (spec: "simple select
+        expressions ... current date")."""
+        formats: dict[tuple[str, str], list[str]] = {}
+        query = self.table_model.entry_query
+        for item in (query.select if query is not None else []):
+            if isinstance(item.expr, SelectCurrentDate) and item.expr.format:
+                key = (query.target_table.lower(), item.target_column.lower())
+                formats.setdefault(key, []).append(sqlparse_lite.dotnet_to_strftime(item.expr.format))
+        return formats
+
+    def _is_date(self, table: str, field_name: str, value: str) -> bool:
+        formats = [self.settings.date_format] + self.date_formats.get((table.lower(), field_name.lower()), [])
+        return any(_parse_date(value, fmt) is not None for fmt in formats)
 
     # 1 ---------------------------------------------------------------------------------
     def check_schema(self) -> CheckResult:
@@ -138,7 +172,7 @@ class Checker:
                         details.append(f"{name}.csv line {i}: {f.name} has {len(v)} characters, schema allows {f.length}")
                     if f.type == "Boolean" and v not in ("True", "False"):
                         details.append(f"{name}.csv line {i}: {f.name} = {v!r} is not True/False")
-                    elif f.type == "Date" and _parse_date(v, self.settings.date_format) is None:
+                    elif f.type == "Date" and not self._is_date(name, f.name, v):
                         details.append(f"{name}.csv line {i}: {f.name} = {v!r} is not a date in {self.settings.date_format}")
                     elif f.type == "Number":
                         try:
@@ -174,41 +208,83 @@ class Checker:
         return {r.get(field_name) for r in rows}
 
     def check_joins(self) -> CheckResult:
+        """Spec: "Every key joins: each contact row finds its scenario row and its rows in the linked
+        tables"; acceptance: "Every Target row joins to a Master row and to a Config row".
+
+        Every member of a key group is compared with every other member, in both directions, so a row
+        that points at a missing row is found whichever table it is in. Then, read from the files only:
+        each contact of each case has exactly one row in every contact-level table, no row belongs to a
+        contact that was not generated, and a contact links to one scenario row, not to two."""
         details: list[str] = []
-        entry = self.table_model.entry_table
         for group in self.table_model.key_groups:
             members = [f for f in group.fields if f[0] in self.csv]
-            entry_members = [f for f in members if f[0] == entry]
-            if not entry_members or len(members) < 2:
+            if len(members) < 2:
                 continue
-            entry_values = self._column_values(entry_members[0]) or set()
+            values: dict[FieldRef, set[str]] = {}
             for member in members:
-                if member[0] == entry:
-                    continue
-                values = self._column_values(member)
-                if values is None:
+                found = self._column_values(member)
+                if found is None:
                     details.append(f"{member[0]}.{member[1]} is in a key group but not in the CSV")
-                    continue
-                missing = sorted(v for v in entry_values if v not in values and v is not None)
-                if missing:
-                    details.append(f"{len(missing)} {entry}.{entry_members[0][1]} values have no row in {member[0]}.{member[1]}: "
-                                   + ", ".join(missing[:5]))
-                if group.kind == "contact":
-                    extra = sorted(v for v in values if v not in entry_values and v is not None)
-                    if extra:
-                        details.append(f"{len(extra)} {member[0]}.{member[1]} values have no entry row: " + ", ".join(extra[:5]))
-        # Every contact of a case has a row in every contact-level table.
-        for name in self.table_model.contact_tables:
-            if name not in self.csv:
-                continue
-            key_field = self._contact_key_field(name)
-            if key_field is None:
-                continue
-            values = self._column_values((name, key_field)) or set()
-            for contact in self.data.contacts:
-                if contact.key not in values:
-                    details.append(f"contact {contact.key} has no row in {name}")
+                else:
+                    values[member] = found - {None}
+            for member, member_values in values.items():
+                for other, other_values in values.items():
+                    missing = sorted(member_values - other_values) if other != member else []
+                    if missing:
+                        details.append(f"{len(missing)} {member[0]}.{member[1]} values have no row in "
+                                       f"{other[0]}.{other[1]}: " + ", ".join(missing[:5]))
+        details.extend(self._check_contact_rows())
+        details.extend(self._check_scenario_links())
         return CheckResult("Every key joins across tables", not details, _trim(details))
+
+    def _generated_contacts(self) -> set[str]:
+        """The contacts of the cases, which must be the contacts the generator registered."""
+        return {key for case in self.coverage.cases for key in case.contact_keys}
+
+    def _check_contact_rows(self) -> list[str]:
+        """Each contact of each case has exactly one row in every contact-level table, and a row whose
+        key is not a generated contact is reported (spec: "Each contact therefore belongs to exactly one
+        scenario and is never reused")."""
+        details: list[str] = []
+        expected = self._generated_contacts()
+        registered = {c.key for c in self.data.contacts}
+        if expected != registered:
+            odd = sorted(expected ^ registered)
+            details.append(f"the contacts of the cases and the registered contacts differ ({len(odd)}): "
+                           + ", ".join(odd[:5]))
+        for name in self.table_model.contact_tables:
+            if name not in self.rows_of_contact:
+                continue
+            rows = self.rows_of_contact[name]
+            missing = sorted(expected - set(rows))
+            if missing:
+                details.append(f"{len(missing)} generated contacts have no row in {name}: " + ", ".join(missing[:5]))
+            extra = sorted(set(rows) - expected)
+            if extra:
+                details.append(f"{name} has rows for {len(extra)} contacts that were not generated: " + ", ".join(extra[:5]))
+            several = sorted(key for key, found in rows.items() if len(found) > 1)
+            if several:
+                details.append(f"{len(several)} contacts have several rows in {name}: " + ", ".join(several[:5]))
+        return details
+
+    def _check_scenario_links(self) -> list[str]:
+        """A contact links to exactly one scenario row: every scenario key written in its own rows is the
+        same (spec: "Any matching row counts ... Each contact therefore belongs to exactly one scenario")."""
+        details: list[str] = []
+        linked: dict[str, dict[str, list[str]]] = {}
+        for name in self.table_model.contact_tables:
+            scenario_field = self._scenario_key_field(name)
+            if scenario_field is None:
+                continue
+            for contact, rows in self.rows_of_contact.get(name, {}).items():
+                for row in rows:
+                    if row.get(scenario_field) is not None:
+                        linked.setdefault(contact, {}).setdefault(row[scenario_field], []).append(name)
+        for contact, scenarios in sorted(linked.items()):
+            if len(scenarios) > 1:
+                shown = "; ".join(f"{key} in {', '.join(tables)}" for key, tables in sorted(scenarios.items()))
+                details.append(f"contact {contact} links to {len(scenarios)} scenario rows: {shown}")
+        return details
 
     def _contact_key_field(self, table: str) -> Optional[str]:
         for group in self.table_model.key_groups:
@@ -236,6 +312,7 @@ class Checker:
             return CheckResult("Entry rows match the entry query", False, [f"{entry}.csv is missing"])
         details: list[str] = []
         notes: list[str] = []
+        self._excluded = self._exclusion_joins(query)
         joined = self._join_sources(query, details)
         if joined is None:
             return CheckResult("Entry rows match the entry query", False, _trim(details))
@@ -250,6 +327,8 @@ class Checker:
                 if isinstance(flt, UnsupportedFilter):
                     continue
                 col = flt.column
+                if isinstance(flt, IsNullFilter) and not flt.negated and col.table in self._excluded:
+                    continue   # exclusion join: the generated contacts are new, so they have no row there
                 if one_active and activation is not None and col.table.lower() == activation[0].lower() \
                         and col.column.lower() == activation[1].lower():
                     continue   # only the first scenario is active; the others are activated later by the tester
@@ -272,6 +351,9 @@ class Checker:
                 kept.append(combo)
         if any(isinstance(f, UnsupportedFilter) for f in query.filters):
             notes.append("some entry query filters are not understood and were not checked")
+        if self._excluded:
+            notes.append(f"{', '.join(sorted(self._excluded))} is excluded in the entry query with a LEFT JOIN and an IS NULL "
+                         "filter: that join and filter were not checked, the generated contacts are taken to be new")
         if one_active and activation is not None:
             notes.append(f"the filter on the activation field {activation[0]}.{activation[1]} was not checked: only the first "
                          "scenario is active in the CSV and the tester activates the others one at a time")
@@ -325,9 +407,18 @@ class Checker:
                     details.append(f"{entry}.csv row {key}: {f.name} is {v!r} but the entry query does not fill it")
         return CheckResult("Entry rows match the entry query", not details, _trim(details) + notes)
 
+    def _exclusion_joins(self, query: ParsedQuery) -> set[str]:
+        """Tables the entry query excludes with ``LEFT JOIN X ON ... WHERE X.key IS NULL``: a contact enters
+        only when it has no row in X. The parser reads that as an inner join plus a filter no row can meet;
+        here the generated contacts count as new (datagen does the same), so X is left out of the join."""
+        source = next((q for q in self.package.queries if q.name == query.name), None)
+        if source is None:
+            return set()
+        return set(sqlparse_lite.exclusion_joins(source, self.package.tables))
+
     def _join_sources(self, query: ParsedQuery, details: list[str]) -> Optional[list[dict[str, dict[str, Value]]]]:
         """Nested-loop join of the source CSVs along the query's join equalities."""
-        sources = [s.table for s in query.sources]
+        sources = [s.table for s in query.sources if s.table not in self._excluded]
         for name in sources:
             if name not in self.csv:
                 details.append(f"source table {name} has no CSV to join")
@@ -354,6 +445,8 @@ class Checker:
 
     def _combo_value(self, combo: dict[str, dict[str, Value]], col) -> Value:
         row = combo.get(col.table)
+        if row is None and col.table in self._excluded:
+            return None   # a column of an excluded (LEFT JOIN ... IS NULL) table is NULL
         if row is None:
             for name, r in combo.items():
                 table = self.package.tables.get(name)
@@ -391,6 +484,7 @@ class Checker:
                               self.settings.case_insensitive_text, self.now, self.settings.date_format)
         cases = {c.id: c for c in self.coverage.cases}
         scenario_of = {s.id: s for s in self.coverage.scenarios}
+        has_scenario_link = any(self._scenario_key_field(name) for name in self.table_model.contact_tables)
         checked = 0
         for contact in self.data.contacts:
             case = cases.get(contact.case_id)
@@ -398,7 +492,10 @@ class Checker:
             if case is None or scenario is None:
                 details.append(f"contact {contact.key} belongs to an unknown case {contact.case_id}")
                 continue
-            lookup = self._contact_lookup(contact.key, scenario.key)
+            lookup, link = self._contact_lookup(contact.key)
+            if has_scenario_link and link != scenario.key:
+                details.append(f"contact {contact.key} (case {case.id}) is linked to scenario {link!r} by its own "
+                               f"rows but was created for scenario {scenario.key!r}")
             if case.random is None:
                 steps = self._simulate(walker, lookup, case, None)
                 if steps != case.steps:
@@ -415,31 +512,44 @@ class Checker:
         notes = [f"{checked} contact paths re-simulated from the written values"]
         return CheckResult("Every contact re-simulated from the files takes its intended path", not details, _trim(details) + notes)
 
-    def _contact_lookup(self, contact_key: str, scenario_key: str):
+    def _contact_lookup(self, contact_key: str):
+        """The value lookup for one contact, read from the files only, and the scenario key it links to.
+
+        Spec: "simulated again through the journey from the written values". The contact's own rows are
+        found by its key; its scenario row is the one its own Entry row points to (docs/assumptions.md,
+        row 12: "The Config lookup goes through the entry table"), not the scenario the generator has in
+        memory. Without a scenario key in the Entry row, the first contact-level table that has one is used.
+        """
+        entry = self.table_model.entry_table
+        link: Optional[str] = None
+        for name in [entry] + [n for n in self.table_model.contact_tables if n != entry]:
+            scenario_field = self._scenario_key_field(name)
+            for row in self.rows_of_contact.get(name, {}).get(contact_key, []):
+                if scenario_field is not None and row.get(scenario_field) is not None:
+                    link = row[scenario_field]
+                    break
+            if link is not None:
+                break
         rows_by_ref: dict[str, dict[str, Value]] = {}
         for name in self.table_model.selected_tables:
-            header, rows = self.csv[name]
-            ckey = self._contact_key_field(name)
-            skey = self._scenario_key_field(name)
-            match = None
-            for row in rows:
-                if ckey is not None and row.get(ckey) != contact_key:
-                    continue
-                if skey is not None and row.get(skey) != scenario_key:
-                    continue
-                if ckey is None and skey is None:
-                    continue
-                match = row
-                break
-            if match is not None:
-                rows_by_ref[name] = match
+            scenario_field = self._scenario_key_field(name)
+            if name in self.rows_of_contact:
+                candidates = self.rows_of_contact[name].get(contact_key, [])
+                if scenario_field is not None:
+                    candidates = [row for row in candidates if row.get(scenario_field) == link]
+            elif name in self.rows_of_scenario and link is not None:
+                candidates = self.rows_of_scenario[name].get(link, [])
+            else:
+                continue
+            if candidates:
+                rows_by_ref[name] = candidates[0]
 
         def lookup(ref: FieldRef):
             row = rows_by_ref.get(ref[0])
             if row is None:
                 return None
             return row.get(ref[1])
-        return lookup
+        return lookup, link
 
     def _simulate_branch(self, walker: graph.Walker, lookup, case: Case, branch) -> list[Step]:
         """Simulate one branch of a statistical case: every random split on it takes the branch's outcome."""
@@ -504,13 +614,20 @@ class Checker:
             details.append("the journey has more distinct paths than the generator explores, so the list of reachable "
                            "branches is incomplete")
         cases = {c.id: c for c in self.coverage.cases}
-        crossed: set[tuple[str, str]] = set()
-        for c in self.coverage.cases:
-            crossed.update((s.activity_key, s.outcome_key) for s in c.steps if s.outcome_key is not None)
-            if c.random is not None:
-                for b in c.random.branches:
-                    crossed.add((c.random.activity_key, b.outcome_key))
-                    crossed.update((s.activity_key, s.outcome_key) for s in b.steps if s.outcome_key is not None)
+        crossed_by = {c.id: _crossed_branches(c) for c in self.coverage.cases}
+        crossed: set[tuple[str, str]] = set().union(*crossed_by.values())
+        # Every branch of every split of the journey has a status, and nothing else has one.
+        journey_branches = {(a.key, o.key) for a, o in graph.split_branches(self.package.journey)}
+        listed = [(b.activity_key, b.outcome_key) for b in self.coverage.branches]
+        for ref in sorted(journey_branches - set(listed)):
+            details.append(f"branch {ref} of the journey has no status in the report")
+        for ref in sorted(set(listed) - journey_branches):
+            details.append(f"branch {ref} has a status but is not a branch of a split of the journey")
+        for ref in sorted(r for r in listed if listed.count(r) > 1):
+            details.append(f"branch {ref} has several statuses")
+        splits = {a.key for a in self.package.journey.activities.values() if graph.is_split(a)}
+        for ref in sorted(r for r in crossed if r[0] in splits and r not in journey_branches):
+            details.append(f"a case crosses {ref}, which is not a branch of the journey")
         for b in self.coverage.branches:
             ref = (b.activity_key, b.outcome_key)
             if b.status == STATUS_NOT_COVERED:
@@ -525,15 +642,23 @@ class Checker:
                     details.append(f"branch {ref} is reported as {b.status} but no case covers it")
                 if ref not in crossed:
                     details.append(f"branch {ref} is reported as {b.status} but no case path crosses it")
-                for cid in b.covered_by:
-                    if cid not in cases:
-                        details.append(f"branch {ref} names an unknown case {cid}")
+            for cid in b.covered_by:
+                if cid not in cases:
+                    details.append(f"branch {ref} names an unknown case {cid}")
+                elif ref not in crossed_by[cid]:
+                    details.append(f"branch {ref} names the case {cid} as covering it, but the path of {cid} does not cross it")
+        # Every case has its contacts in the files (spec: "covered by at least one case of 3 contacts").
+        entry_contacts = self.rows_of_contact.get(self.table_model.entry_table, {})
         for c in self.coverage.cases:
             expected = self.settings.contacts_per_random_case if c.random is not None else self.settings.contacts_per_case
             if c.contact_count != expected:
                 details.append(f"case {c.id} has {c.contact_count} contacts instead of {expected}")
             if len(c.contact_keys) != c.contact_count:
                 details.append(f"case {c.id} lists {len(c.contact_keys)} contact keys for {c.contact_count} contacts")
+            absent = [key for key in c.contact_keys if key not in entry_contacts]
+            if absent:
+                details.append(f"case {c.id}: {len(absent)} of its {len(c.contact_keys)} contacts have no row in "
+                               f"{self.table_model.entry_table}.csv: " + ", ".join(absent[:3]))
         return CheckResult("Every reachable branch is covered and every uncovered branch has a reason", not details, _trim(details))
 
     # addresses -------------------------------------------------------------------------
@@ -555,6 +680,8 @@ class Checker:
             for row in rows:
                 contact = by_key.get(row.get(ckey))
                 if contact is None:
+                    details.append(f"{name}: the row of {row.get(ckey)!r} is not a generated contact, so its address "
+                                   f"cannot be right")
                     continue
                 case = cases.get(contact.case_id)
                 scenario = scenarios.get(contact.scenario_id)
@@ -606,6 +733,16 @@ def _normalise_default(f, default: str) -> Value:
         if low in ("false", "0"):
             return "False"
     return default
+
+
+def _crossed_branches(case: Case) -> set[tuple[str, str]]:
+    """The branches (activity, outcome) a case's path crosses, the branches after its random split included."""
+    crossed = {(s.activity_key, s.outcome_key) for s in case.steps if s.outcome_key is not None}
+    if case.random is not None:
+        for branch in case.random.branches:
+            crossed.add((case.random.activity_key, branch.outcome_key))
+            crossed.update((s.activity_key, s.outcome_key) for s in branch.steps if s.outcome_key is not None)
+    return crossed
 
 
 def _describe(steps: list[Step]) -> str:

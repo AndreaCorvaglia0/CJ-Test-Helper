@@ -336,24 +336,55 @@ def test_no_entry_query_leaves_the_entry_table_alone(sql):
     assert "Scenario-level: not joined to the entry" in model.tables[CONFIG].reason
 
 
-def test_entry_query_is_the_last_of_the_entry_automation(sql):
+def test_every_query_filling_the_entry_table_is_followed(sql):
+    """Spec, source table: "Any table in the FROM or JOIN of a query that fills the entry table".
+    Both queries of the entry automation fill the entry table: the tables they read are source
+    tables with a CSV; the entry rows come from the last one (changed in review: only the last one
+    used to be followed, and the first one's source table got no CSV)."""
     package = make_package(
         [make_table(ENTRY, text("ContactId", pk=True), sendable_field="ContactId"),
-         make_table(MASTER, text("ContactId", pk=True))],
+         make_table(MASTER, text("ContactId", pk=True)),
+         make_table("DE_Other", text("ContactId", pk=True))],
         queries=[query("Q_First", ENTRY), query("Q_Second", ENTRY)], automation=["Q_First", "Q_Second"])
+    sql.add(parsed("Q_First", ENTRY, ["DE_Other"], select=[("ContactId", "DE_Other.ContactId")]))
     sql.add(parsed("Q_Second", ENTRY, [MASTER], select=[("ContactId", "DE_Master.ContactId")],
                    warnings=["an OR group in WHERE is not understood"]))
     model = tables.build_table_model(package)
 
     assert model.entry_query.name == "Q_Second"
-    assert sql.calls == ["Q_Second"]
+    assert [q.name for q in model.source_queries] == ["Q_Second", "Q_First"]
+    assert sorted(sql.calls) == ["Q_First", "Q_Second"]
     assert model.warnings == [
-        "Several queries of the entry automation fill the entry table DE_Entry (Q_First and Q_Second): "
-        "the last one in step order, Q_Second, is taken as the entry query",
         "Query Q_Second: an OR group in WHERE is not understood",
+        "Several queries fill the entry table DE_Entry (Q_First and Q_Second): the tables they read are all "
+        "source tables, and the entry rows are built from Q_Second, the last one in step order",
     ]
     assert "also written by query Q_First" in model.tables[ENTRY].reason
     assert model.tables[MASTER].level == LEVEL_CONTACT
+    other = model.tables["DE_Other"]
+    assert (other.roles, other.selected, other.level) == ({ROLE_SOURCE}, True, LEVEL_CONTACT)
+    assert other.reason.startswith("Read by query Q_First, which fills DE_Entry.")
+
+
+def test_a_post_processing_query_on_the_entry_table_does_not_replace_the_entry_query(sql):
+    """An update step after the entry query that reads only the entry table must not hide the real
+    entry query: its source tables keep their CSV and the activation field is still found."""
+    package = pilot_like(sql)
+    package.queries.append(query("Q_Mark", ENTRY))
+    package.automation_queries["A_Entry"].insert(2, "Q_Mark")
+    sql.add(parsed("Q_Mark", ENTRY, [ENTRY], select=[("ContactId", "DE_Entry.ContactId")]))
+    model = tables.build_table_model(package)
+
+    assert model.entry_query.name == "Q_Entry"
+    assert [q.name for q in model.source_queries] == ["Q_Entry", "Q_Mark", "Q_ConfigUpdate"]
+    assert model.selected_tables == [ENTRY, CONFIG, MASTER, TARGET]
+    assert model.tables[TARGET].roles == {ROLE_SOURCE}
+    assert model.activation_field == (CONFIG, "ACTIVE")
+    assert model.warnings == [
+        "Several queries fill the entry table DE_Entry (Q_Entry and Q_Mark): the tables they read are all "
+        "source tables, and the entry rows are built from Q_Entry, the last one that reads a table other "
+        "than DE_Entry",
+    ]
 
 
 def test_entry_query_found_outside_the_entry_automation(sql):
