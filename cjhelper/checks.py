@@ -468,7 +468,9 @@ class Checker:
             if b.status == STATUS_NOT_COVERED:
                 if not b.reason:
                     details.append(f"branch {ref} is not covered and has no reason")
-                if ref in crossed:
+                # Spec: with no real inbox the open/click cases still exist, but the branch is
+                # reported as not covered; such a branch names its cases in covered_by.
+                if ref in crossed and not b.covered_by:
                     details.append(f"branch {ref} is reported as not covered but a case crosses it")
             else:
                 if not b.covered_by:
