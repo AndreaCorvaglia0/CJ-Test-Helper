@@ -182,7 +182,9 @@ def test_random_split_gets_a_statistical_case():
     for key in ("branchResult-1", "branchResult-2"):
         b = status(r, "RANDOM-1", key)
         assert b.status == STATUS_COVERED and b.statistical
-    assert status(r, "SPLIT-1", "cg").statistical
+    # the branch before the random split is crossed by all 50 contacts: covered, not statistical
+    cg = status(r, "SPLIT-1", "cg")
+    assert cg.status == STATUS_COVERED and not cg.statistical and cg.covered_by == [stat[0].cases[0].id]
     assert not status(r, "SPLIT-2", "ok").statistical
     det = [s for s in r.scenarios if not s.is_statistical]
     assert len(det) == 1 and det[0].values[("DE_Config", "CG")] == "False"
@@ -272,7 +274,7 @@ def test_unsupported_outcome_keeps_the_earlier_outcomes_coverable():
     rem = status(r, "SPLIT-1", "remainder_path")
     assert rem.status == STATUS_NOT_COVERED and rem.reason.startswith("behind an unsupported element")
     assert "SPLIT-1/b" in r.unsupported
-    assert r.stats["cases"] == 2   # the A case and the case that stops at the unsupported outcome
+    assert r.stats["cases"] == 1   # only the A case: the path stopped at the unsupported outcome covers nothing
 
 
 def test_branches_behind_an_unsupported_activity_name_it():

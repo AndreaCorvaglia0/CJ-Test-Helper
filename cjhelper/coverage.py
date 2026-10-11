@@ -33,6 +33,7 @@ from typing import Optional
 from . import graph
 from .model import (
     EqualityFilter,
+    KIND_EMAIL,
     IsNullFilter,
     SelectCurrentDate,
     SelectLiteral,
@@ -72,8 +73,9 @@ from .model import (
 )
 
 # Safety limits so a strange export cannot hang the generator. Both are reported when hit.
-MAX_CONTACT_COMBINATIONS = 200_000
+MAX_CONTACT_COMBINATIONS = 1_000_000
 MAX_SCENARIO_COMBINATIONS = 2_000_000
+MAX_PATHS = 400_000
 
 OTHER_TEXT_CANDIDATES = ("OTHER", "OTHER_2", "OTHER_3", "OTHER_4", "X", "Y", "Z", "W", "XX", "YY", "ZZ", "XY", "XZ", "YZ")
 OTHER_EMAIL = "other@example.invalid"
@@ -324,6 +326,7 @@ class CoverageEngine:
         self.engagement_blocked: dict[BranchRef, str] = {}
         self.reached_values: dict[str, dict[FieldRef, set[Value]]] = {}
         self.reached_activities: set[str] = set()
+        self.exploration_truncated = False
 
     # -- step 3 and 4: fields, levels, domains ------------------------------------------
 
@@ -475,6 +478,10 @@ class CoverageEngine:
                 seen.add(key)
                 preds.append(f)
 
+        # A field rewritten by an update-contact step can change the truth of a formula along the
+        # path, so such formulas are split into their conditions: classes then stay exact.
+        written = {self.schema.canonical((w.table, w.field))
+                   for a in self.journey.activities.values() for w in a.writes}
         for activity in self.journey.activities.values():
             if activity.kind != KIND_DECISION:
                 continue
@@ -482,8 +489,9 @@ class CoverageEngine:
                 if outcome.formula is None or outcome.unsupported_reason:
                     continue
                 conds = formula_conditions(outcome.formula)
-                levels = {self.levels[self.schema.canonical((c.table, c.field))] for c in conds}
-                if levels == {LEVEL_CONTACT}:
+                refs = [self.schema.canonical((c.table, c.field)) for c in conds]
+                levels = {self.levels[r] for r in refs}
+                if levels == {LEVEL_CONTACT} and not any(r in written for r in refs):
                     add(outcome.formula)
                 elif LEVEL_CONTACT in levels:
                     for c in conds:
@@ -544,6 +552,15 @@ class CoverageEngine:
 
     def _explore_from(self, cls: ContactClass, state: graph.WalkState, assigned: dict[FieldRef, Value],
                       manual: tuple[ManualAction, ...], randoms: tuple[tuple[str, str], ...]) -> Node:
+        if len(self.leaves) >= MAX_PATHS:
+            if not self.exploration_truncated:
+                self.exploration_truncated = True
+                self.warnings.append(
+                    f"the journey has more than {MAX_PATHS} distinct paths; exploration stopped there, so some "
+                    "reachable branches may be reported as not covered")
+            state.stop = graph.STOP_ERROR
+            state.stop_detail = "exploration limit reached"
+            return LeafNode(self._leaf(cls, state, assigned, manual, randoms))
         state = self.walker.run(state, self._lookup(cls, assigned), choose=None)
         self.reached_activities.update(s.activity_key for s in state.steps)
         if state.current is not None:
@@ -684,28 +701,44 @@ class CoverageEngine:
                     case_candidates.append((i, leaf))
         covered = 0
         selected: dict[int, list[Leaf]] = {}
-        while covered != universe:
-            best = None
-            best_key = None
-            for cand in case_candidates:
-                gain = bin(cand[1].mask & ~covered).count("1")
-                if gain == 0:
-                    continue
-                key = (-gain, len(cand[1].manual), cand[0], cand[1].class_id, cand[1].id)
-                if best_key is None or key < best_key:
-                    best, best_key = cand, key
-            if best is None:
-                break
-            selected.setdefault(best[0], []).append(best[1])
-            covered |= best[1].mask
-            case_candidates.remove(best)
+        # Cases without a manual action first, so a branch reachable without opening an email is
+        # reported as plainly covered; cases with a manual action only for what remains.
+        for with_manual in (False, True):
+            pool = [c for c in case_candidates if bool(c[1].manual) == with_manual]
+            while covered != universe:
+                best = None
+                best_key = None
+                for cand in pool:
+                    gain = bin(cand[1].mask & ~covered).count("1")
+                    if gain == 0:
+                        continue
+                    key = (-gain, cand[0], cand[1].class_id, cand[1].id)
+                    if best_key is None or key < best_key:
+                        best, best_key = cand, key
+                if best is None:
+                    break
+                selected.setdefault(best[0], []).append(best[1])
+                covered |= best[1].mask
+                pool.remove(best)
+        if not selected:
+            # A journey without any split still gets one case, so the CSVs hold data.
+            for sig, assignment in signatures.items():
+                leaf = next((self.leaves[i] for i in sig if self.leaves[i].deterministic), None)
+                if leaf is not None:
+                    chosen.append((sig, assignment))
+                    selected[len(chosen) - 1] = [leaf]
+                    break
         scenarios = [(chosen[i][1], leaves) for i, leaves in sorted(selected.items())]
         return scenarios, universe
 
     # -- random splits: statistical cases -----------------------------------------------
 
     def choose_statistical(self, signatures: dict[tuple[int, ...], dict[FieldRef, Value]], det_universe: int):
-        """Branches crossed only on paths through a random split get a statistical case."""
+        """Branches crossed only on paths through a random split get a statistical case.
+
+        Random leaves are grouped by scenario, contact class and manual actions: a group is one
+        statistical case (its contacts share the values and the actions asked of the tester).
+        Groups without a manual action are preferred."""
         random_universe = 0
         for leaf in self.leaves:
             if not leaf.deterministic:
@@ -713,20 +746,18 @@ class CoverageEngine:
         random_universe &= ~det_universe
         if not random_universe:
             return []
-        # Group random leaves by (scenario signature, class); engagement Yes choices are not
-        # asked of the tester in a statistical case, so leaves with manual actions are left out.
-        groups: list[tuple[dict[FieldRef, Value], int, list[Leaf], int]] = []
+        groups: list[tuple[dict[FieldRef, Value], int, tuple[ManualAction, ...], list[Leaf], int]] = []
         for sig, assignment in signatures.items():
-            by_class: dict[int, list[Leaf]] = {}
+            by_group: dict[tuple[int, tuple[ManualAction, ...]], list[Leaf]] = {}
             for leaf_id in sig:
                 leaf = self.leaves[leaf_id]
-                if not leaf.deterministic and not leaf.manual:
-                    by_class.setdefault(leaf.class_id, []).append(leaf)
-            for class_id, leaves in by_class.items():
+                if not leaf.deterministic:
+                    by_group.setdefault((leaf.class_id, leaf.manual), []).append(leaf)
+            for (class_id, manual), leaves in by_group.items():
                 mask = 0
                 for leaf in leaves:
                     mask |= leaf.mask
-                groups.append((assignment, class_id, leaves, mask & random_universe))
+                groups.append((assignment, class_id, manual, leaves, mask & random_universe))
         rng = random.Random(self.settings.seed + 1)
         rng.shuffle(groups)
         covered = 0
@@ -735,21 +766,24 @@ class CoverageEngine:
             best = None
             best_key = None
             for g in groups:
-                gain = bin(g[3] & ~covered).count("1")
+                gain = bin(g[4] & ~covered).count("1")
                 if gain == 0:
                     continue
-                key = (-gain, len(g[2]), g[1])
+                key = (-gain, len(g[2]), len(g[3]), g[1])
                 if best_key is None or key < best_key:
                     best, best_key = g, key
             if best is None:
                 break
             chosen.append(best)
-            covered |= best[3]
+            covered |= best[4]
             groups.remove(best)
         return chosen
 
     def _random_info(self, leaves: list[Leaf]) -> tuple[list[Step], RandomInfo]:
-        """Cut the leaves at their first random split: the common prefix and one branch per outcome."""
+        """Cut the leaves at their first random split: the common prefix and one branch per leaf.
+
+        A leaf that crosses several random splits is one branch whose percentage is the product
+        of the percentages it took; its steps show every random split crossed."""
         first_key = leaves[0].randoms[0][0]
         activity = self.journey.activities[first_key]
         prefix: list[Step] = []
@@ -758,21 +792,23 @@ class CoverageEngine:
                 break
             prefix.append(step)
         prefix.append(Step(first_key, None))
+        order = {o.key: i for i, o in enumerate(activity.outcomes)}
+
+        def sort_key(leaf: Leaf):
+            return [order.get(leaf.randoms[0][1], 99)] + [k for pair in leaf.randoms for k in pair]
+
         branches: list[RandomBranch] = []
-        seen_outcomes: set[str] = set()
-        for outcome in activity.outcomes:
-            for leaf in leaves:
-                if leaf.randoms[0] != (first_key, outcome.key) or outcome.key in seen_outcomes:
-                    continue
-                if len(leaf.randoms) > 1:
-                    self.warnings.append(
-                        f"random split '{first_key}' leads to another random split; only the first continuation is described")
-                idx = next(i for i, s in enumerate(leaf.steps) if s.activity_key == first_key)
-                branches.append(RandomBranch(
-                    outcome_key=outcome.key, percentage=outcome.percentage or 0,
-                    steps=tuple(leaf.steps[idx + 1:]), emails_sent=tuple(leaf.emails_sent),
-                    writes=tuple(leaf.writes), end_activity_key=leaf.end_activity_key))
-                seen_outcomes.add(outcome.key)
+        for leaf in sorted(leaves, key=sort_key):
+            share = 1.0
+            for key, outcome_key in leaf.randoms:
+                split = self.journey.activities.get(key)
+                outcome = split.outcome(outcome_key) if split is not None else None
+                share *= (outcome.percentage or 0) / 100.0 if outcome is not None else 0
+            idx = next(i for i, st in enumerate(leaf.steps) if st.activity_key == first_key)
+            branches.append(RandomBranch(
+                outcome_key=leaf.randoms[0][1], percentage=int(round(share * 100)),
+                steps=tuple(leaf.steps[idx + 1:]), emails_sent=tuple(leaf.emails_sent),
+                writes=tuple(leaf.writes), end_activity_key=leaf.end_activity_key))
         n = self.settings.contacts_per_random_case
         smallest = min((b.percentage for b in branches if b.percentage), default=0) / 100.0
         low, high = expected_range(n, smallest)
@@ -793,43 +829,51 @@ class CoverageEngine:
         det_scenarios, det_universe = self.choose_cover(signatures)
         stat_groups = self.choose_statistical(signatures, det_universe)
 
-        scenarios: list[Scenario] = []
-        pending: list[tuple[dict[FieldRef, Value], list[Leaf], bool]] = []
+        # Spec step 6: paths sharing the same scenario-level values form one scenario, so a
+        # statistical group joins the scenario with its values when there is one.
+        def key_of(assignment: dict[FieldRef, Value]):
+            return tuple(sorted(assignment.items(), key=lambda kv: (kv[0], str(kv[1]))))
+
+        pending: dict[tuple, dict] = {}
         for assignment, leaves in det_scenarios:
-            pending.append((assignment, leaves, False))
-        for assignment, _class_id, leaves, _mask in stat_groups:
-            pending.append((assignment, leaves, True))
-        # Spec: scenarios with a manual action come first in the run order; statistical ones last.
-        pending.sort(key=lambda p: (p[2], not any(l.manual for l in p[1])))
-        case_lookup: dict[str, Case] = {}
-        for order, (assignment, leaves, is_stat) in enumerate(pending, start=1):
+            entry = pending.setdefault(key_of(assignment), {"values": assignment, "det": [], "stat": []})
+            entry["det"].extend(leaves)
+        for assignment, class_id, manual, leaves, _mask in stat_groups:
+            entry = pending.setdefault(key_of(assignment), {"values": assignment, "det": [], "stat": []})
+            entry["stat"].append((class_id, manual, leaves))
+
+        def has_manual(entry: dict) -> bool:
+            return any(l.manual for l in entry["det"]) or any(m for _, m, _ in entry["stat"])
+
+        # Spec: scenarios with a manual action come first in the run order; statistical-only last.
+        ordered = sorted(pending.values(), key=lambda e: (not e["det"], not has_manual(e)))
+        scenarios: list[Scenario] = []
+        for order, entry in enumerate(ordered, start=1):
             sid = f"S{order:02d}"
             cases: list[Case] = []
-            if is_stat:
-                prefix, info = self._random_info(leaves)
-                leaf = leaves[0]
+            for leaf in sorted(entry["det"], key=lambda l: (l.class_id, len(l.manual), l.id)):
                 cls = self.classes[leaf.class_id - 1]
-                case = Case(id=f"{sid}-C01", scenario_id=sid, class_id=cls.id, contact_values=dict(cls.values),
-                            steps=prefix, emails_sent=[], writes=[], waits=[s.activity_key for s in prefix
-                                                                               if self.journey.activities[s.activity_key].kind in graph.WAIT_KINDS],
-                            manual_actions=[], end_activity_key=info.activity_key,
+                case = Case(id=f"{sid}-C{len(cases) + 1:02d}", scenario_id=sid, class_id=cls.id,
+                            contact_values=dict(cls.values), steps=list(leaf.steps), emails_sent=list(leaf.emails_sent),
+                            writes=list(leaf.writes), waits=list(leaf.waits), manual_actions=list(leaf.manual),
+                            end_activity_key=leaf.end_activity_key, contact_count=self.settings.contacts_per_case)
+                case.summary = self._summary(case.steps)
+                cases.append(case)
+            for class_id, manual, leaves in sorted(entry["stat"], key=lambda g: (len(g[1]), g[0])):
+                prefix, info = self._random_info(leaves)
+                cls = self.classes[class_id - 1]
+                prefix_keys = [st.activity_key for st in prefix]
+                case = Case(id=f"{sid}-C{len(cases) + 1:02d}", scenario_id=sid, class_id=cls.id,
+                            contact_values=dict(cls.values), steps=prefix,
+                            emails_sent=[k for k in prefix_keys if self.journey.activities[k].kind == KIND_EMAIL],
+                            writes=[], waits=[k for k in prefix_keys if self.journey.activities[k].kind in graph.WAIT_KINDS],
+                            manual_actions=list(manual), end_activity_key=info.activity_key,
                             contact_count=self.settings.contacts_per_random_case, random=info)
                 case.summary = self._summary(case.steps) + " > random split"
                 cases.append(case)
-            else:
-                leaves_sorted = sorted(leaves, key=lambda l: (l.class_id, len(l.manual), l.id))
-                for n, leaf in enumerate(leaves_sorted, start=1):
-                    cls = self.classes[leaf.class_id - 1]
-                    case = Case(id=f"{sid}-C{n:02d}", scenario_id=sid, class_id=cls.id, contact_values=dict(cls.values),
-                                steps=list(leaf.steps), emails_sent=list(leaf.emails_sent), writes=list(leaf.writes),
-                                waits=list(leaf.waits), manual_actions=list(leaf.manual),
-                                end_activity_key=leaf.end_activity_key, contact_count=self.settings.contacts_per_case)
-                    case.summary = self._summary(case.steps)
-                    cases.append(case)
-            for c in cases:
-                case_lookup[c.id] = c
-            scenarios.append(Scenario(id=sid, key="", values=dict(assignment), cases=cases, run_order=order,
-                                      has_manual_action=any(c.manual_actions for c in cases), is_statistical=is_stat))
+            scenarios.append(Scenario(id=sid, key="", values=dict(entry["values"]), cases=cases, run_order=order,
+                                      has_manual_action=any(c.manual_actions for c in cases),
+                                      is_statistical=not entry["det"]))
 
         branches = self._branch_statuses(scenarios)
         stats = {
@@ -881,23 +925,36 @@ class CoverageEngine:
         return out
 
     def _branch_statuses(self, scenarios: list[Scenario]) -> list[BranchStatus]:
+        """Each split branch: covered (a case without manual action crosses it), covered with
+        manual action, or not covered with a reason. A branch crossed only after a random split
+        is flagged statistical; the branches before the random split are crossed with certainty."""
         plain: dict[BranchRef, list[str]] = {}
         manual: dict[BranchRef, list[str]] = {}
-        statistical: dict[BranchRef, list[str]] = {}
+        stat_plain: dict[BranchRef, list[str]] = {}
+        stat_manual: dict[BranchRef, list[str]] = {}
         for scenario in scenarios:
             for case in scenario.cases:
-                refs = [(s.activity_key, s.outcome_key) for s in case.steps if s.outcome_key is not None]
+                before = [(s.activity_key, s.outcome_key) for s in case.steps if s.outcome_key is not None]
+                after: list[BranchRef] = []
                 if case.random is not None:
                     for rb in case.random.branches:
-                        refs.append((case.random.activity_key, rb.outcome_key))
-                        refs.extend((s.activity_key, s.outcome_key) for s in rb.steps if s.outcome_key is not None)
-                    bucket = statistical
-                elif case.manual_actions:
-                    bucket = manual
-                else:
-                    bucket = plain
-                for ref in refs:
-                    bucket.setdefault(ref, []).append(case.id)
+                        after.append((case.random.activity_key, rb.outcome_key))
+                        after.extend((s.activity_key, s.outcome_key) for s in rb.steps if s.outcome_key is not None)
+                sure = manual if case.manual_actions else plain
+                random_bucket = stat_manual if case.manual_actions else stat_plain
+                for ref in before:
+                    sure.setdefault(ref, []).append(case.id)
+                for ref in after:
+                    random_bucket.setdefault(ref, []).append(case.id)
+        statistical: dict[BranchRef, list[str]] = {}
+        for ref, ids in stat_plain.items():
+            statistical.setdefault(ref, []).extend(ids)
+        for ref, ids in stat_manual.items():
+            if ref not in plain and ref not in stat_plain:
+                manual.setdefault(ref, []).extend(ids)
+                statistical.setdefault(ref, []).extend(ids)
+            else:
+                statistical.setdefault(ref, []).extend(ids)
 
         unsupported = set(self.package.unsupported_activities)
         preds = graph.predecessors(self.journey)
@@ -906,23 +963,24 @@ class CoverageEngine:
         for activity, outcome in self.branch_list:
             ref = (activity.key, outcome.key)
             label = outcome.label or outcome.key
+            stat_note = f"reached only through a random split; statistical case of {self.settings.contacts_per_random_case} contacts"
             if ref in plain:
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                              STATUS_COVERED, "", sorted(set(plain[ref]))))
             elif ref in manual:
+                is_stat = ref in statistical and ref not in plain
+                reason = "a contact must open or click the email" + ("; " + stat_note if is_stat else "")
                 if self.settings.real_inbox:
                     statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
-                                                 STATUS_MANUAL, "a contact must open or click the email", sorted(set(manual[ref]))))
+                                                 STATUS_MANUAL, reason, sorted(set(manual[ref])), statistical=is_stat))
                 else:
                     statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                                  STATUS_NOT_COVERED,
                                                  "needs an open or click but no real inbox is configured; the cases exist with undeliverable addresses",
-                                                 sorted(set(manual[ref]))))
+                                                 sorted(set(manual[ref])), statistical=is_stat))
             elif ref in statistical:
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
-                                             STATUS_COVERED,
-                                             f"reached only through a random split; statistical case of {self.settings.contacts_per_random_case} contacts",
-                                             sorted(set(statistical[ref])), statistical=True))
+                                             STATUS_COVERED, stat_note, sorted(set(statistical[ref])), statistical=True))
             else:
                 behind = None
                 if activity.key in self.reached_activities or activity.key in unsupported:
