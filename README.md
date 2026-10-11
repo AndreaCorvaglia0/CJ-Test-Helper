@@ -59,15 +59,13 @@ Termini usati in questi file:
 ## Come un tester usa i file
 
 1. Apri `report.md`. Verifica che tutti i trust check siano superati, poi leggi la sezione "Come eseguire i test".
-2. Scegli una procedura di ingresso e mantienila per tutto il test. Le due procedure sono alternative: eseguirle entrambe duplicherebbe le righe di ingresso.
-   - Import diretto, la procedura normale secondo la spec. Importa prima i CSV delle tabelle collegate e per ultimo il CSV di ingresso. Non eseguire l'automation che popola la tabella di ingresso.
-   - Tramite l'automation. Importa tutti i CSV tranne quello di ingresso. Esegui l'automation una volta per scenario: la sua entry query costruisce le righe di ingresso a partire dalle righe importate.
-3. Esegui uno scenario alla volta, in ordine di esecuzione. I CSV partono con il primo scenario attivo. Per rendere attivo uno scenario, imposta il campo di attivazione a True sulla riga dello scenario e a False su tutte le altre righe. Il report indica il campo: nel pilot è `ACTIVE` di `DE_NCRM_AD_HOC_CONFIG`. Il campo di attivazione è un filtro della entry query e nessuno split lo legge. Trattiene uno scenario solo quando l'automation esegue quella query.
+2. Popola la tabella di ingresso a mano, con l'import diretto dei CSV: importa prima i CSV delle tabelle collegate e per ultimo il CSV di ingresso. Durante il test non si esegue nessuna automation.
+3. Esegui uno scenario alla volta, in ordine di esecuzione. I CSV partono con il primo scenario attivo. Per rendere attivo uno scenario, imposta il campo di attivazione a True sulla riga dello scenario e a False su tutte le altre righe. Il report indica il campo: nel pilot è `ACTIVE` di `DE_NCRM_AD_HOC_CONFIG`. Il campo di attivazione è un filtro della entry query e nessuno split lo legge, quindi con l'import diretto non trattiene alcuno scenario.
 4. Prima di passare allo scenario successivo, aspetta che i contatti dello scenario corrente siano usciti dal journey. Non cambiare altro e non reimportare nulla, perché il journey legge i dati degli split nel momento in cui un contatto raggiunge lo split.
 5. Segui il testbook, una riga per caso. I passi indicano le attese, le eventuali azioni manuali con la loro scadenza e le evidenze da raccogliere. Confronta quello che vedi con l'Expected result.
 6. Per una nuova generazione usa un nuovo run identifier. Le chiavi di un run precedente sono già nelle tabelle e un contatto di test non viene mai riutilizzato.
 
-Assunzione da verificare prima del primo run reale: quando un'automation popola la tabella di ingresso, come nel pilot, importare solo il CSV di ingresso potrebbe non far entrare nessuno. In quel caso anche l'import diretto potrebbe richiedere un Run Once dell'automation con selezionata solo l'attività di ingresso nel journey. Le righe da 23 a 27 di `docs/assumptions.md` spiegano il motivo.
+Assunzione da verificare al primo run reale: quando la entry source del journey è una data extension pianificata da un'automation, come nel pilot, Salesforce potrebbe richiedere il passo di ingresso nel journey di quell'automation perché i contatti importati entrino. Le righe da 23 a 27 di `docs/assumptions.md` spiegano il motivo.
 
 ### L'inbox reale
 
@@ -92,7 +90,7 @@ Dopo aver scritto i file, il generatore li rilegge e li controlla. Il report rip
 | --- | --- |
 | I valori rispettano tipo, lunghezza, nullability e primary key | L'import potrebbe scartare righe o troncare valori. |
 | Ogni chiave trova corrispondenza tra le tabelle | Alcuni contatti non troverebbero la riga del loro scenario o le loro righe in una tabella collegata, quindi i loro split non vedrebbero i valori previsti. |
-| Le righe di ingresso corrispondono alla entry query | Il CSV di ingresso non contiene quello che la entry query costruirebbe dagli altri CSV, quindi le due procedure di ingresso darebbero dati diversi. |
+| Le righe di ingresso corrispondono alla entry query | Il CSV di ingresso non contiene quello che la entry query costruirebbe dagli altri CSV. |
 | Ogni contatto, ri-simulato a partire dai file, segue il percorso previsto | Il risultato atteso nel testbook potrebbe essere sbagliato per alcuni contatti. |
 | Ogni branch raggiungibile è coperto e ogni branch non coperto ha un motivo | La coverage indicata nel report non è affidabile. |
 | Solo i contatti con un'azione manuale usano l'inbox reale; tutti gli altri sono non recapitabili | Alcune email potrebbero arrivare all'inbox reale quando non dovrebbero. |
@@ -146,7 +144,7 @@ Supportato nel PoC:
 
 ## Assunzioni da verificare
 
-In alcuni punti i risultati attesi dipendono da comportamenti di Salesforce che la spec non chiarisce: le maiuscole e minuscole nei confronti di testo, come viene letta una data di wait senza fuso orario, come entrano i contatti tramite un'automation di ingresso, e altro. Ognuno è un'assunzione da verificare una volta con un piccolo run reale, mai un dato di fatto.
+In alcuni punti i risultati attesi dipendono da comportamenti di Salesforce che la spec non chiarisce: le maiuscole e minuscole nei confronti di testo, come viene letta una data di wait senza fuso orario, come entrano i contatti quando l'ingresso è pianificato da un'automation, e altro. Ognuno è un'assunzione da verificare una volta con un piccolo run reale, mai un dato di fatto.
 
 - `docs/assumptions.md` le elenca tutte, con la documentazione trovata e come verificare ciascuna, e pianifica un run di verifica di un giorno. Inizia dalla sezione "Check these first".
 - La sezione "Assunzioni" di `report.md` elenca quelle che valgono per l'export eseguito.

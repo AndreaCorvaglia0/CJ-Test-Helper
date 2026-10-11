@@ -187,6 +187,21 @@ def test_report_lists_checks_branches_unsupported_warnings_and_settings():
     assert "W. Europe Standard Time" in report
 
 
+def test_report_describes_the_direct_import_only():
+    report = write_report(build_result())
+    how = report[report.index("### Come eseguire i test"):report.index("### Elenco degli scenari")]
+    assert how.startswith("### Come eseguire i test\n\nImporta prima DE_Master.csv e DE_Config.csv, poi DE_Entry.csv,")
+    assert how.count("automation") == 3 and how.count("A_Entry") == 1    # one note on the entry source only
+    assert "Assunzione da verificare al primo run reale: l'ingresso in questo journey è pianificato " \
+           "dall'automation A_Entry." in how
+    assert "ACTIVE è un filtro della entry query e nessuno split lo legge, quindi con l'import diretto non " \
+           "trattiene alcuno scenario." in how
+    for alternative in ("procedura", "Tramite l'automation", "Esegui l'automation", "Run Once"):
+        assert alternative not in report
+    assumptions = report[report.index("## Assunzioni"):report.index("## Impostazioni usate")]
+    assert "- L'import diretto di DE_Entry.csv fa entrare i suoi contatti." in assumptions
+
+
 def test_report_scenarios_and_cases():
     report = write_report(build_result())
     assert ("| TST_R01_S01 | 1 | sì | True | False | 2 | 6 | da TST_R01_C0001 a TST_R01_C0006 | "
@@ -298,12 +313,17 @@ def test_testbook_has_one_row_per_case_and_names_every_contact():
 def test_testbook_preconditions_steps_and_expected_result():
     rows = build_testbook_rows(build_result())
     first = dict(zip(TESTBOOK_COLUMNS, rows[0]))
-    assert "Importa questi file CSV: DE_Entry.csv, DE_Master.csv, DE_Config.csv." in first["Pre conditions"]
+    assert ("Importa questi file CSV: DE_Entry.csv, DE_Master.csv, DE_Config.csv. Importa DE_Entry.csv per ultimo."
+            in first["Pre conditions"])
     assert "Scenario attivo: TST_R01_S01" in first["Pre conditions"]
     assert "Percorso atteso: Channel [Email] > Welcome > Wait campaign date > Wait reminder date > " \
            "Opened Welcome [Yes] > Log open." in first["Description"]
     steps = first["Detailed steps"].split("\n")
     assert [step.split(".")[0] for step in steps] == ["1", "2", "3", "4", "5"]
+    assert steps[1] == ("2. Avvia l'ingresso nel journey Test journey dalle righe importate di DE_Entry.csv. Tutti i "
+                        "test di questo scenario partono insieme.")
+    text = "\n".join(str(value) for row in rows for value in row)
+    assert "automation" not in text and "oppure" not in text            # direct import only, no alternative
     assert "Prima del 2026-10-12 09:30, apri l'email 'Welcome'" in steps[3]
     assert "tester+TST_R01_C0001@example.com" in steps[3]
     assert "- Email ricevute: Welcome." in first["Expected result"]

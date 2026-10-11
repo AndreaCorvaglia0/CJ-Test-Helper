@@ -681,7 +681,8 @@ def _activation_text(context: _TestbookContext, scenario: Scenario) -> str:
 
 
 def _entry_procedures(result: GenerationResult) -> Optional[str]:
-    """The automation that fills the entry table, when the entry can also be run through it."""
+    """The automation that schedules the entry source, when the entry table is also filled by an entry query.
+    Only named in the assumption note: the test itself always uses the direct import."""
     entry = result.package.entry_event
     automation = entry.automation_name if entry is not None else None
     return automation if automation and result.table_model.entry_query is not None else None
@@ -693,11 +694,7 @@ def _preconditions(context: _TestbookContext, scenario: Scenario, case: Case) ->
     entry_csv = table_file_name(context.result.table_model.entry_table)
     first = f"Importa questi file CSV: {', '.join(context.csv_names)}."
     if len(context.csv_names) > 1 and entry_csv in context.csv_names:
-        if _entry_procedures(context.result):
-            first += (f" Importa {entry_csv} per ultimo, oppure non importarlo se esegui l'ingresso tramite "
-                      "l'automation: vedi la sezione Come eseguire i test di report.md.")
-        else:
-            first += f" Importa {entry_csv} per ultimo."
+        first += f" Importa {entry_csv} per ultimo."
     lines = [first]
     if context.one_active:
         table, field = context.activation_ref
@@ -813,14 +810,8 @@ def _detailed_steps(context: _TestbookContext, scenario: Scenario, case: Case) -
     else:
         steps.append(f"Verifica che le righe dello scenario {scenario.key} siano state importate.")
     entry_csv = table_file_name(context.result.table_model.entry_table)
-    automation = _entry_procedures(context.result)
-    if automation:
-        steps.append(f"Avvia l'ingresso dello scenario {scenario.key} con la procedura scelta nella sezione Come "
-                     f"eseguire i test di report.md: l'import diretto di {entry_csv} oppure un run dell'automation "
-                     f"{automation}. Tutti i test di questo scenario partono insieme.")
-    else:
-        steps.append(f"Avvia l'ingresso nel journey {context.journey.name} dalle righe importate di {entry_csv}. "
-                     "Tutti i test di questo scenario partono insieme.")
+    steps.append(f"Avvia l'ingresso nel journey {context.journey.name} dalle righe importate di {entry_csv}. "
+                 "Tutti i test di questo scenario partono insieme.")
     waits = _wait_descriptions(context, scenario, case)
     steps.append("Attendi che i contatti superino i wait del loro percorso: " + "; ".join(waits) + "." if waits else
                  "Il percorso non ha wait.")
@@ -1269,36 +1260,25 @@ def _activation_is_entry_filter(result: GenerationResult, ref: FieldRef) -> bool
 
 
 def _how_to_run(result: GenerationResult, context: _TestbookContext) -> str:
-    """Spec: "The tester imports the entry CSV directly, together with the CSVs of the linked tables ...
-    Importing the sources and running the automation is the alternative. The two ways are not combined";
-    "One scenario at a time"; "Data is read live"."""
+    """Spec: "The tester imports the entry CSV directly, together with the CSVs of the linked tables";
+    "One scenario at a time"; "Data is read live". The user's decision: the entry table is filled by the
+    direct import only, and no automation runs during the test."""
     model = result.table_model
     entry_csv = table_file_name(model.entry_table)
     others = [name for name in context.csv_names if name != entry_csv]
     automation = _entry_procedures(result)
-    runs = "una volta per ogni scenario, con attivo solo quello scenario" if context.one_active else "una volta"
     parts = ["### Come eseguire i test"]
-    if automation and others:
-        parts.append("Scegli una procedura di ingresso prima del primo run e mantienila per tutti gli scenari. Non "
-                     "combinare le due procedure: eseguirle entrambe duplicherebbe le righe di ingresso.")
-        parts.append(_bullets([
-            f"Import diretto, la procedura normale secondo la spec. Importa prima {_join_words(others)}, poi "
-            f"{entry_csv}, così ogni riga che serve a un contatto è già presente quando entra. Non eseguire "
-            f"l'automation {automation}.",
-            f"Tramite l'automation. Importa {_join_words(others)}, ma non {entry_csv}. Esegui l'automation "
-            f"{automation} {runs}. La sua entry query {model.entry_query.name} costruisce le righe di ingresso a "
-            "partire dalle righe importate.",
-        ]))
-        parts.append(f"Assunzione da verificare prima del primo run: importare solo {entry_csv} potrebbe non far "
-                     f"entrare nessuno, perché l'ingresso in questo journey lo esegue l'automation {automation}. In "
-                     "quel caso anche l'import diretto potrebbe richiedere un Run Once di quell'automation con "
-                     "selezionata solo l'attività di ingresso nel journey. La review Salesforce in docs/assumptions.md "
-                     "lo spiega nelle righe da 23 a 27.")
-    elif others:
+    if others:
         parts.append(f"Importa prima {_join_words(others)}, poi {entry_csv}, così ogni riga che serve a un contatto è "
                      "già presente quando entra.")
     else:
         parts.append(f"Importa {entry_csv}.")
+    if automation:
+        parts.append(f"Assunzione da verificare al primo run reale: l'ingresso in questo journey è pianificato "
+                     f"dall'automation {automation}. Per una entry source di tipo data extension pianificata da "
+                     "un'automation, Salesforce potrebbe richiedere il passo di ingresso nel journey di "
+                     "quell'automation perché i contatti importati entrino. docs/assumptions.md descrive questa "
+                     "assunzione nelle righe da 23 a 27.")
     if context.one_active and context.first_scenario is not None:
         table, field = context.activation_ref
         key_column = _scenario_key_column(context, table)
@@ -1315,8 +1295,8 @@ def _how_to_run(result: GenerationResult, context: _TestbookContext) -> str:
             "legge queste righe mentre i contatti sono al suo interno.",
         ]))
         if automation and _activation_is_entry_filter(result, context.activation_ref):
-            parts.append(f"{field} è un filtro della entry query e nessuno split lo legge: trattiene uno scenario "
-                         "solo quando l'automation esegue quella query.")
+            parts.append(f"{field} è un filtro della entry query e nessuno split lo legge, quindi con l'import "
+                         "diretto non trattiene alcuno scenario.")
     elif result.coverage.scenarios:
         parts.append("Nei CSV tutti gli scenari sono attivi, quindi vengono eseguiti insieme.")
     parts.extend(_contact_address_text(result))
@@ -1742,9 +1722,10 @@ def _section_assumptions(result: GenerationResult) -> str:
     ]
     automation = _entry_procedures(result)
     if automation:
-        items.append(f"L'import di {table_file_name(result.table_model.entry_table)} fa entrare i suoi contatti. "
-                     f"L'automation {automation} esegue l'ingresso in questo journey e la review Salesforce indica "
-                     "che il solo import potrebbe non far entrare nessuno. Vedi la sezione Come eseguire i test.")
+        items.append(f"L'import diretto di {table_file_name(result.table_model.entry_table)} fa entrare i suoi "
+                     f"contatti. L'ingresso in questo journey è pianificato dall'automation {automation} e la review "
+                     "Salesforce indica che potrebbe servire il passo di ingresso nel journey di quell'automation. "
+                     "Vedi la sezione Come eseguire i test.")
     ignored = _ignored_entry_columns(result)
     if ignored and result.table_model.entry_query is not None:
         items.append(f"La entry query {result.table_model.entry_query.name} viene eseguita anche se seleziona "
