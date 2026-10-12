@@ -8,6 +8,23 @@ Spec, "Outputs": "The app returns one zip file with the data CSVs plus three sup
 
 Every function here is pure: the same input gives the same bytes ("The output is reproducible").
 For that reason the timestamps that Excel files and zip archives normally carry are fixed.
+
+Spec, "Extensions beyond the pilot" (12 October 2026), as report.md and the testbook apply it:
+
+- Entry source and procedure: the procedure follows ``EntryEvent.kind``. Automation (the pilot): as before.
+  Run Once: import every CSV, then activate the journey; only rows present at activation enter; a new attempt
+  needs a new journey version and a new run identifier; all scenarios enter together; the entry data extension
+  must hold only test rows when the journey is activated. Recurring schedule: a procedure to verify. CloudPages
+  form, API event or any other: a copy of the journey with a data extension entry with the same columns.
+  ``OnceAndDone`` and ``SingleEntryAcrossAllVersions``: every attempt needs a new run identifier. Entry filters,
+  goals and exit criteria are not modelled and are reported.
+- Row present or absent: a contact whose case has the row absent is described as having no row in that table.
+- Honest outcomes: past an unsupported element the expected result says the path is unknown from that activity
+  on, and never names it as the last activity reached; report.md (and the page, through
+  ``unsupported_warning``) opens with a warning when unsupported elements leave branches not covered; the
+  deadline of a manual action comes from the waits between the email and the engagement split
+  (``Case.action_windows``); each test gives its minimum duration; report.md lists only the assumptions the
+  export triggers.
 """
 
 from __future__ import annotations
@@ -34,6 +51,10 @@ from .datagen import (
     wait_precedes_manual_action,
 )
 from .model import (
+    ENTRY_AUTOMATION,
+    ENTRY_OTHER,
+    ENTRY_RUN_ONCE,
+    ENTRY_SCHEDULED,
     KIND_DECISION,
     KIND_EMAIL,
     KIND_ENGAGEMENT,
@@ -48,6 +69,7 @@ from .model import (
     STATUS_MANUAL,
     STATUS_NOT_COVERED,
     Activity,
+    ActionWindow,
     BranchStatus,
     Case,
     EqualityFilter,
@@ -481,6 +503,164 @@ def _end_sentence(journey: Journey, last: Optional[Step]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Entry source, unknown paths, windows and durations (spec, "Extensions beyond the pilot")
+# ---------------------------------------------------------------------------
+
+# Entry modes with which a contact key of an earlier attempt may not enter again: "Entry modes OnceAndDone (no
+# re-entry) and SingleEntryAcrossAllVersions: the testbook says every attempt needs a new run identifier".
+SINGLE_ENTRY_MODES = ("OnceAndDone", "SingleEntryAcrossAllVersions")
+
+# The not-covered reasons of coverage.py that come from an unsupported element (the branch itself, a branch
+# after it in the same split, or a branch behind it).
+_UNSUPPORTED_REASONS = ("attività non supportata", "branch non supportato", "a valle di un elemento non supportato")
+
+_DAY_MINUTES = 24 * 60     # minutes in a day, for durations in words
+
+
+def entry_kind(package) -> str:
+    """The entry source kind (``EntryEvent.kind``, one of ``ENTRY_*``); without an entry event, the pilot's."""
+    event = getattr(package, "entry_event", None)
+    return getattr(event, "kind", None) or ENTRY_AUTOMATION
+
+
+def entry_source_text(package) -> str:
+    """An entry source that is not a scheduled data extension (``ENTRY_OTHER``), in words, with its type as
+    the export writes it: "un form CloudPages (CloudPagesSmartCaptureSubmissionEvent)"."""
+    event = getattr(package, "entry_event", None)
+    event_type = (getattr(event, "event_type", "") or "").strip()
+    low = event_type.lower()
+    if low.startswith("cloudpages"):
+        return f"un form CloudPages ({event_type})"
+    if low.startswith("api"):
+        return f"un API event ({event_type})"
+    return f"un evento di tipo {event_type}" if event_type else "un evento di tipo non indicato"
+
+
+def _entry_mode(package) -> Optional[str]:
+    """The journey's entry mode when it keeps a contact of an earlier attempt from entering again."""
+    mode = getattr(package.journey, "entry_mode", None)
+    return mode if mode in SINGLE_ENTRY_MODES else None
+
+
+def _not_modelled_text(package) -> Optional[str]:
+    """Spec: "Entry filters, goals and exit criteria are not modelled; when present they are reported, because
+    contacts may not enter or may leave early"."""
+    journey = package.journey
+    event = getattr(package, "entry_event", None)
+    parts = []
+    if getattr(event, "entry_filter", None):
+        parts.append("Il journey ha un filtro di ingresso che il generatore non modella: alcuni contatti generati "
+                     "potrebbero non entrare.")
+    goals, exits = getattr(journey, "goal_count", 0), getattr(journey, "exit_count", 0)
+    if goals or exits:
+        found = ([_plural(goals, "goal", "goal")] if goals else []) + \
+                ([_plural(exits, "criterio di uscita", "criteri di uscita")] if exits else [])
+        parts.append(f"Il journey ha {_join_words(found)} che il generatore non modella: alcuni contatti potrebbero "
+                     "uscire prima della fine del percorso atteso.")
+    if not parts:
+        return None
+    return " ".join(parts) + " Se un contatto non segue il percorso atteso, controlla per primi questi elementi."
+
+
+def _unsupported_elements(result: GenerationResult) -> list[str]:
+    """The unsupported activities and branches, by name: an unsupported branch is written ``<split>/<outcome>``
+    in ``CoverageResult.unsupported``."""
+    journey = result.package.journey
+    labels = []
+    for key in _unique(list(result.package.unsupported_activities) + list(result.coverage.unsupported)):
+        activity_key, _, outcome_key = key.partition("/")
+        if key not in journey.activities and outcome_key and activity_key in journey.activities:
+            labels.append(f"il branch '{_outcome_label(journey, activity_key, outcome_key)}' di "
+                          f"{_quoted_label(journey, activity_key)}")
+        else:
+            labels.append(_quoted_label(journey, key))
+    return labels
+
+
+def unsupported_warning(result: GenerationResult) -> Optional[str]:
+    """Spec, "Honest outcomes": "report.md and the page open with a warning when unsupported elements leave
+    branches not covered". None when no branch is left not covered by an unsupported element."""
+    branches = list(result.coverage.branches)
+    hit = [b for b in branches if b.status == STATUS_NOT_COVERED
+           and (getattr(b, "reason", "") or "").startswith(_UNSUPPORTED_REASONS)]
+    if not hit:
+        return None
+    elements = _unsupported_elements(result)
+    shown = elements[:3] + ([f"altri {len(elements) - 3}"] if len(elements) > 3 else [])
+    verb = "non è coperto" if len(hit) == 1 else "non sono coperti"
+    cause = "un elemento non supportato" if len(elements) == 1 else "elementi non supportati"
+    text = f"{len(hit)} branch su {len(branches)} {verb} a causa di {cause}"
+    if shown:
+        text += f": {_join_words(shown)}"
+    return text + ". Per questi branch i dati di test non indicano il percorso dei contatti."
+
+
+def _known_steps(steps: Iterable[Step], unknown_from: Optional[str]) -> list[Step]:
+    """The steps of a path before the activity it stopped at without exiting (``Case.unknown_from``)."""
+    steps = list(steps)
+    if (unknown_from is not None and steps and steps[-1].activity_key == unknown_from
+            and steps[-1].outcome_key is None):
+        return steps[:-1]
+    return steps
+
+
+def _expected_path_text(journey: Journey, steps: Iterable[Step], unknown_from: Optional[str]) -> str:
+    """The expected path; past the activity where it stops being known, the path is said to be unknown."""
+    if unknown_from is None:
+        return _path_text(journey, steps)
+    known = _known_steps(steps, unknown_from)
+    tail = f"{_activity_name(journey, unknown_from)}, da cui il percorso non è noto"
+    return f"{_path_text(journey, known)} > {tail}" if known else tail
+
+
+def _unknown_text(journey: Journey, key: str, reason: str) -> str:
+    """Spec: "Past an unsupported element the expected result says the path is unknown from that activity on"."""
+    text = f"Percorso non noto da {_activity_label(journey, key)} in poi"
+    reason = (reason or "").strip().rstrip(".")
+    return f"{text}, perché {reason}" if reason else text
+
+
+def _minutes_words(minutes: int) -> str:
+    """A duration in words: "4 giorni", "1 giorno e 5 minuti", "2 ore"."""
+    days, rest = divmod(minutes, _DAY_MINUTES)
+    hours, mins = divmod(rest, 60)
+    parts = ([_plural(days, "giorno", "giorni")] if days else []) + ([_plural(hours, "ora", "ore")] if hours else [])
+    if mins or not parts:
+        parts.append(_plural(mins, "minuto", "minuti"))
+    return _join_words(parts)
+
+
+def _duration_sentence(case: Case, now: datetime, date_format: str) -> str:
+    """Spec, "Honest outcomes": "The testbook gives each case's minimum duration": the fixed waits of the case's
+    longest path (``Case.min_duration_minutes``) and the date before which it cannot end (``Case.not_before``),
+    when that date is after the generation time."""
+    minutes = getattr(case, "min_duration_minutes", 0)
+    not_before = getattr(case, "not_before", None)
+    try:
+        if not_before and datetime.strptime(not_before, date_format) <= now:
+            not_before = None      # a date already past holds nobody
+    except ValueError:
+        pass
+    end = f"i contatti non finiscono il percorso prima del {not_before}" if not_before else ""
+    if minutes is None:
+        text = "Durata minima del test non nota: la durata di un wait del percorso non è leggibile."
+        return text + (f" {end[0].upper()}{end[1:]}." if end else "")
+    if minutes > 0:
+        return f"Durata minima del test: {_minutes_words(minutes)}" + (f"; {end}." if end else ".")
+    if end:
+        return f"Durata minima del test: {end}."
+    return "Durata minima del test: nessuna, perché i wait del percorso possono terminare subito."
+
+
+def _action_window(case: Case, action) -> Optional[ActionWindow]:
+    """The window coverage.py found for a manual action (``Case.action_windows``)."""
+    for window in getattr(case, "action_windows", None) or []:
+        if window.activity_key == action.activity_key and window.email_activity_key == action.email_activity_key:
+            return window
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Test names: a short summary of what makes a case different
 # ---------------------------------------------------------------------------
 
@@ -559,6 +739,8 @@ class _TestbookContext:
     emails: dict[str, str]           # contact key -> address
     contact_fields: set = dataclasses.field(default_factory=set)    # (table, field) in lower case
     name_counts: dict = dataclasses.field(default_factory=dict)     # test-name part -> number of cases
+    entry_kind: str = ENTRY_AUTOMATION                              # EntryEvent.kind
+    entry_mode: Optional[str] = None                                # entryMode, when in SINGLE_ENTRY_MODES
 
 
 def _testbook_context(result: GenerationResult) -> _TestbookContext:
@@ -577,6 +759,8 @@ def _testbook_context(result: GenerationResult) -> _TestbookContext:
         emails={contact.key: contact.email for contact in result.data.contacts},
         contact_fields=contact_fields,
         name_counts=_name_counts(journey, contact_fields, result.coverage.cases),
+        entry_kind=entry_kind(result.package),
+        entry_mode=_entry_mode(result.package),
     )
 
 
@@ -607,6 +791,8 @@ def _case_summary(context: _TestbookContext, case: Case) -> str:
     is rebuilt from the decision and engagement outcomes of the path: when they do not fit, the parts
     that tell least about this case are dropped first (lowest weight, then the part most cases share)."""
     given = (case.summary or "").strip()
+    if not given and case.unknown_from is not None:
+        return f"Percorso non noto da {_activity_name(context.journey, case.unknown_from)} in poi"
     if not given:
         return f"Percorso fino a {_activity_name(context.journey, case.end_activity_key)}"
     room = _NAME_LIMIT - len(case.id) - len(" - ")
@@ -636,22 +822,56 @@ def _description(context: _TestbookContext, scenario: Scenario, case: Case) -> s
         scenario_line = f"Scenario {scenario.key}, valori in {table}: {'; '.join(items)}."
     else:
         scenario_line = f"Scenario {scenario.key}: {'; '.join(items)}."
-    table, items = _values_parts(package, case.contact_values, coverage.contact_fields)
-    if not items:
+    values, rows = _profile(context, case)
+    table, items = _values_parts(package, values, coverage.contact_fields)
+    rows_text = "; ".join(rows)
+    rows_text = rows_text[:1].upper() + rows_text[1:] + "." if rows else ""
+    if not items and rows:
+        contact_line = f"Profilo del contatto: {'; '.join(rows)}."
+    elif not items:
         contact_line = "Profilo del contatto: nessun valore a livello di contatto."
     elif table:
         contact_line = f"Profilo del contatto in {table}: {'; '.join(items)}."
     else:
         contact_line = f"Profilo del contatto: {'; '.join(items)}."
-    lines = [scenario_line, contact_line, f"Percorso atteso: {_path_text(context.journey, case.steps)}."]
+    if items and rows:
+        contact_line += f" {rows_text}"
+    path = _expected_path_text(context.journey, case.steps, case.unknown_from)
+    lines = [scenario_line, contact_line, f"Percorso atteso: {path}."]
     if case.random is not None:
         random_key = case.random.activity_key
         lines.append(f"Al random split {_activity_label(context.journey, random_key)} ogni contatto prende uno dei "
                      "branch.")
         for branch in case.random.branches:
-            path = _path_text(context.journey, branch.steps) if branch.steps else "il contatto esce dal journey"
+            path = (_expected_path_text(context.journey, branch.steps, branch.unknown_from) if branch.steps
+                    else "il contatto esce dal journey")
             lines.append(f"Branch {_branch_label(context.journey, random_key, branch)}: {path}.")
     return "\n".join(lines)
+
+
+def _absent_tables(context: _TestbookContext, case: Case) -> list[str]:
+    """Spec, "Row present or absent": the tables in which the contacts of this case have no row."""
+    coverage = context.result.coverage
+    return [table for table in getattr(coverage, "row_fields", {}) if coverage.row_absent(case, table)]
+
+
+def _profile(context: _TestbookContext, case: Case) -> tuple[dict, list[str]]:
+    """The contact values to show, and one item per table with the "row present / row absent" variable.
+
+    The field linked to the contact key of such a table says only whether the contact has a row there
+    (``GENERATED_KEY`` or None), and every field of an absent row is null: the profile says "riga presente in T"
+    or "nessuna riga in T" instead of showing those values."""
+    values = dict(case.contact_values)
+    rows = []
+    for table, linked in getattr(context.result.coverage, "row_fields", {}).items():
+        if linked not in values:
+            continue
+        absent = values[linked] is None
+        for ref in [ref for ref in values if ref[0].lower() == table.lower()]:
+            if absent or ref == linked:
+                values.pop(ref)
+        rows.append(f"nessuna riga in {table}" if absent else f"riga presente in {table}")
+    return values, rows
 
 
 def _scenario_key_column(context: _TestbookContext, table_name: str) -> Optional[str]:
@@ -691,14 +911,27 @@ def _entry_procedures(result: GenerationResult) -> Optional[str]:
 def _preconditions(context: _TestbookContext, scenario: Scenario, case: Case) -> str:
     """Spec: "Which CSVs must be imported, which scenario must be active, and the keys of the test
     contacts"; "The 50 contacts of a random split case are given as a key range"."""
-    entry_csv = table_file_name(context.result.table_model.entry_table)
-    first = f"Importa questi file CSV: {', '.join(context.csv_names)}."
-    if len(context.csv_names) > 1 and entry_csv in context.csv_names:
-        first += f" Importa {entry_csv} per ultimo."
+    entry = context.result.table_model.entry_table
+    entry_csv = table_file_name(entry)
+    if context.entry_kind == ENTRY_OTHER:
+        # Spec: "The team tests a copy of the journey whose entry source is a data extension with the same columns".
+        others = [name for name in context.csv_names if name != entry_csv]
+        first = (f"Importa {entry_csv} nella data extension di ingresso della copia del journey, che ha le stesse "
+                 f"colonne di {entry}.")
+        if others:
+            first = f"Importa {_join_words(others)}, poi " + first[0].lower() + first[1:]
+    else:
+        first = f"Importa questi file CSV: {', '.join(context.csv_names)}."
+        if len(context.csv_names) > 1 and entry_csv in context.csv_names:
+            first += f" Importa {entry_csv} per ultimo."
+        if context.entry_kind == ENTRY_RUN_ONCE:
+            first += " Importa tutti i file prima di attivare il journey."
     lines = [first]
     if context.one_active:
         table, field = context.activation_ref
         lines.append(f"Scenario attivo: {scenario.key}. In {table}, {field} è True solo sulla sua riga.")
+    elif context.entry_kind == ENTRY_RUN_ONCE:
+        lines.append(f"Scenario: {scenario.key}. Tutti gli scenari entrano insieme quando il journey viene attivato.")
     else:
         lines.append(f"Scenario: {scenario.key}. Tutti gli scenari sono attivi contemporaneamente.")
     keys = case.contact_keys
@@ -706,7 +939,28 @@ def _preconditions(context: _TestbookContext, scenario: Scenario, case: Case) ->
         lines.append(f"Contatti di test ({len(keys)}): da {keys[0]} a {keys[-1]}.")
     else:
         lines.append(f"Contatti di test ({len(keys)}): {', '.join(keys) if keys else 'nessuno'}.")
+    absent = _absent_tables(context, case)
+    if absent:
+        files = _join_words(table_file_name(table) for table in absent)
+        lines.append(f"Nessuna riga in {_join_words(absent)} per questi contatti: {files} non contiene le loro chiavi, "
+                     "perché il percorso atteso lo richiede.")
+    attempt = _attempt_text(context)
+    if attempt:
+        lines.append(attempt)
     return "\n".join(lines)
+
+
+def _attempt_text(context: _TestbookContext) -> Optional[str]:
+    """Spec, "Entry source and procedure": with Run Once "A new attempt needs a new journey version and a new run
+    identifier"; with the entry modes OnceAndDone and SingleEntryAcrossAllVersions "every attempt needs a new run
+    identifier"."""
+    mode = f" (modalità di ingresso {context.entry_mode})" if context.entry_mode else ""
+    if context.entry_kind == ENTRY_RUN_ONCE:
+        return f"Ogni nuovo tentativo richiede una nuova versione del journey e un nuovo run identifier{mode}."
+    if context.entry_mode:
+        return (f"Con la modalità di ingresso {context.entry_mode}, i contatti di un tentativo precedente potrebbero non "
+                "rientrare: ogni nuovo tentativo richiede un nuovo run identifier.")
+    return None
 
 
 def _wait_descriptions(context: _TestbookContext, scenario: Scenario, case: Case) -> list[str]:
@@ -769,9 +1023,31 @@ def _deadline_wait(context: _TestbookContext, scenario: Scenario, case: Case,
 
 
 def _deadline(context: _TestbookContext, scenario: Scenario, case: Case, action) -> Optional[str]:
-    """Spec: "the testbook gives the deadline as a date and time". The deadline is the date of the last
-    wait by attribute between the email and the engagement split: when it passes, the split is evaluated."""
-    return _deadline_wait(context, scenario, case, action)[1]
+    """Spec: "the testbook gives the deadline as a date and time". Spec, "Honest outcomes": "The deadline of a
+    manual open or click is computed from the waits between the email and the engagement split": the date of the
+    last wait by attribute between them plus the fixed waits after it (``ActionWindow.deadline``). None when the
+    window has no wait by attribute: it is then relative to the email (``_relative_window``)."""
+    return _deadline_and_wait(context, scenario, case, action)[1]
+
+
+def _deadline_and_wait(context: _TestbookContext, scenario: Scenario, case: Case,
+                       action) -> tuple[Optional[Activity], Optional[str]]:
+    """The wait by attribute that ends the window of a manual action, and the deadline."""
+    window = _action_window(case, action)
+    if window is None or (window.attribute_wait_key is not None and window.deadline is None):
+        return _deadline_wait(context, scenario, case, action)
+    if window.attribute_wait_key is None:
+        return None, None
+    return context.journey.activities.get(window.attribute_wait_key), window.deadline
+
+
+def _relative_window(case: Case, action) -> Optional[ActionWindow]:
+    """The window of a manual action that ends a fixed time after the email (no wait by attribute between the
+    email and the engagement split, fixed waits of some minutes)."""
+    window = _action_window(case, action)
+    if window is None or window.attribute_wait_key is not None or not window.minutes:
+        return None
+    return window
 
 
 def _manual_steps(context: _TestbookContext, scenario: Scenario, case: Case) -> list[str]:
@@ -789,13 +1065,26 @@ def _manual_steps(context: _TestbookContext, scenario: Scenario, case: Case) -> 
                          "test non può raggiungere il risultato atteso finché i dati non vengono generati di nuovo con "
                          "un'inbox reale.")
             continue
-        wait, deadline = _deadline_wait(context, scenario, case, action)
-        when = f"Prima del {deadline}" if deadline else "Appena arriva l'email"
+        wait, deadline = _deadline_and_wait(context, scenario, case, action)
+        window = _action_window(case, action)
+        relative = _relative_window(case, action)
+        if deadline:
+            when = f"Prima del {deadline}"
+        elif relative is not None:
+            when = f"Entro {_minutes_words(relative.minutes)} dall'arrivo dell'email"
+        else:
+            when = "Appena arriva l'email"
         text = (f"{when}, {_ACTION_IMPERATIVE[kind]} '{action.email_name}' inviata a ogni contatto di questo test: "
                 f"{addresses}.")
-        if deadline and wait is not None:
+        after = window.minutes_after_attribute_wait if window is not None else 0
+        if deadline and wait is not None and not after:
             text += (f" A quell'ora termina il wait {_quoted_label(context.journey, wait.key)} e i contatti "
                      f"proseguono verso lo split {split}.")
+        elif deadline and wait is not None:
+            text += (f" A quell'ora i contatti hanno superato il wait {_quoted_label(context.journey, wait.key)} e i "
+                     f"wait successivi ({_minutes_words(after)}) e raggiungono lo split {split}.")
+        elif relative is not None:
+            text += f" Dopo questo tempo i contatti raggiungono lo split {split}."
         steps.append(text + f" Le email arrivano nell'inbox {inbox}. Non aprire e non cliccare le email degli altri "
                      "test.")
     return steps
@@ -805,20 +1094,42 @@ def _detailed_steps(context: _TestbookContext, scenario: Scenario, case: Case) -
     """Spec: "Numbered steps: activate the scenario, start the entry, wait (with expected delays), any
     manual action with its deadline, collect evidence"."""
     steps = []
+    entry = context.result.table_model.entry_table
     if context.one_active:
         steps.append(_activation_text(context, scenario))
+    elif context.entry_kind == ENTRY_RUN_ONCE:
+        steps.append(f"Verifica che le righe dello scenario {scenario.key} siano state importate e che {entry} "
+                     "contenga solo righe di test.")
     else:
         steps.append(f"Verifica che le righe dello scenario {scenario.key} siano state importate.")
-    entry_csv = table_file_name(context.result.table_model.entry_table)
-    steps.append(f"Avvia l'ingresso nel journey {context.journey.name} dalle righe importate di {entry_csv}. "
-                 "Tutti i test di questo scenario partono insieme.")
+    steps.append(_entry_step(context))
     waits = _wait_descriptions(context, scenario, case)
-    steps.append("Attendi che i contatti superino i wait del loro percorso: " + "; ".join(waits) + "." if waits else
-                 "Il percorso non ha wait.")
+    steps.append("Attendi che i contatti superino i wait del loro percorso: " + "; ".join(waits) + ". "
+                 + _duration_sentence(case, context.result.generation_time, context.settings.date_format)
+                 if waits else "Il percorso non ha wait.")
     steps.extend(_manual_steps(context, scenario, case))
     steps.append("Raccogli le evidenze per ogni contatto: le email ricevute, i valori scritti dal journey e l'ultima "
                  "attività raggiunta.")
     return "\n".join(f"{number}. {text}" for number, text in enumerate(steps, 1))
+
+
+def _entry_step(context: _TestbookContext) -> str:
+    """How the contacts enter, by entry source (spec, "Entry source and procedure")."""
+    name = context.journey.name
+    entry = context.result.table_model.entry_table
+    entry_csv = table_file_name(entry)
+    if context.entry_kind == ENTRY_RUN_ONCE:
+        return (f"Attiva il journey {name}: entrano solo le righe presenti in {entry} in quel momento, e le righe "
+                "importate dopo non entrano. Tutti i test partono insieme.")
+    if context.entry_kind == ENTRY_SCHEDULED:
+        return (f"Attendi la valutazione successiva della data extension {entry}: i contatti dovrebbero entrare nel "
+                f"journey {name} in quel momento (procedura da verificare). Tutti i test di questo scenario partono "
+                "insieme.")
+    if context.entry_kind == ENTRY_OTHER:
+        return (f"Fai entrare i contatti nella copia del journey {name}, con entry source la data extension di "
+                f"ingresso, dalle righe importate di {entry_csv}. Tutti i test di questo scenario partono insieme.")
+    return (f"Avvia l'ingresso nel journey {name} dalle righe importate di {entry_csv}. Tutti i test di questo "
+            "scenario partono insieme.")
 
 
 def _expected_result(context: _TestbookContext, case: Case) -> str:
@@ -828,6 +1139,17 @@ def _expected_result(context: _TestbookContext, case: Case) -> str:
     keys = case.contact_keys
     now_text = _date(context.result.generation_time, context.settings)
     base_keys = [step.activity_key for step in case.steps]
+    if case.random is None and case.unknown_from is not None:
+        # Spec, "Honest outcomes": the path is unknown from that activity on, never "the last activity reached".
+        before = f" prima di {_activity_label(journey, case.unknown_from)}"
+        return "\n".join([
+            f"Per ciascuno di questi contatti: {_join_words(keys) if keys else 'nessuno'}.",
+            f"- Email ricevute{before}: {_emails_text(journey, case.emails_sent)}.",
+            f"- Valori scritti dal journey{before}: "
+            f"{_writes_text(case.writes, _current_time_fields(journey, base_keys), now_text)}.",
+            f"- {_unknown_text(journey, case.unknown_from, case.unknown_reason)}. Annota l'ultima attività raggiunta "
+            "da ogni contatto.",
+        ])
     if case.random is None:
         last = f"- Ultima attività raggiunta: {_activity_label(journey, case.end_activity_key)}."
         end = _end_sentence(journey, case.steps[-1] if case.steps else None)
@@ -849,10 +1171,15 @@ def _expected_result(context: _TestbookContext, case: Case) -> str:
     ]
     for branch in case.random.branches:
         branch_keys = base_keys + [step.activity_key for step in branch.steps]
+        if branch.unknown_from is not None:
+            last = _unknown_text(journey, branch.unknown_from, branch.unknown_reason)
+            last = last[0].lower() + last[1:]
+        else:
+            last = f"ultima attività raggiunta: {_activity_label(journey, branch.end_activity_key)}"
         lines.append(f"- {_branch_label(journey, random_key, branch)}: email ricevute: "
                      f"{_emails_text(journey, branch.emails_sent)}; "
                      f"valori scritti: {_writes_text(branch.writes, _current_time_fields(journey, branch_keys), now_text)}; "
-                     f"ultima attività raggiunta: {_activity_label(journey, branch.end_activity_key)}.")
+                     f"{last}.")
     smallest = _smallest_branch(case)
     if smallest is not None:
         lines.append(f"Intervallo accettato: da {case.random.expected_low} a {case.random.expected_high} contatti sul "
@@ -864,16 +1191,31 @@ def _note(context: _TestbookContext, scenario: Scenario, case: Case) -> str:
     """Spec: "Manual engagement required, or the accepted range for a random split case"."""
     notes = []
     for action in case.manual_actions:
-        verb = _ACTION_TO_DO["open" if action.kind == "open" else "click"]
+        kind = "open" if action.kind == "open" else "click"
+        verb = _ACTION_TO_DO[kind]
         if not context.settings.real_inbox.strip():
             notes.append(f"Azione manuale richiesta: {verb} '{action.email_name}'. Non è stata indicata un'inbox "
                          "reale, quindi questo test non può raggiungere il risultato atteso.")
             continue
-        wait, deadline = _deadline_wait(context, scenario, case, action)
+        wait, deadline = _deadline_and_wait(context, scenario, case, action)
+        window = _action_window(case, action)
+        relative = _relative_window(case, action)
         text = f"Azione manuale richiesta: {verb} '{action.email_name}'"
-        notes.append(text + (f" prima del {deadline}." if deadline else " appena arriva."))
+        if deadline:
+            notes.append(text + f" prima del {deadline}.")
+        elif relative is not None:
+            notes.append(text + f" entro {_minutes_words(relative.minutes)} dall'arrivo.")
+        else:
+            notes.append(text + " appena arriva.")
         if deadline:
             notes.append("Se l'email arriva dopo quell'ora, genera di nuovo i dati.")
+        if window is not None and window.short:
+            # Spec, "Honest outcomes": "with a warning when the window is under one hour".
+            if deadline:
+                notes.append("La scadenza è a meno di un'ora dall'ora di generazione: se non c'è tempo, genera di nuovo "
+                             "i dati con un offset della data di wait prima di un engagement split più ampio.")
+            else:
+                notes.append(f"La finestra è sotto l'ora: {_ACTION_IMPERATIVE[kind]} appena arriva.")
         zone = wait.wait_timezone if deadline and wait is not None else None
         if zone:
             notes.append(f"Il wait {_quoted_label(context.journey, wait.key)} è impostato sul fuso orario {zone}. "
@@ -891,6 +1233,9 @@ def _note(context: _TestbookContext, scenario: Scenario, case: Case) -> str:
         if chance is not None:
             notes.append(f"Con una probabilità del {smallest.percentage}% per ogni contatto, questo intervallo si "
                          f"verifica in circa il {chance}% dei run.")
+    not_modelled = _not_modelled_text(context.result.package)
+    if not_modelled:
+        notes.append(not_modelled)
     return " ".join(notes)
 
 
@@ -1149,12 +1494,19 @@ def _section_title(result: GenerationResult) -> str:
     intro = "Questo report indica cosa coprono i dati di test, come eseguire i test e cosa i dati non possono coprire."
     if TESTBOOK_FILE in result.files:
         intro += f" I passi e il risultato atteso di ogni test sono in {TESTBOOK_FILE}."
-    return "\n\n".join([
+    parts = [
         f"# Report dei dati di test: {journey}",
         f"Journey {journey}, dal package {result.package.name}. Generato il "
         f"{_date(result.generation_time, settings)} con il run identifier {settings.run_id}.",
         intro,
-    ])
+    ]
+    warning = unsupported_warning(result)
+    if warning:
+        # Spec, "Honest outcomes": "report.md and the page open with a warning when unsupported elements leave
+        # branches not covered."
+        parts.append(f"> **Attenzione:** {warning} Le sezioni Branch non coperti ed Elementi non supportati spiegano "
+                     "il motivo.")
+    return "\n\n".join(parts)
 
 
 def _section_summary(result: GenerationResult) -> str:
@@ -1267,8 +1619,11 @@ def _how_to_run(result: GenerationResult, context: _TestbookContext) -> str:
     entry_csv = table_file_name(model.entry_table)
     others = [name for name in context.csv_names if name != entry_csv]
     automation = _entry_procedures(result)
+    kind = context.entry_kind
     parts = ["### Come eseguire i test"]
-    if others:
+    if kind != ENTRY_AUTOMATION:
+        parts.extend(_entry_source_paragraphs(result, context, entry_csv, others))
+    elif others:
         parts.append(f"Importa prima {_join_words(others)}, poi {entry_csv}, così ogni riga che serve a un contatto è "
                      "già presente quando entra.")
     else:
@@ -1297,8 +1652,26 @@ def _how_to_run(result: GenerationResult, context: _TestbookContext) -> str:
         if automation and _activation_is_entry_filter(result, context.activation_ref):
             parts.append(f"{field} è un filtro della entry query e nessuno split lo legge, quindi con l'import "
                          "diretto non trattiene alcuno scenario.")
+        if kind == ENTRY_RUN_ONCE:
+            parts.append("Attenzione: con un'entry source Run Once tutti gli scenari entrano insieme quando il journey "
+                         "viene attivato, quindi non si può eseguire uno scenario alla volta. Genera di nuovo i dati "
+                         "con l'impostazione \"Un solo scenario attivo alla volta\" disattivata.")
+    elif kind == ENTRY_RUN_ONCE and result.coverage.scenarios:
+        parts.append("Tutti gli scenari entrano insieme quando il journey viene attivato, quindi vengono eseguiti "
+                     "insieme: con Run Once non si può eseguire uno scenario alla volta.")
     elif result.coverage.scenarios:
         parts.append("Nei CSV tutti gli scenari sono attivi, quindi vengono eseguiti insieme.")
+    mode = context.entry_mode
+    if mode == "OnceAndDone":
+        parts.append("La modalità di ingresso del journey è OnceAndDone, letta come nessun rientro (assunzione da "
+                     "verificare): una chiave del contatto entra una sola volta. Ogni nuovo tentativo richiede quindi "
+                     "un nuovo run identifier.")
+    elif mode:
+        parts.append(f"La modalità di ingresso del journey è {mode}: i contatti di un tentativo precedente potrebbero "
+                     "non rientrare. Ogni nuovo tentativo richiede quindi un nuovo run identifier.")
+    not_modelled = _not_modelled_text(result.package)
+    if not_modelled:
+        parts.append(not_modelled)
     parts.extend(_contact_address_text(result))
     for case in result.coverage.cases:
         smallest = _smallest_branch(case)
@@ -1310,6 +1683,41 @@ def _how_to_run(result: GenerationResult, context: _TestbookContext) -> str:
                      f"L'intervallo accettato è da {case.random.expected_low} a {case.random.expected_high} contatti "
                      f"sul branch {_branch_label(journey, case.random.activity_key, smallest)}.")
     return "\n\n".join(parts)
+
+
+def _entry_source_paragraphs(result: GenerationResult, context: _TestbookContext, entry_csv: str,
+                             others: list[str]) -> list[str]:
+    """Spec, "Entry source and procedure", for every entry source other than the automation of the pilot."""
+    entry = result.table_model.entry_table
+    event = result.package.entry_event
+    first = f"Importa prima {_join_words(others)}, poi {entry_csv}" if others else f"Importa {entry_csv}"
+    if context.entry_kind == ENTRY_RUN_ONCE:
+        return [
+            f"L'entry source di questo journey è la data extension {entry} con pianificazione Run Once. {first}, e "
+            "solo dopo attiva il journey. Entrano solo le righe presenti nella data extension quando il journey viene "
+            "attivato: le righe importate dopo non entrano mai.",
+            f"Quando attivi il journey, {entry} deve contenere solo righe di test: ogni riga presente in quel momento "
+            "entra nel journey.",
+            "Un nuovo tentativo richiede una nuova versione del journey e un nuovo run identifier: genera di nuovo i "
+            "dati con un run identifier diverso, importali e attiva la nuova versione.",
+        ]
+    if context.entry_kind == ENTRY_SCHEDULED:
+        mode = getattr(event, "schedule_mode", None)
+        schedule = f"una pianificazione ricorrente ({mode})" if mode else "una pianificazione ricorrente non indicata"
+        return [
+            f"L'entry source di questo journey è la data extension {entry} con {schedule}. {first}. Procedura da "
+            "verificare: i contatti dovrebbero entrare alla valutazione successiva della data extension, non al "
+            "momento dell'import.",
+        ]
+    where = "nella sua data extension" if len(others) == 1 else "nelle loro data extension"
+    import_text = (f"Importa prima {_join_words(others)} {where}, poi {entry_csv} nella data extension di ingresso "
+                   "della copia" if others else f"Importa {entry_csv} nella data extension di ingresso della copia")
+    return [
+        f"L'entry source di questo journey è {entry_source_text(result.package)}: i contatti non entrano con l'import "
+        f"di un CSV. Il test si fa su una copia del journey la cui entry source è una data extension con le stesse "
+        f"colonne di {entry}. {import_text}. Poi fai entrare i contatti secondo la pianificazione della copia: con "
+        "Run Once, per esempio, importa tutti i CSV prima di attivarla.",
+    ]
 
 
 def _contact_address_text(result: GenerationResult) -> list[str]:
@@ -1363,12 +1771,21 @@ def _section_scenarios(result: GenerationResult) -> str:
                 actions = []
                 for action in case.manual_actions:
                     deadline = _deadline(context, scenario, case, action)
-                    when = f"prima del {deadline}" if deadline else "appena arriva"
+                    relative = _relative_window(case, action)
+                    if deadline:
+                        when = f"prima del {deadline}"
+                    elif relative is not None:
+                        when = f"entro {_minutes_words(relative.minutes)} dall'arrivo"
+                    else:
+                        when = "appena arriva"
                     actions.append(f"{action.kind} di '{action.email_name}' {when}")
                 special = "; ".join(actions)
+            if case.random is None and case.unknown_from is not None:
+                last = f"non nota da {_activity_label(journey, case.unknown_from)} in poi"
+            else:
+                last = _activity_label(journey, case.end_activity_key)
             case_rows.append([case.id, scenario.key, len(case.contact_keys), _key_range(case.contact_keys),
-                              special or "nessuna", _activity_label(journey, case.end_activity_key),
-                              _case_summary(context, case)])
+                              special or "nessuna", last, _case_summary(context, case)])
     cases_intro = "Un caso è un gruppo di contatti con lo stesso risultato atteso."
     if TESTBOOK_FILE in result.files:
         cases_intro += f" Ogni caso è un test di {TESTBOOK_FILE}, con lo stesso nome."
@@ -1534,7 +1951,16 @@ def _section_unsupported(result: GenerationResult) -> str:
         activity = journey.activities.get(key)
         label = _activity_label(journey, key)
         reason = getattr(activity, "unsupported_reason", None) if activity is not None else None
-        if reason:
+        split_key, _, outcome_key = key.partition("/")
+        split = journey.activities.get(split_key) if activity is None and outcome_key else None
+        outcome = split.outcome(outcome_key) if split is not None else None
+        if outcome is not None:
+            # An unsupported branch, written <split>/<outcome> in CoverageResult.unsupported.
+            why = (outcome.unsupported_reason or "").rstrip(".")
+            items.append(f"Il branch '{outcome.label or outcome.key}' dello split {_activity_label(journey, split_key)} "
+                         f"non è supportato{': ' + why if why else ''}. Questo branch, i branch che lo seguono nello "
+                         "split e quelli a valle non sono coperti.")
+        elif reason:
             items.append(f"L'attività {label} non è supportata: {reason.rstrip('.')}. I suoi branch e quelli a valle "
                          "non sono coperti.")
         elif activity is not None:
@@ -1696,30 +2122,89 @@ def _ignored_entry_columns(result: GenerationResult) -> list[str]:
     return [item.target_column for item in query.select if entry.field(item.target_column) is None]
 
 
-def _section_assumptions(result: GenerationResult) -> str:
-    """Spec, "Assumptions to verify and known limits": the six assumptions the generator encodes, plus
-    the ones of the Salesforce review that this export triggers."""
+# Text comparisons whose answer depends on letter case (spec assumption "Text comparisons").
+_TEXT_TYPES = ("text", "emailaddress", "phone", "locale")
+_CASE_OPERATORS = ("equal", "notequal", "is", "contains", "beginswith", "endswith")
+
+
+def _conditions(journey: Journey) -> list[tuple[Activity, Outcome, object]]:
+    """Every condition of a decision split outcome the generator reads (unsupported outcomes left out)."""
+    return [(activity, outcome, condition) for activity in journey.activities.values() if activity.kind == KIND_DECISION
+            for outcome in activity.outcomes if not outcome.unsupported_reason
+            for condition in formula_conditions(outcome.formula)]
+
+
+def _csv_field_types(result: GenerationResult) -> set[str]:
+    """The field types of the tables that get a CSV, in lower case."""
+    types = set()
+    for name in result.table_model.selected_tables:
+        table = _table_of(result.package, name)
+        types.update((f.type or "").lower() for f in (table.fields if table is not None else []))
+    return types
+
+
+def _linked_by_group_only(result: GenerationResult) -> list[str]:
+    """Tables with a CSV linked to the contact only by a group-to-set relationship (no relationship to another
+    table): the generator writes the contact key in the relationship's field."""
+    selected = {name.lower() for name in result.table_model.selected_tables}
+    relationships = list(result.package.relationships)
+    between_tables = {name.lower() for r in relationships if r.left_table is not None
+                      for name in (r.left_table, r.right_table)}
+    return _unique(r.right_table for r in relationships if r.left_table is None
+                   and r.right_table.lower() in selected and r.right_table.lower() not in between_tables)
+
+
+def _one_to_many(result: GenerationResult) -> list[str]:
+    """Tables with a CSV on the "many" side of a relationship (right cardinality Many: several rows of the right
+    table for one row of the left table, or for one contact when the left side is the contact)."""
+    selected = {name.lower() for name in result.table_model.selected_tables}
+    return _unique(r.right_table for r in result.package.relationships
+                   if (r.right_cardinality or "").lower() == "many" and r.right_table.lower() in selected)
+
+
+def _triggered_assumptions(result: GenerationResult) -> list[str]:
+    """Spec, "Honest outcomes": "report.md lists only the assumptions the export triggers". Each item names an
+    assumption of docs/assumptions.md that this journey's expected results rest on."""
     settings = result.settings
-    if settings.case_insensitive_text:
-        case_text = ("I confronti di testo non distinguono maiuscole e minuscole, quindi `Email` e `EMAIL` sono lo "
-                     "stesso valore. L'impostazione che ignora maiuscole e minuscole è attiva.")
-    else:
-        case_text = ("I confronti di testo distinguono maiuscole e minuscole, quindi `Email` e `EMAIL` sono valori "
-                     "diversi. L'impostazione che ignora maiuscole e minuscole è disattivata.")
-    zones = sorted({a.wait_timezone for a in result.package.journey.activities.values()
-                    if a.kind == KIND_WAIT_ATTRIBUTE and a.wait_timezone})
-    zone_text = (f" I wait by attribute di questo journey sono impostati sul fuso orario {_join_words(zones)}."
-                 if zones else "")
-    items = [
-        "I branch di un decision split vengono valutati in ordine e vince il primo la cui condizione è soddisfatta.",
-        case_text,
-        "Un wait by attribute la cui data è già passata termina subito.",
-        f"L'import accetta date scritte come {_date(result.generation_time, settings)}, nel formato "
-        f"{_human_date_format(settings.date_format)}, e `True` e `False` per i Boolean.",
-        "Un engagement split viene valutato quando il contatto lo raggiunge, non quando l'email viene inviata.",
-        "Il fuso orario applicato alla data del wait non è noto, quindi le scadenze del testbook potrebbero "
-        f"spostarsi di qualche ora.{zone_text}",
-    ]
+    journey = result.package.journey
+    activities = list(journey.activities.values())
+    kinds = {activity.kind for activity in activities}
+    conditions = _conditions(journey)
+    items = []
+    # The six assumptions of the spec ("Assumptions to verify and known limits").
+    if any(sum(1 for o in a.outcomes if o.formula is not None and not o.is_remainder) >= 2
+           for a in activities if a.kind == KIND_DECISION):
+        items.append("I branch di un decision split vengono valutati in ordine e vince il primo la cui condizione è "
+                     "soddisfatta.")
+    if any(c.value is not None and c.value_attribute is None and c.operator.lower() in _CASE_OPERATORS
+           and _field_type(result.package, c.table, c.field) in _TEXT_TYPES for _, _, c in conditions):
+        if settings.case_insensitive_text:
+            items.append("I confronti di testo non distinguono maiuscole e minuscole, quindi `Email` e `EMAIL` sono "
+                         "lo stesso valore. L'impostazione che ignora maiuscole e minuscole è attiva.")
+        else:
+            items.append("I confronti di testo distinguono maiuscole e minuscole, quindi `Email` e `EMAIL` sono valori "
+                         "diversi. L'impostazione che ignora maiuscole e minuscole è disattivata.")
+    if KIND_WAIT_ATTRIBUTE in kinds:
+        items.append("Un wait by attribute la cui data è già passata termina subito.")
+    types = _csv_field_types(result)
+    dates = (f"date scritte come {_date(result.generation_time, settings)}, nel formato "
+             f"{_human_date_format(settings.date_format)}")
+    if "date" in types and "boolean" in types:
+        items.append(f"L'import accetta {dates}, e `True` e `False` per i Boolean.")
+    elif "date" in types:
+        items.append(f"L'import accetta {dates}.")
+    elif "boolean" in types:
+        items.append("L'import accetta `True` e `False` per i Boolean.")
+    if KIND_ENGAGEMENT in kinds:
+        items.append("Un engagement split viene valutato quando il contatto lo raggiunge, non quando l'email viene "
+                     "inviata.")
+    if KIND_WAIT_ATTRIBUTE in kinds:
+        zones = sorted({a.wait_timezone for a in activities if a.kind == KIND_WAIT_ATTRIBUTE and a.wait_timezone})
+        zone_text = (f" I wait by attribute di questo journey sono impostati sul fuso orario {_join_words(zones)}."
+                     if zones else "")
+        items.append("Il fuso orario applicato alla data del wait non è noto, quindi le scadenze del testbook "
+                     f"potrebbero spostarsi di qualche ora.{zone_text}")
+    # The entry source of the pilot.
     automation = _entry_procedures(result)
     if automation:
         items.append(f"L'import diretto di {table_file_name(result.table_model.entry_table)} fa entrare i suoi "
@@ -1731,6 +2216,58 @@ def _section_assumptions(result: GenerationResult) -> str:
         items.append(f"La entry query {result.table_model.entry_query.name} viene eseguita anche se seleziona "
                      f"{_plural(len(ignored), 'colonna', 'colonne')} che {result.table_model.entry_table} non ha. "
                      f"Il generatore ignora {'quella colonna' if len(ignored) == 1 else 'quelle colonne'}.")
+    items.extend(_extension_assumptions(result, conditions))
+    return items
+
+
+def _extension_assumptions(result: GenerationResult, conditions: list) -> list[str]:
+    """The assumptions added with the extensions beyond the pilot (docs/assumptions.md), when this export
+    triggers them."""
+    journey = result.package.journey
+    kind = entry_kind(result.package)
+    entry = result.table_model.entry_table
+    items = []
+    if kind in (ENTRY_RUN_ONCE, ENTRY_SCHEDULED):
+        items.append("L'automation che l'entry event indica (automationId), quando c'è, è lo scheduler che Journey "
+                     f"Builder crea per la pianificazione della data extension, non un'automation che popola {entry}: "
+                     "per questo non c'è una entry query da eseguire.")
+    if kind == ENTRY_SCHEDULED:
+        items.append("Con una pianificazione ricorrente, i contatti importati entrano alla valutazione successiva "
+                     "della data extension di ingresso.")
+    if getattr(journey, "entry_mode", None) == "OnceAndDone":
+        items.append("La modalità di ingresso OnceAndDone è \"No re-entry\": una chiave del contatto entra nel "
+                     "journey una sola volta, in tutte le sue versioni.")
+    key = result.table_model.contact_key_field
+    key = (key[0].lower(), key[1].lower()) if key else None
+    tested = _unique(f"{c.table}.{c.field}" for _, _, c in conditions
+                     if c.operator in ("IsNull", "IsNotNull") and (c.table.lower(), c.field.lower()) == key)
+    if tested:
+        items.append(f"Un contatto senza chiave del contatto non può entrare nel journey, quindi una condizione "
+                     f"IsNull o IsNotNull su {_join_words(tested)} dà sempre lo stesso risultato.")
+    groups = _linked_by_group_only(result)
+    if groups:
+        items.append(f"La relazione group-to-set che collega {_join_words(groups)} al contatto usa la Contact Key "
+                     "(leftRelationshipIDs 3), quindi il generatore scrive la chiave del contatto nel suo campo.")
+    compared = _unique(f"{c.table}.{c.field} è letto come \"il contatto ha una riga in {c.table}\""
+                       for _, _, c in conditions if c.value_attribute is not None)
+    if compared:
+        items.append(f"Il confronto tra attributi su {'; su '.join(compared)}. Salesforce documenta alcuni known issue "
+                     "sui confronti tra attributi (campi che ammettono null, gruppi AND e OR annidati): il percorso "
+                     "atteso assume che il confronto funzioni.")
+    many = _one_to_many(result)
+    if many:
+        items.append(f"Una condizione su una tabella in relazione uno a molti ({_join_words(many)}) è vera se una "
+                     "qualsiasi riga del contatto la soddisfa. Il generatore scrive una sola riga per contatto.")
+    return items
+
+
+def _section_assumptions(result: GenerationResult) -> str:
+    """Spec, "Assumptions to verify and known limits": the assumptions the generator encodes; spec, "Honest
+    outcomes": "report.md lists only the assumptions the export triggers"."""
+    items = _triggered_assumptions(result)
+    if not items:
+        return "\n\n".join(["## Assunzioni", "I risultati attesi di questo journey non dipendono da nessuna delle "
+                              "assunzioni elencate nel file docs/assumptions.md del repository CJ Test Helper."])
     return "\n\n".join([
         "## Assunzioni",
         "I risultati attesi dipendono da queste assunzioni sul comportamento di Salesforce. Verifica ciascuna una "

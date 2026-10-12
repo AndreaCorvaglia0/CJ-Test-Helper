@@ -2,6 +2,7 @@
 
 One small world (examples/two_levels: Master -> Target -> Config, 4 scenarios, 6 cases, 18 contacts) is
 generated once; every test mutates a copy of its files or of its result objects and runs the checks again.
+The extensions beyond the pilot (rows present or absent, entries no query fills) use a hand-made world.
 """
 
 from __future__ import annotations
@@ -11,11 +12,13 @@ import io
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from cjhelper import checks, pipeline
-from cjhelper.model import Settings
+from cjhelper import checks, coverage, datagen, outputs, pipeline
+from cjhelper.model import ENTRY_AUTOMATION, ENTRY_RUN_ONCE, ENTRY_SCHEDULED, LEVEL_CONTACT, Settings
+from tests.helpers import cond, decision, field, journey, package, table, table_model, update
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "two_levels" / "package.json"
 
@@ -191,3 +194,92 @@ def test_determinism_catches_a_changed_or_missing_file(world):
     missing = {k: v for k, v in first.items() if k != "DE_Config.csv"}
     result = checks.check_determinism(first, missing)
     assert not result.passed and result.details == ["DE_Config.csv è prodotto da uno solo dei due run"]
+
+
+# ---------------------------------------------------------------------------
+# Spec, "Extensions beyond the pilot": rows present or absent, and entries no query fills
+# ---------------------------------------------------------------------------
+
+def _absent_world(inserting: bool = False, kind: str = ENTRY_AUTOMATION):
+    """A small hand-made world where a split tests whether the contact has a row in DE_Form (IsNull on its field
+    linked to the contact key). With ``inserting``, the contacts without a row get one from an Update contact on
+    DE_Form, and a second existence test sees it."""
+    entry = table("DE_Entry", [field("SubscriberKey", pk=True, nullable=False), field("EmailAddress", "EmailAddress")],
+                  sendable_field="SubscriberKey")
+    form = table("DE_Form", [field("SubscriberKey", pk=True, nullable=False), field("Consent", "Boolean")])
+    log = table("DE_Log", [field("SubscriberKey", pk=True, nullable=False), field("Status")])
+    absent = cond("DE_Form", "SubscriberKey", "IsNull")
+    if inserting:
+        activities = [
+            decision("SPLIT-1", "Form submitted?", [("absent", "No form", "UPD-1", absent)], remainder_next="UPD-3"),
+            update("UPD-1", "Add form", [("DE_Form", "Consent", "false")], "SPLIT-2"),
+            decision("SPLIT-2", "Still no form?", [("absent", "Still none", "UPD-2", absent)], remainder_next="UPD-3"),
+            update("UPD-2", "None", [("DE_Log", "Status", "none")], None),
+            update("UPD-3", "Form", [("DE_Log", "Status", "form")], None),
+        ]
+    else:
+        activities = [
+            decision("SPLIT-1", "Form submitted?", [("absent", "No form", "UPD-1", absent)], remainder_next="SPLIT-2"),
+            decision("SPLIT-2", "Consent", [("yes", "Consent given", "UPD-2",
+                                             cond("DE_Form", "Consent", "Is", "true"))], remainder_next="UPD-3"),
+            update("UPD-1", "No form", [("DE_Log", "Status", "none")], None),
+            update("UPD-2", "Given", [("DE_Log", "Status", "given")], None),
+            update("UPD-3", "Not given", [("DE_Log", "Status", "not given")], None),
+        ]
+    pkg = package(journey(activities, entry_table="DE_Entry"), [entry, form, log])
+    pkg.entry_event.kind = kind
+    model = table_model("DE_Entry", "SubscriberKey", {"DE_Entry": LEVEL_CONTACT, "DE_Form": LEVEL_CONTACT},
+                        [("contact", [("DE_Entry", "SubscriberKey"), ("DE_Form", "SubscriberKey")])], [entry, form, log])
+    model.existence_tested = {"DE_Form": ("DE_Form", "SubscriberKey")}
+    now = datetime(2026, 10, 12, 12, 0)
+    settings = Settings(generation_time=now)
+    cov = coverage.compute_coverage(pkg, model, settings, now)
+    data = datagen.generate_data(pkg, model, cov, settings, now)
+    files = {f"{name}.csv": outputs.write_table_csv(rows, pkg.tables[name]) for name, rows in data.tables.items()}
+    return SimpleNamespace(package=pkg, table_model=model, coverage=cov, data=data, files=files, settings=settings,
+                           generation_time=now)
+
+
+def _absent_keys(world) -> list[str]:
+    return [key for case in world.coverage.cases if world.coverage.row_absent(case, "DE_Form")
+            for key in case.contact_keys]
+
+
+def test_joins_accept_the_absent_rows_and_nothing_else():
+    world = _absent_world()
+    absent = _absent_keys(world)
+    assert len(absent) == 3 and all(c.passed for c in run(world)), [c.details for c in run(world) if not c.passed]
+    form_keys = {row["SubscriberKey"] for row in checks.read_csv_bytes(world.files["DE_Form.csv"])[1]}
+    assert not form_keys & set(absent)                       # the absent rows are really absent
+    # A row for a contact whose case has no row there is an error...
+    extra = edit(world, "DE_Form", lambda rows: rows.append({"SubscriberKey": absent[0], "Consent": "True"}))
+    detail = failed(run(world, extra), JOINS)
+    assert f"il cui caso prevede che non abbiano una riga in DE_Form, ne hanno una: {absent[0]}" in detail
+    # ...and so is a missing row for any other contact.
+    present = sorted(form_keys)[0]
+    detail = failed(run(world, edit(world, "DE_Form", drop("SubscriberKey", present))), JOINS)
+    assert f"non hanno una riga in DE_Form.SubscriberKey: {present}" in detail
+    assert f"contatti generati non hanno righe in DE_Form: {present}" in detail
+
+
+def test_simulation_applies_rows_present_or_absent_and_inserted_rows():
+    world = _absent_world(inserting=True)
+    assert _absent_keys(world)
+    assert all(c.passed for c in run(world)), [c.details for c in run(world) if not c.passed]
+    # Without the "row present / row absent" rule the Update contact would not insert the row.
+    blind = replace(world.table_model, existence_tested={})
+    results = checks.run_checks(world.package, blind, world.coverage, world.data, dict(world.files), world.settings,
+                                world.generation_time)
+    assert "SPLIT-2/absent" in failed(results, SIMULATION)
+
+
+@pytest.mark.parametrize("kind, words", [
+    (ENTRY_RUN_ONCE, "una data extension con pianificazione Run Once"),
+    (ENTRY_SCHEDULED, "una data extension con una pianificazione ricorrente"),
+])
+def test_entry_check_does_not_apply_without_an_entry_query(kind, words):
+    world = _absent_world(kind=kind)
+    entry_check = run(world)[ENTRY]
+    assert entry_check.passed and entry_check.details == [
+        f"{checks.NOT_APPLICABLE}: l'entry source di questo journey è {words}, che nessuna query popola, quindi le "
+        "righe di ingresso sono quelle di DE_Entry.csv e non c'è una entry query con cui confrontarle"]

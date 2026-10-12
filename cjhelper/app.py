@@ -12,6 +12,11 @@ processed in memory and discarded. The tester goes through four steps on the sam
 Spec, "Behaviour at the edges": "A file that is not valid JSON, or holds no journey, gives a plain
 error message and nothing else."
 
+Spec, "Extensions beyond the pilot": with a Run Once entry source "All scenarios enter together, so 'one
+active scenario at a time' is not offered"; "report.md and the page open with a warning when unsupported
+elements leave branches not covered" (``outputs.unsupported_warning``); the notes before importing follow
+the entry source, as report.md's How to run does.
+
 The page is a thin layer ("Code structure": the Streamlit page is a thin layer on top of the
 package). Every decision comes from the package: ``loader`` and ``tables`` for what was detected,
 ``model.Settings`` for the defaults, ``pipeline.generate`` for the files and checks, the generated
@@ -53,6 +58,9 @@ if not __package__ and _ROOT not in sys.path:
 from cjhelper import loader, outputs, pipeline, tables  # noqa: E402
 from cjhelper.loader import LoadError  # noqa: E402
 from cjhelper.model import (  # noqa: E402
+    ENTRY_AUTOMATION,
+    ENTRY_RUN_ONCE,
+    ENTRY_SCHEDULED,
     KIND_DECISION,
     KIND_EMAIL,
     KIND_ENGAGEMENT,
@@ -222,6 +230,7 @@ class DetectionSummary:
     ids_left_out: bool                     # some warnings named activities that only report.md lists
     activation_field: Optional[FieldRef]   # suggested from the entry query filters, or None
     activation_choices: list[FieldRef]     # Boolean fields of the scenario-level tables
+    entry_kind: str = ENTRY_AUTOMATION     # EntryEvent.kind: with Run Once, one active scenario is not offered
 
 
 def activity_counts(journey: Journey) -> list[tuple[str, int]]:
@@ -295,6 +304,7 @@ def summarize_detection(package: Package, table_model: TableModel) -> DetectionS
         ids_left_out=left_out,
         activation_field=table_model.activation_field,
         activation_choices=activation_choices(package, table_model),
+        entry_kind=outputs.entry_kind(package),
     )
 
 
@@ -308,16 +318,19 @@ def load_summary(data: bytes) -> DetectionSummary:
 # Settings (step 3)
 # ---------------------------------------------------------------------------
 
-def default_form_values(activation_field: Optional[FieldRef]) -> dict[str, Any]:
+def default_form_values(activation_field: Optional[FieldRef], entry_kind: str = ENTRY_AUTOMATION) -> dict[str, Any]:
     """The value each setting widget starts with: the spec defaults, which are ``Settings()``'s.
 
     Spec settings table: "One active scenario at a time: On when an activation field is detected";
-    "Activation field: Suggested from the entry query filters" (``activation_field``, or None).
+    "Activation field: Suggested from the entry query filters" (``activation_field``, or None). Spec,
+    "Entry source and procedure": with a Run Once entry "All scenarios enter together, so 'one active
+    scenario at a time' is not offered": the setting is off and has no activation field.
     """
     defaults = Settings()
     values = {name: getattr(defaults, name) for name in SETTING_LABELS}
-    values["one_active_scenario"] = activation_field is not None
-    values["activation_field"] = activation_field
+    run_once = entry_kind == ENTRY_RUN_ONCE
+    values["one_active_scenario"] = activation_field is not None and not run_once
+    values["activation_field"] = None if run_once else activation_field
     return values
 
 
@@ -447,9 +460,11 @@ def _inbox_missing(result: GenerationResult) -> bool:
 def import_notes(result: GenerationResult) -> list[str]:
     """Spec, "One scenario at a time" and "Data is read live", in the words of report.md's How to run.
 
-    The active scenario and its activation field come from the generated scenarios.csv rows.
+    The active scenario and its activation field come from the generated scenarios.csv rows. Spec, "Entry
+    source and procedure": the entry procedure follows the entry source (``outputs.entry_kind``).
     """
     notes = [f"Apri prima {outputs.REPORT_FILE}: la sezione Come eseguire i test indica l'ordine di import."]
+    notes.extend(entry_notes(result))
     rows = result.data.scenarios_rows
     active = [row for row in rows if str(row.get("active_at_start", "")).lower() == "yes"]
     field = next((row.get("activation_field") for row in rows if row.get("activation_field")), None)
@@ -462,6 +477,25 @@ def import_notes(result: GenerationResult) -> list[str]:
     elif rows:
         notes.append("Nei CSV tutti gli scenari sono attivi, quindi vengono eseguiti insieme.")
     return notes
+
+
+def entry_notes(result: GenerationResult) -> list[str]:
+    """The entry procedure for an entry source other than the automation of the pilot (spec, "Entry source and
+    procedure"); nothing for an automation entry, whose procedure is the import order of report.md."""
+    kind = outputs.entry_kind(result.package)
+    if kind == ENTRY_AUTOMATION:
+        return []
+    entry = getattr(getattr(result, "table_model", None), "entry_table", None) or "la tabella di ingresso"
+    if kind == ENTRY_RUN_ONCE:
+        return [f"Entry source Run Once: importa tutti i CSV, poi attiva il journey. Entrano solo le righe presenti in "
+                f"{entry} all'attivazione, che deve contenere solo righe di test. Un nuovo tentativo richiede una "
+                "nuova versione del journey e un nuovo run identifier."]
+    if kind == ENTRY_SCHEDULED:
+        return [f"Entry source con pianificazione ricorrente: i contatti dovrebbero entrare alla valutazione "
+                f"successiva di {entry}. La procedura è da verificare."]
+    return [f"L'entry source è {outputs.entry_source_text(result.package)}: i contatti non entrano con l'import di "
+            f"un CSV. Usa una copia del journey con entry source una data extension con le stesse colonne di {entry}, "
+            "e importa lì il CSV di ingresso."]
 
 
 def generation_warnings(result: GenerationResult) -> tuple[list[str], bool]:
@@ -637,9 +671,14 @@ def render(data: Optional[bytes]) -> str:
 
 
 def render_result(result: GenerationResult, zip_bytes: bytes) -> None:
-    """Step 4 after a generation, in the order a tester needs it: the trust checks' result, the counts,
+    """Step 4 after a generation, in the order a tester needs it: the warning on unsupported elements when they
+    leave branches not covered, the trust checks' result, the counts,
     what to do before importing beside the trust checks one by one, a preview of each CSV, the download,
     and the warnings of the generation."""
+    warning = outputs.unsupported_warning(result)
+    if warning:   # spec, "Honest outcomes": the page opens with this warning
+        st.warning(_md(f"{warning} {outputs.REPORT_FILE} spiega il motivo nelle sezioni Branch non coperti ed "
+                       "Elementi non supportati."))
     chip, sentence, ok = checks_banner(result)
     st.markdown(f'<div class="cj-banner{"" if ok else " failed"}"><span class="cj-chip">{_html(chip)}</span>'
                 f'<span>{_html(sentence)}</span></div>', unsafe_allow_html=True)
@@ -802,7 +841,8 @@ def _settings_form(summary: DetectionSummary, running: bool) -> tuple[Settings, 
     The real inbox and the run identifier come first; the other settings wait in a closed expander.
     The Generate button is disabled while a generation runs (``running``).
     """
-    defaults = default_form_values(summary.activation_field)
+    defaults = default_form_values(summary.activation_field, summary.entry_kind)
+    run_once = summary.entry_kind == ENTRY_RUN_ONCE
     values: dict[str, Any] = {}
     with st.form("settings", border=False):
         left, right = st.columns(2, gap="large")
@@ -845,10 +885,10 @@ def _settings_form(summary: DetectionSummary, running: bool) -> tuple[Settings, 
             _label("Scenari")
             values["one_active_scenario"] = st.checkbox(SETTING_LABELS["one_active_scenario"],
                                                         value=defaults["one_active_scenario"],
-                                                        disabled=not summary.activation_choices)
+                                                        disabled=run_once or not summary.activation_choices)
             st.caption(_md(_activation_note(summary)))
             values["activation_field"] = None
-            if summary.activation_choices:
+            if summary.activation_choices and not run_once:
                 choices = summary.activation_choices
                 suggested = summary.activation_field
                 values["activation_field"] = st.selectbox(
@@ -874,6 +914,9 @@ def _text(name: str, defaults: Mapping[str, Any], placeholder: Optional[str] = N
 
 
 def _activation_note(summary: DetectionSummary) -> str:
+    if summary.entry_kind == ENTRY_RUN_ONCE:
+        return ("L'entry source è una data extension Run Once: tutti gli scenari entrano insieme quando il journey "
+                "viene attivato, quindi l'opzione non è disponibile.")
     if summary.activation_field is not None:
         return (f"Campo di attivazione rilevato nei filtri della entry query: "
                 f"{_field_text(summary.activation_field)}. Disattiva l'opzione per rendere attivi tutti gli scenari "

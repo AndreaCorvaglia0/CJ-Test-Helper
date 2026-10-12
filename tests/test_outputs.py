@@ -7,11 +7,27 @@ from __future__ import annotations
 
 import io
 import zipfile
+from dataclasses import replace
 
+import pytest
 from openpyxl import load_workbook
 
 from cjhelper.datagen import SCENARIO_COLUMNS
-from cjhelper.model import CheckResult, Field, GenerationResult, Table, TableData
+from cjhelper.model import (
+    ENTRY_OTHER,
+    ENTRY_RUN_ONCE,
+    ENTRY_SCHEDULED,
+    GENERATED_KEY,
+    KIND_WAIT_ATTRIBUTE,
+    KIND_WAIT_DURATION,
+    ActionWindow,
+    CheckResult,
+    Field,
+    GenerationResult,
+    Relationship,
+    Table,
+    TableData,
+)
 from cjhelper.outputs import (
     REPORT_FILE,
     SCENARIOS_FILE,
@@ -21,6 +37,7 @@ from cjhelper.outputs import (
     read_csv,
     table_file_name,
     build_testbook_rows,
+    unsupported_warning,
     write_report,
     write_scenarios_csv,
     write_table_csv,
@@ -370,3 +387,216 @@ def test_two_runs_give_identical_bytes():
     assert first.files == second.files
     assert build_zip(first.files) == build_zip(second.files)
     assert write_testbook(first) == write_testbook(first)
+
+
+# ---------------------------------------------------------------------------
+# Spec, "Extensions beyond the pilot": entry procedures, rows absent, honest outcomes
+# ---------------------------------------------------------------------------
+
+def _how_to_run(report: str) -> str:
+    return report[report.index("### Come eseguire i test"):report.index("### Elenco degli scenari")]
+
+
+def _rows(result) -> list[dict]:
+    return [dict(zip(TESTBOOK_COLUMNS, row)) for row in build_testbook_rows(result)]
+
+
+def _with_entry(kind, event_type="EmailAudience", **settings):
+    """The hand-made world with another entry source: no feeding automation, as loader.py reads it."""
+    result = build_result(**settings)
+    result.package.entry_event.kind = kind
+    result.package.entry_event.event_type = event_type
+    result.package.entry_event.automation_name = None
+    return result
+
+
+def test_run_once_procedure_in_report_and_testbook():
+    result = _with_entry(ENTRY_RUN_ONCE, one_active_scenario=False)
+    report = write_report(result)
+    how = _how_to_run(report)
+    assert ("L'entry source di questo journey è la data extension DE_Entry con pianificazione Run Once. Importa prima "
+            "DE_Master.csv e DE_Config.csv, poi DE_Entry.csv, e solo dopo attiva il journey. Entrano solo le righe "
+            "presenti nella data extension quando il journey viene attivato: le righe importate dopo non entrano "
+            "mai.") in how
+    assert "Quando attivi il journey, DE_Entry deve contenere solo righe di test" in how
+    assert "Un nuovo tentativo richiede una nuova versione del journey e un nuovo run identifier" in how
+    assert "con Run Once non si può eseguire uno scenario alla volta" in how
+    assert "automation A_Entry" not in report
+    first = _rows(result)[0]
+    assert "Importa tutti i file prima di attivare il journey." in first["Pre conditions"]
+    assert "Tutti gli scenari entrano insieme quando il journey viene attivato." in first["Pre conditions"]
+    assert ("Ogni nuovo tentativo richiede una nuova versione del journey e un nuovo run identifier."
+            in first["Pre conditions"])
+    steps = first["Detailed steps"].split("\n")
+    assert steps[0] == ("1. Verifica che le righe dello scenario TST_R01_S01 siano state importate e che DE_Entry "
+                        "contenga solo righe di test.")
+    assert steps[1] == ("2. Attiva il journey Test journey: entrano solo le righe presenti in DE_Entry in quel momento, "
+                        "e le righe importate dopo non entrano. Tutti i test partono insieme.")
+    assumptions = report[report.index("## Assunzioni"):report.index("## Impostazioni usate")]
+    assert "è lo scheduler che Journey Builder crea per la pianificazione della data extension" in assumptions
+
+
+def test_run_once_with_one_active_scenario_says_it_cannot_work():
+    how = _how_to_run(write_report(_with_entry(ENTRY_RUN_ONCE)))
+    assert ("con un'entry source Run Once tutti gli scenari entrano insieme quando il journey viene attivato, quindi "
+            "non si può eseguire uno scenario alla volta. Genera di nuovo i dati con l'impostazione \"Un solo "
+            "scenario attivo alla volta\" disattivata.") in how
+
+
+def test_other_entry_sources_use_a_copy_of_the_journey():
+    result = _with_entry(ENTRY_OTHER, "CloudPagesSmartCaptureSubmissionEvent", one_active_scenario=False)
+    how = _how_to_run(write_report(result))
+    assert ("L'entry source di questo journey è un form CloudPages (CloudPagesSmartCaptureSubmissionEvent): i contatti "
+            "non entrano con l'import di un CSV. Il test si fa su una copia del journey la cui entry source è una data "
+            "extension con le stesse colonne di DE_Entry. Importa prima DE_Master.csv e DE_Config.csv nelle loro data "
+            "extension, poi DE_Entry.csv nella data extension di ingresso della copia.") in how
+    first = _rows(result)[0]
+    assert first["Pre conditions"].startswith(
+        "Importa DE_Master.csv e DE_Config.csv, poi importa DE_Entry.csv nella data extension di ingresso della copia "
+        "del journey, che ha le stesse colonne di DE_Entry.")
+    assert "2. Fai entrare i contatti nella copia del journey Test journey" in first["Detailed steps"]
+    api = _with_entry(ENTRY_OTHER, "APIEvent", one_active_scenario=False)
+    assert "è un API event (APIEvent)" in write_report(api)
+
+
+def test_recurring_schedule_is_a_procedure_to_verify():
+    result = _with_entry(ENTRY_SCHEDULED, one_active_scenario=False)
+    result.package.entry_event.schedule_mode = "recurring"
+    report = write_report(result)
+    assert ("L'entry source di questo journey è la data extension DE_Entry con una pianificazione ricorrente "
+            "(recurring). Importa prima DE_Master.csv e DE_Config.csv, poi DE_Entry.csv. Procedura da verificare"
+            in _how_to_run(report))
+    assert "entrano alla valutazione successiva della data extension di ingresso" in report
+    assert "(procedura da verificare)" in _rows(result)[0]["Detailed steps"]
+
+
+@pytest.mark.parametrize("mode", ["OnceAndDone", "SingleEntryAcrossAllVersions"])
+def test_single_entry_modes_need_a_new_run_identifier(mode):
+    result = build_result()
+    result.package.journey.entry_mode = mode
+    report = write_report(result)
+    assert f"La modalità di ingresso del journey è {mode}" in _how_to_run(report)
+    assert (f"Con la modalità di ingresso {mode}, i contatti di un tentativo precedente potrebbero non rientrare: ogni "
+            "nuovo tentativo richiede un nuovo run identifier.") in _rows(result)[0]["Pre conditions"]
+    assert ("OnceAndDone è \"No re-entry\"" in report) is (mode == "OnceAndDone")
+    result.package.journey.entry_mode = "MultipleEntries"
+    assert "run identifier" not in _rows(result)[0]["Pre conditions"]
+
+
+def test_entry_filter_goals_and_exits_are_reported():
+    result = build_result()
+    result.package.entry_event.entry_filter = "<FilterDefinition/>"
+    result.package.journey.goal_count, result.package.journey.exit_count = 1, 2
+    text = ("Il journey ha un filtro di ingresso che il generatore non modella: alcuni contatti generati potrebbero non "
+            "entrare. Il journey ha 1 goal e 2 criteri di uscita che il generatore non modella: alcuni contatti "
+            "potrebbero uscire prima della fine del percorso atteso. Se un contatto non segue il percorso atteso, "
+            "controlla per primi questi elementi.")
+    assert text in _how_to_run(write_report(result))
+    assert all(text in row["Note"] for row in _rows(result))
+    assert "goal" not in write_report(build_result())
+
+
+def test_absent_rows_in_the_profile_and_the_preconditions():
+    result = build_result()
+    result.coverage.row_fields = {MASTER: (MASTER, "ContactId")}
+    case_open, case_plain = [c for s in result.coverage.scenarios for c in s.cases if s.id == "S01"]
+    case_open.contact_values[(MASTER, "ContactId")] = GENERATED_KEY
+    case_plain.contact_values = {(MASTER, "Perm"): None, (MASTER, "ContactId"): None}
+    first, second = _rows(result)[:2]
+    assert "Profilo del contatto: DE_Master.Perm = True. Riga presente in DE_Master." in first["Description"]
+    assert "Nessuna riga" not in first["Pre conditions"]
+    assert "Profilo del contatto: nessuna riga in DE_Master." in second["Description"]
+    assert ("Nessuna riga in DE_Master per questi contatti: DE_Master.csv non contiene le loro chiavi, perché il "
+            "percorso atteso lo richiede.") in second["Pre conditions"]
+    assert GENERATED_KEY not in first["Description"] + second["Description"]
+
+
+def test_expected_result_past_an_unsupported_element():
+    result = build_result()
+    case_plain = next(c for c in result.coverage.cases if c.id == "S01-C02")
+    case_plain.unknown_from = "WAIT-3"
+    case_plain.unknown_reason = "l'attività 'WAIT-3' è di un tipo non supportato, SMSSYNC"
+    second = _rows(result)[1]
+    assert second["Test name"] == "S01-C02 - Percorso non noto da Wait one minute in poi"
+    assert ("Percorso atteso: Channel [Email] > Welcome > Wait campaign date > Wait reminder date > Opened Welcome [No] "
+            "> Permission [Has permission] > Wait one minute, da cui il percorso non è noto.") in second["Description"]
+    expected = second["Expected result"]
+    assert "Ultima attività raggiunta" not in expected
+    assert "- Email ricevute prima di Wait one minute (WAIT-3): Welcome." in expected
+    assert ("- Percorso non noto da Wait one minute (WAIT-3) in poi, perché l'attività 'WAIT-3' è di un tipo non "
+            "supportato, SMSSYNC. Annota l'ultima attività raggiunta da ogni contatto.") in expected
+    assert "| non nota da Wait one minute (WAIT-3) in poi |" in write_report(result)
+    random_case = next(c for c in result.coverage.cases if c.random is not None)
+    random_case.random.branches[1] = replace(random_case.random.branches[1], unknown_from="ENG-2",
+                                             unknown_reason="lo split 'ENG-2' non è supportato")
+    assert ("- 10%: email ricevute: Promo; valori scritti: nessuno; percorso non noto da Clicked Promo (ENG-2) in poi, "
+            "perché lo split 'ENG-2' non è supportato.") in _rows(result)[2]["Expected result"]
+
+
+def test_report_opens_with_a_warning_when_unsupported_elements_leave_branches_not_covered():
+    assert "Attenzione" not in write_report(build_result())
+    result = build_result()
+    by_ref = {(b.activity_key, b.outcome_key): b for b in result.coverage.branches}
+    for outcome, reason in (("perm", "branch non supportato: legge un campo senza relazione"),
+                            ("remainder_path", "a valle di un elemento non supportato: questo branch viene dopo il "
+                                               "branch non supportato 'Has permission' dello stesso split, quindi non "
+                                               "viene mai valutato")):
+        branch = by_ref[("DEC-2", outcome)]
+        branch.status, branch.reason, branch.covered_by = "not covered", reason, []
+    result.package.journey.activities["DEC-2"].outcome("perm").unsupported_reason = "legge un campo senza relazione"
+    result.coverage.unsupported = ["DEC-2/perm"]
+    report = write_report(result)
+    head = report[:report.index("## Riepilogo")]
+    assert ("> **Attenzione:** 2 branch su 10 non sono coperti a causa di un elemento non supportato: il branch 'Has "
+            "permission' di 'Permission' (DEC-2). Per questi branch i dati di test non indicano il percorso dei "
+            "contatti. Le sezioni Branch non coperti ed Elementi non supportati spiegano il motivo.") in head
+    assert ("- Il branch 'Has permission' dello split Permission (DEC-2) non è supportato: legge un campo senza "
+            "relazione. Questo branch, i branch che lo seguono nello split e quelli a valle non sono coperti.") in report
+    assert unsupported_warning(build_result()) is None
+
+
+def test_manual_action_windows_and_minimum_durations():
+    result = build_result()
+    case_open, case_plain = [c for s in result.coverage.scenarios for c in s.cases if s.id == "S01"]
+    case_open.action_windows = [ActionWindow("ENG-1", "EMAIL-1", ["WAIT-X"], minutes=5, short=True)]
+    case_open.min_duration_minutes = 5
+    case_plain.min_duration_minutes, case_plain.not_before = 1, "2026-10-12 09:30"
+    first, second = _rows(result)[:2]
+    assert ("4. Entro 5 minuti dall'arrivo dell'email, apri l'email 'Welcome' inviata a ogni contatto di questo test"
+            in first["Detailed steps"])
+    assert "Dopo questo tempo i contatti raggiungono lo split 'Opened Welcome' (ENG-1)." in first["Detailed steps"]
+    assert first["Note"] == ("Azione manuale richiesta: aprire l'email 'Welcome' entro 5 minuti dall'arrivo. La "
+                             "finestra è sotto l'ora: apri l'email appena arriva.")
+    assert ("Durata minima del test: 5 minuti; i contatti non finiscono il percorso prima del 2026-10-12 09:30."
+            in first["Detailed steps"])                   # Case.not_before, filled by datagen
+    assert ("Durata minima del test: 1 minuto; i contatti non finiscono il percorso prima del 2026-10-12 09:30."
+            in second["Detailed steps"])
+    assert "open di 'Welcome' entro 5 minuti dall'arrivo" in write_report(result)
+    # A window that ends at a wait by attribute: the deadline datagen computed.
+    case_open.action_windows = [ActionWindow("ENG-1", "EMAIL-1", ["WAIT-1", "WAIT-2"], minutes=0,
+                                             attribute_wait_key="WAIT-2", deadline="2026-10-12 10:30")]
+    assert "4. Prima del 2026-10-12 10:30, apri l'email 'Welcome'" in _rows(result)[0]["Detailed steps"]
+    # A date already past holds nobody, and an unknown duration is said.
+    case_plain.min_duration_minutes, case_plain.not_before = 0, "2026-10-11 09:30"
+    assert ("Durata minima del test: nessuna, perché i wait del percorso possono terminare subito."
+            in _rows(result)[1]["Detailed steps"])
+    case_plain.min_duration_minutes = None
+    assert "Durata minima del test non nota" in _rows(result)[1]["Detailed steps"]
+
+
+def test_report_lists_only_the_assumptions_the_export_triggers():
+    result = build_result()
+    section = lambda: (lambda r: r[r.index("## Assunzioni"):r.index("## Impostazioni usate")])(write_report(result))  # noqa: E731
+    before = section()
+    assert "Un wait by attribute la cui data è già passata termina subito." in before
+    assert "vince il primo" not in before                 # no decision split with two conditions
+    assert "group-to-set" not in before and "uno a molti" not in before
+    for activity in result.package.journey.activities.values():
+        if activity.kind == KIND_WAIT_ATTRIBUTE:
+            activity.kind = KIND_WAIT_DURATION
+    result.package.relationships.append(Relationship("Contact -> Master", None, None, MASTER, "ContactId", "One", "Many"))
+    after = section()
+    assert "wait by attribute" not in after and "fuso orario" not in after
+    assert ("La relazione group-to-set che collega DE_Master al contatto usa la Contact Key (leftRelationshipIDs 3)"
+            in after)
+    assert "Una condizione su una tabella in relazione uno a molti (DE_Master)" in after

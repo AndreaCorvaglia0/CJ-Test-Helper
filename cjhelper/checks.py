@@ -13,6 +13,18 @@ Spec, "Development priorities", the meaning of "trusted":
 Plus the acceptance rule on addresses: contacts needing an open or click use the real inbox,
 all others use ``@example.invalid``. The files are read with the standard ``csv`` module, not
 with the writer's helpers, so a writer bug cannot hide from the checks.
+
+Spec, "Extensions beyond the pilot":
+
+- Row present or absent: "A contact whose row is absent has no row in that table's CSV. This is the
+  only exception to 'each contact row finds its rows in the linked tables'." The join check accepts a
+  missing row exactly for the contacts whose case has the row absent (``CoverageResult.row_absent``),
+  and requires that those contacts have no row there.
+- The simulation from the files applies the same rules as the coverage: a Journey Data condition reads
+  the entry row as it was at entry, every field of an absent row reads null, and an Update contact on
+  such a table inserts the row (``graph.Walker(..., row_fields=TableModel.existence_tested)``).
+- An entry source that no query fills (Run Once, recurring schedule, CloudPages form, API event) has no
+  entry query to compare with: the entry check says so and does not apply.
 """
 
 from __future__ import annotations
@@ -24,6 +36,10 @@ from typing import Optional
 
 from . import graph, sqlparse_lite
 from .model import (
+    ENTRY_AUTOMATION,
+    ENTRY_OTHER,
+    ENTRY_RUN_ONCE,
+    ENTRY_SCHEDULED,
     KIND_ENGAGEMENT,
     KIND_RANDOM,
     STATUS_COVERED,
@@ -55,6 +71,15 @@ from .model import (
 MAX_DETAILS = 25
 
 ENTRY_CHECK = "Le righe della tabella di ingresso corrispondono alla entry query"
+
+# The first words of the note of a check that does not apply to the export (it passes, with that note).
+NOT_APPLICABLE = "non si applica"
+
+# The entry source of an entry that no query fills, as the note of the entry check names it.
+_ENTRY_SOURCE_WORDS = {
+    ENTRY_RUN_ONCE: "una data extension con pianificazione Run Once",
+    ENTRY_SCHEDULED: "una data extension con una pianificazione ricorrente",
+}
 
 # A branch status as the check details say it (the glossary words of docs/brand.md).
 _STATUS_WORDS = {STATUS_COVERED: "coperto", STATUS_MANUAL: "coperto con azione manuale"}
@@ -124,6 +149,12 @@ class Checker:
                     by_key.setdefault(row[index_field], []).append(row)
         self.date_formats = self._query_date_formats()
         self._excluded: set[str] = set()
+        # Spec, "Row present or absent": lower-case table -> the contacts whose case has no row there. These
+        # contacts, and only these, must have no row in that table's CSV.
+        self.absent: dict[str, set[str]] = {}
+        for table in coverage.row_fields:
+            keys = {key for case in coverage.cases if coverage.row_absent(case, table) for key in case.contact_keys}
+            self.absent.setdefault(table.lower(), set()).update(keys)
 
     def run_all(self) -> list[CheckResult]:
         return [
@@ -221,7 +252,10 @@ class Checker:
         Every member of a key group is compared with every other member, in both directions, so a row
         that points at a missing row is found whichever table it is in. Then, read from the files only:
         each contact of each case has exactly one row in every contact-level table, no row belongs to a
-        contact that was not generated, and a contact links to one scenario row, not to two."""
+        contact that was not generated, and a contact links to one scenario row, not to two.
+
+        The one exception (spec, "Row present or absent"): a contact whose case has the row absent in a table
+        with the "row present / row absent" variable has no row in that table, and must have none."""
         details: list[str] = []
         for group in self.table_model.key_groups:
             members = [f for f in group.fields if f[0] in self.csv]
@@ -237,6 +271,11 @@ class Checker:
             for member, member_values in values.items():
                 for other, other_values in values.items():
                     missing = sorted(member_values - other_values) if other != member else []
+                    if group.kind == "contact":
+                        # A contact whose case has the row absent has no row in that table (spec, "Row present
+                        # or absent"); whether it really has none is checked with the contact rows below.
+                        allowed = self.absent.get(other[0].lower(), set())
+                        missing = [value for value in missing if value not in allowed]
                     if missing:
                         details.append(f"{len(missing)} valori di {member[0]}.{member[1]} non hanno una riga in "
                                        f"{other[0]}.{other[1]}: " + ", ".join(missing[:5]))
@@ -251,7 +290,7 @@ class Checker:
     def _check_contact_rows(self) -> list[str]:
         """Each contact of each case has exactly one row in every contact-level table, and a row whose
         key is not a generated contact is reported (spec: "Each contact therefore belongs to exactly one
-        scenario and is never reused")."""
+        scenario and is never reused"). A contact whose case has the row absent has no row in that table."""
         details: list[str] = []
         expected = self._generated_contacts()
         registered = {c.key for c in self.data.contacts}
@@ -263,9 +302,14 @@ class Checker:
             if name not in self.rows_of_contact:
                 continue
             rows = self.rows_of_contact[name]
-            missing = sorted(expected - set(rows))
+            absent = self.absent.get(name.lower(), set()) & expected
+            missing = sorted(expected - absent - set(rows))
             if missing:
                 details.append(f"{len(missing)} contatti generati non hanno righe in {name}: " + ", ".join(missing[:5]))
+            present = sorted(absent & set(rows))
+            if present:
+                details.append(f"{len(present)} contatti, il cui caso prevede che non abbiano una riga in {name}, ne hanno "
+                               "una: " + ", ".join(present[:5]))
             extra = sorted(set(rows) - expected)
             if extra:
                 details.append(f"{name} ha righe per {len(extra)} contatti che non sono stati generati: " + ", ".join(extra[:5]))
@@ -314,7 +358,7 @@ class Checker:
         query = self.table_model.entry_query
         entry = self.table_model.entry_table
         if query is None:
-            return CheckResult(ENTRY_CHECK, True, ["nessuna entry query nell'export: non c'è nulla da confrontare"])
+            return CheckResult(ENTRY_CHECK, True, [self._no_entry_query_note()])
         if entry not in self.csv:
             return CheckResult(ENTRY_CHECK, False, [f"{entry}.csv manca"])
         details: list[str] = []
@@ -414,6 +458,24 @@ class Checker:
                     details.append(f"{entry}.csv, riga con chiave {key}: {f.name} vale {v!r} ma la entry query non lo popola")
         return CheckResult(ENTRY_CHECK, not details, _trim(details) + notes)
 
+    def _no_entry_query_note(self) -> str:
+        """Why there is nothing to compare when no entry query fills the entry table.
+
+        Spec, "Entry source and procedure": an entry source other than the automation of the pilot is not
+        filled by a query (Run Once, recurring schedule, CloudPages form, API event); its entry rows are the
+        imported CSV, so the check does not apply. For an automation entry the export simply holds no query."""
+        event = self.package.entry_event
+        kind = event.kind if event is not None else ENTRY_AUTOMATION
+        entry = self.table_model.entry_table
+        source = _ENTRY_SOURCE_WORDS.get(kind)
+        if kind == ENTRY_OTHER:
+            source = f"un evento di tipo {event.event_type}" if event.event_type else "un evento senza tipo"
+        if source is not None:
+            return (f"{NOT_APPLICABLE}: l'entry source di questo journey è {source}, che nessuna query "
+                    f"popola, quindi le righe di ingresso sono quelle di {entry}.csv e non c'è una entry query con cui "
+                    "confrontarle")
+        return "nessuna entry query nell'export: non c'è nulla da confrontare"
+
     def _exclusion_joins(self, query: ParsedQuery) -> set[str]:
         """Tables the entry query excludes with ``LEFT JOIN X ON ... WHERE X.key IS NULL``: a contact enters
         only when it has no row in X. The parser reads that as an inner join plus a filter no row can meet;
@@ -487,8 +549,12 @@ class Checker:
     # 4 ---------------------------------------------------------------------------------
     def check_simulation(self) -> CheckResult:
         details: list[str] = []
+        # The same rules as the coverage (spec, "Extensions beyond the pilot"): Journey Data reads the entry row
+        # as written (the lookup reads the files, i.e. the values at entry), every field of an absent row reads
+        # null, and an Update contact on such a table inserts the row.
         walker = graph.Walker(self.package.journey, self.schema, self.package.emails,
-                              self.settings.case_insensitive_text, self.now, self.settings.date_format)
+                              self.settings.case_insensitive_text, self.now, self.settings.date_format,
+                              row_fields=self.table_model.existence_tested)
         cases = {c.id: c for c in self.coverage.cases}
         scenario_of = {s.id: s for s in self.coverage.scenarios}
         has_scenario_link = any(self._scenario_key_field(name) for name in self.table_model.contact_tables)
@@ -526,6 +592,8 @@ class Checker:
         found by its key; its scenario row is the one its own Entry row points to (docs/assumptions.md,
         row 12: "The Config lookup goes through the entry table"), not the scenario the generator has in
         memory. Without a scenario key in the Entry row, the first contact-level table that has one is used.
+        A table where the contact has no row reads null in every field: for a table with the "row present /
+        row absent" variable that is an absent row.
         """
         entry = self.table_model.entry_table
         link: Optional[str] = None

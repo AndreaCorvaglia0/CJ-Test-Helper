@@ -126,3 +126,18 @@ def test_zip_holds_every_file(result):
     data = outputs.build_zip(result.files)
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         assert sorted(z.namelist()) == sorted(result.files)
+
+
+def test_extensions_beyond_the_pilot_keep_its_procedure(result):
+    """Spec, "Acceptance beyond the pilot": the pilot's report keeps its automation procedure and its assumptions;
+    the testbook gains the minimum duration of each test (spec, "Honest outcomes")."""
+    import openpyxl
+    report = result.files["report.md"].decode("utf-8")
+    assert "> **Attenzione:**" not in report                  # no unsupported element leaves a branch not covered
+    assert "Run Once" not in report and "copia del journey" not in report
+    assumptions = report[report.index("## Assunzioni"):report.index("## Impostazioni usate")]
+    assert assumptions.count("\n- ") == 8                      # the spec's six, the automation, the ignored columns
+    rows = list(openpyxl.load_workbook(io.BytesIO(result.files["testbook.xlsx"])).active.iter_rows(values_only=True))
+    steps = [row[5] for row in rows[1:]]
+    assert all(("Durata minima del test" in text) != ("Il percorso non ha wait." in text) for text in steps)
+    assert "run identifier" not in "\n".join(str(row[4]) for row in rows[1:])   # MultipleEntries, automation entry

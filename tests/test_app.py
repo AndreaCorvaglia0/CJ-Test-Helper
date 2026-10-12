@@ -23,7 +23,16 @@ from streamlit.testing.v1 import AppTest, element_tree
 
 from cjhelper import app, outputs, pipeline
 from cjhelper.loader import LoadError
-from cjhelper.model import STATUS_COVERED, STATUS_NOT_COVERED, CheckResult, Settings
+from cjhelper.model import (
+    ENTRY_AUTOMATION,
+    ENTRY_OTHER,
+    ENTRY_RUN_ONCE,
+    ENTRY_SCHEDULED,
+    STATUS_COVERED,
+    STATUS_NOT_COVERED,
+    CheckResult,
+    Settings,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_FILE = ROOT / "cjhelper" / "app.py"
@@ -345,6 +354,27 @@ def test_settings_mapping_reads_the_changed_values():
     assert app.settings_from_form(values).activation_field == ("DE_NCRM_AD_HOC_CONFIG", "HAS_RUN")
 
 
+def test_settings_mapping_with_a_run_once_entry_does_not_offer_one_active_scenario():
+    """Spec, "Entry source and procedure": with Run Once "All scenarios enter together, so 'one active scenario at
+    a time' is not offered"."""
+    values = app.default_form_values(PILOT_ACTIVATION, ENTRY_RUN_ONCE)
+    assert values["one_active_scenario"] is False and values["activation_field"] is None
+    settings = app.settings_from_form(values)
+    assert settings.one_active_scenario is False and settings.activation_field is None
+
+
+@needs_pilot
+def test_settings_with_a_run_once_entry_disable_one_active_scenario(pilot_bytes, monkeypatch):
+    monkeypatch.setattr("cjhelper.outputs.entry_kind", lambda package: ENTRY_RUN_ONCE)
+    at = AppTest.from_function(_render_page, args=(pilot_bytes,)).run(timeout=TIMEOUT)
+    assert not at.exception
+    one_active = _widget(at.checkbox, app.SETTING_LABELS["one_active_scenario"])
+    assert one_active.value is False and one_active.disabled
+    assert not [w for w in at.selectbox if w.label == app.SETTING_LABELS["activation_field"]]
+    assert ("L'entry source è una data extension Run Once: tutti gli scenari entrano insieme quando il journey viene "
+            "attivato, quindi l'opzione non è disponibile.") in _captions(at)
+
+
 def test_settings_notes_in_words():
     assert app.days_text(-1) == "1 giorno prima della generazione."
     assert app.days_text(7) == "7 giorni dopo la generazione."
@@ -388,8 +418,10 @@ def test_settings_start_at_the_spec_defaults_with_inbox_and_run_identifier_first
 # Step 4: the result
 # ---------------------------------------------------------------------------
 
-def _stub_result(checks=None, files=None, journey_name="CJ demo", real_inbox="", one_active=True):
-    """The parts of a GenerationResult that step 4 reads."""
+def _stub_result(checks=None, files=None, journey_name="CJ demo", real_inbox="", one_active=True,
+                 entry_kind=ENTRY_AUTOMATION, unsupported=False):
+    """The parts of a GenerationResult that step 4 reads. ``unsupported``: the branch without a root cause is not
+    covered because of an unsupported element."""
     rows = "".join(f"TST_R01_C{n:04d},,x_{n}\n" for n in range(1, 13)).encode()
     if files is None:
         files = {"DE_Entry.csv": b"ContactId,Email,Note\n" + rows,
@@ -402,13 +434,17 @@ def _stub_result(checks=None, files=None, journey_name="CJ demo", real_inbox="",
     branches = ([SimpleNamespace(status=STATUS_COVERED, behind=None)] * 4
                 + [SimpleNamespace(status=STATUS_NOT_COVERED, behind=("SPLIT-1", "yes"))] * 2
                 + [SimpleNamespace(status=STATUS_NOT_COVERED, behind=("SPLIT-2", "yes"))]
-                + [SimpleNamespace(status=STATUS_NOT_COVERED, behind=None)])
+                + [SimpleNamespace(status=STATUS_NOT_COVERED, behind=None,
+                                   reason="branch non supportato: x" if unsupported else "non raggiungibile: x")])
     cases = [SimpleNamespace(manual_actions=[SimpleNamespace(kind="open")]), SimpleNamespace(manual_actions=[])]
+    event = SimpleNamespace(kind=entry_kind, event_type="CloudPagesSmartCaptureSubmissionEvent")
     return SimpleNamespace(
-        package=SimpleNamespace(journey=SimpleNamespace(name=journey_name, activities={"SPLIT-1": 1, "SPLIT-2": 2})),
+        package=SimpleNamespace(journey=SimpleNamespace(name=journey_name, activities={"SPLIT-1": 1, "SPLIT-2": 2}),
+                                entry_event=event, unsupported_activities=[]),
+        table_model=SimpleNamespace(entry_table="DE_Entry"),
         coverage=SimpleNamespace(stats={"scenarios": 2, "cases": 3, "contacts": 9, "covered": 4,
                                         "covered_manual": 1, "not_covered": 4},
-                                 branches=branches, cases=cases,
+                                 branches=branches, cases=cases, unsupported=[],
                                  warnings=["pattern sospetto: T.F is compared with 'Email' and 'EMAIL' "
                                            "(SPLIT-1, SPLIT-2)"]),
         data=SimpleNamespace(warnings=["Nessuna inbox reale impostata. I contatti di 1 caso con un open o un click "
@@ -445,6 +481,19 @@ def test_summary_import_and_download_notes():
         "altre. Non cambiare altro e non reimportare nulla."]
     assert app.import_notes(_stub_result(one_active=False))[1:] == [
         "Nei CSV tutti gli scenari sono attivi, quindi vengono eseguiti insieme."]
+    run_once = _stub_result(one_active=False, entry_kind=ENTRY_RUN_ONCE)
+    assert app.import_notes(run_once)[1:] == [
+        "Entry source Run Once: importa tutti i CSV, poi attiva il journey. Entrano solo le righe presenti in DE_Entry "
+        "all'attivazione, che deve contenere solo righe di test. Un nuovo tentativo richiede una nuova versione del "
+        "journey e un nuovo run identifier.",
+        "Nei CSV tutti gli scenari sono attivi, quindi vengono eseguiti insieme."]
+    cloudpages = _stub_result(one_active=False, entry_kind=ENTRY_OTHER)
+    assert app.import_notes(cloudpages)[1] == (
+        "L'entry source è un form CloudPages (CloudPagesSmartCaptureSubmissionEvent): i contatti non entrano con "
+        "l'import di un CSV. Usa una copia del journey con entry source una data extension con le stesse colonne di "
+        "DE_Entry, e importa lì il CSV di ingresso.")
+    assert app.import_notes(_stub_result(one_active=False, entry_kind=ENTRY_SCHEDULED))[1].startswith(
+        "Entry source con pianificazione ricorrente")
     assert app.download_lines(result) == [
         "DE_Entry.csv: i dati da importare.",
         "scenarios.csv: gli scenari in ordine di esecuzione, con quello attivo all'inizio.",
@@ -493,6 +542,19 @@ def test_result_step_shows_summary_import_previews_download_checks_and_warnings(
     assert "report.md elenca le attività coinvolte." in captions
     buttons = at.get("download_button")
     assert len(buttons) == 1 and buttons[0].label == app.DOWNLOAD_LABEL and buttons[0].proto.type == "primary"
+
+
+def test_result_step_opens_with_the_warning_on_unsupported_elements():
+    """Spec, "Honest outcomes": "report.md and the page open with a warning when unsupported elements leave branches
+    not covered"."""
+    at = AppTest.from_function(_result_page, args=(_stub_result(), b"zip bytes")).run(timeout=TIMEOUT)
+    assert not at.exception and not at.warning
+    at = AppTest.from_function(_result_page, args=(_stub_result(unsupported=True), b"zip bytes")).run(timeout=TIMEOUT)
+    assert not at.exception
+    assert [_plain(w.value) for w in at.warning] == [
+        "1 branch su 8 non è coperto a causa di elementi non supportati. Per questi branch i dati di test non indicano "
+        "il percorso dei contatti. report.md spiega il motivo nelle sezioni Branch non coperti ed Elementi non "
+        "supportati."]
 
 
 @needs_pilot

@@ -331,9 +331,60 @@ riepilogo (scenari, casi, contatti; branch coperti / coperti con azione manuale 
 branch non coperti (activity, outcome, motivo), elementi non supportati, warning e pattern sospetti,
 assunzioni, impostazioni usate.
 
+Regole aggiunte dalla sezione della spec "Extensions beyond the pilot" (12 ottobre 2026):
+
+- Procedura di ingresso secondo `EntryEvent.kind` (`entry_kind(package)`), nella sezione "Come eseguire i test" del
+  report e nelle colonne Pre conditions e Detailed steps del testbook:
+
+  | Entry source | Testi |
+  | --- | --- |
+  | `ENTRY_AUTOMATION` (il pilota) | Invariati |
+  | `ENTRY_RUN_ONCE` | Importa ogni CSV, poi attiva il journey; entrano solo le righe presenti all'attivazione; la data extension di ingresso deve contenere solo righe di test; un nuovo tentativo richiede una nuova versione del journey e un nuovo run identifier; tutti gli scenari entrano insieme. Se "un solo scenario attivo" è comunque attivo, il report dice di generare di nuovo i dati senza |
+  | `ENTRY_SCHEDULED` | Procedura da verificare: i contatti entrano alla valutazione successiva della data extension |
+  | `ENTRY_OTHER` | Il test si fa su una copia del journey con entry source una data extension con le stesse colonne; il CSV di ingresso va in quella data extension (`entry_source_text(package)` nomina la entry source) |
+
+- `Journey.entry_mode` `OnceAndDone` o `SingleEntryAcrossAllVersions`: il report e le Pre conditions dicono che ogni
+  tentativo richiede un nuovo run identifier. Filtro di ingresso, goal ed exit criteria: una frase nel report e
+  nella colonna Note.
+- Riga presente o assente: nella Description il profilo dice "riga presente in T" o "nessuna riga in T" al posto del
+  campo collegato (`GENERATED_KEY` o None) e dei campi di una riga assente; le Pre conditions dicono "Nessuna riga in
+  T per questi contatti".
+- Percorso non noto (`Case.unknown_from`, `RandomBranch.unknown_from`): il percorso atteso si ferma all'attività, il
+  risultato atteso dice "Percorso non noto da <attività> in poi, perché <motivo>" e non nomina mai quell'attività come
+  ultima raggiunta; nel report la colonna Ultima attività dice "non nota da <attività> in poi".
+- `unsupported_warning(result)`: la frase con cui report.md (in un blocco "Attenzione" prima del Riepilogo), la
+  pagina e la riga di comando si aprono quando branch non coperti hanno un motivo che viene da un elemento non
+  supportato (`attività non supportata`, `branch non supportato`, `a valle di un elemento non supportato`). None
+  altrimenti.
+- Scadenza delle azioni manuali da `Case.action_windows`: con un wait by attribute, `ActionWindow.deadline`
+  ("Prima del ..."); senza, "Entro N dall'arrivo dell'email" quando i wait hanno una durata fissa; altrimenti "Appena
+  arriva l'email". Con `ActionWindow.short` la Note dice che la finestra è sotto l'ora. Un caso senza finestre (un
+  `Case` costruito a mano) usa ancora l'ultimo wait by attribute tra email e split.
+- Durata minima: il passo dei wait del testbook aggiunge "Durata minima del test: ..." da
+  `Case.min_duration_minutes` e da `Case.not_before` quando questa data è dopo l'ora di generazione.
+- Assunzioni: il report elenca solo quelle che l'export attiva, ciascuna con il suo segnale (un decision split con
+  due condizioni, un confronto di testo, un wait by attribute, campi Date o Boolean nei CSV, un engagement split,
+  l'automation del pilota, colonne ignorate della entry query, la pianificazione della data extension, `OnceAndDone`,
+  `IsNull` o `IsNotNull` sulla chiave del contatto, una tabella collegata al contatto solo da una relazione
+  group-to-set, un confronto tra attributi, una tabella dal lato "Many" di una relazione). Righe di
+  docs/assumptions.md: da 1 a 6, da 23 a 28 e da 40 a 45.
+- Un branch non supportato (`<split>/<outcome>` in `CoverageResult.unsupported`) è descritto come branch dello split,
+  non come attività.
+
 ### checks.py (lead)
 
 Rilegge i byte dei CSV scritti ed esegue i cinque trust check della spec. Restituisce `list[CheckResult]`.
+
+Regole aggiunte dalla sezione della spec "Extensions beyond the pilot":
+
+- Join: un contatto il cui caso ha la riga assente (`CoverageResult.row_absent`) non deve avere righe in quella
+  tabella, e solo questi contatti possono non averne. Il confronto tra i membri del gruppo di chiavi del contatto
+  ignora le loro chiavi mancanti in quella tabella.
+- Simulazione dai file: `graph.Walker(..., row_fields=TableModel.existence_tested)`; la lookup legge i file, cioè i
+  valori all'ingresso, quindi i Journey Data restano la fotografia e un Update contact su una tabella con la riga
+  assente la inserisce.
+- Entry query: senza entry query il check passa con una sola nota. Per una entry source che nessuna query popola (Run
+  Once, pianificazione ricorrente, form, API event) la nota comincia con `NOT_APPLICABLE` ("non si applica").
 
 ## Esempi
 
