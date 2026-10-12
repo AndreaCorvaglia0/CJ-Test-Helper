@@ -426,3 +426,20 @@ Chiavi di `expected.json` (tutte facoltative tranne `branches`):
 Un caso elencato deve esistere (valori confrontati come stringhe CSV; `end_activity` è l'ultima chiave di activity;
 `manual_actions` è la lista ordinata dei tipi). `tests/test_examples.py` esegue ogni esempio nella
 pipeline e confronta. Il pilota è `examples/pilot/` con `"package": "../../fixtures/CJ template complesso-v1.json"`.
+
+Chiavi aggiunte per le estensioni oltre il pilota (spec, "Extensions beyond the pilot"), tutte facoltative:
+
+| Chiave | Dove | Significato |
+| --- | --- | --- |
+| `cases[i].contact_constraints` | caso | `{"Tabella.Campo": {"not_null": true, "not_in": [...], "gt": n, "lt": n}}`: il valore del caso non è vuoto, non è tra quelli elencati, ed è un numero strettamente maggiore di `gt` e minore di `lt` (mai sull'estremo). Per i valori che la spec non fissa, solo l'intervallo. |
+| `cases[i].has_row` | caso | `{"Tabella": true/false}`: ogni contatto del caso ha una riga in quella tabella (`true`), oppure nessuno ne ha (`false`). Una riga appartiene al contatto quando una sua cella contiene la chiave del contatto. Serve per la riga assente. |
+| `report_contains` | esempio | testi che report.md contiene, senza distinguere maiuscole e minuscole |
+| `report_not_contains` | esempio | testi che report.md non contiene |
+| `report_head_contains` | esempio | testi presenti nell'apertura di report.md, cioè prima della seconda sezione `##` |
+| `testbook_contains` | esempio | testi presenti in una cella di testbook.xlsx (il runner lo scrive con `outputs.write_testbook`) |
+| `warnings_not_contain` | esempio | testi che nessun warning contiene (stessi warning di `warnings_contain`) |
+| `csv_no_space_cells` | esempio | `true`: nessuna cella dei CSV contiene solo spazi (un null è una cella vuota) |
+
+Il valore di `reason_contains`, e ogni elemento di `warnings_contain`, `report_contains`, `report_head_contains` e
+`testbook_contains`, può essere una lista: basta che compaia uno dei suoi testi. Si usa quando la spec fissa il
+concetto ma non la parola (per esempio il nome di un'attività oppure la sua chiave).

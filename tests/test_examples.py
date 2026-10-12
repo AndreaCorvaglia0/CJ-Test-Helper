@@ -6,13 +6,15 @@ never fixed by editing the expected answer without a written proof from the spec
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from cjhelper import pipeline
+from cjhelper import outputs, pipeline
 from cjhelper.model import Settings
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
@@ -52,6 +54,65 @@ def check_range(name, value, spec, problems):
         problems.append(f"{name}: {value} > max {hi}")
 
 
+def contains(text: str, wanted) -> bool:
+    """Case-insensitive substring test; a list in `wanted` means "any of these" (wording the spec leaves free)."""
+    options = wanted if isinstance(wanted, list) else [wanted]
+    return any(o.lower() in text.lower() for o in options)
+
+
+def report_head(report: str) -> str:
+    """The opening of report.md: everything before its second "## " section."""
+    head: list[str] = []
+    sections = 0
+    for line in report.splitlines():
+        if line.startswith("## "):
+            sections += 1
+            if sections == 2:
+                break
+        head.append(line)
+    return "\n".join(head)
+
+
+def testbook_text(result) -> str:
+    import openpyxl
+
+    book = openpyxl.load_workbook(io.BytesIO(outputs.write_testbook(result)))
+    return "\n".join(str(cell) for sheet in book.worksheets for row in sheet.iter_rows(values_only=True)
+                     for cell in row if cell is not None)
+
+
+def compare_texts(result, expected: dict, all_warnings: str, problems: list[str]) -> None:
+    """Keys on the texts the tester reads: report.md, testbook.xlsx, warnings (docs/plan.md, "Esempi")."""
+    for text in expected.get("warnings_not_contain") or []:
+        if contains(all_warnings, text):
+            problems.append(f"a warning contains {text!r}")
+    if any(k in expected for k in ("report_contains", "report_not_contains", "report_head_contains")):
+        report = result.files["report.md"].decode("utf-8")
+        for text in expected.get("report_contains") or []:
+            if not contains(report, text):
+                problems.append(f"report.md does not contain {text!r}")
+        for text in expected.get("report_not_contains") or []:
+            if contains(report, text):
+                problems.append(f"report.md contains {text!r}")
+        head = report_head(report)
+        for text in expected.get("report_head_contains") or []:
+            if not contains(head, text):
+                problems.append(f"the opening of report.md does not contain {text!r}")
+    if expected.get("testbook_contains"):
+        book = testbook_text(result)
+        for text in expected["testbook_contains"]:
+            if not contains(book, text):
+                problems.append(f"testbook.xlsx does not contain {text!r}")
+    if expected.get("csv_no_space_cells"):
+        for name, content in sorted(result.files.items()):
+            if not name.endswith(".csv"):
+                continue
+            for row in csv.reader(io.StringIO(content.decode("utf-8"))):
+                for cell in row:
+                    if cell and not cell.strip():
+                        problems.append(f"{name}: a cell holds only spaces ({cell!r})")
+
+
 def compare(result, expected: dict) -> list[str]:
     problems: list[str] = []
     cov = result.coverage
@@ -75,7 +136,7 @@ def compare(result, expected: dict) -> list[str]:
             continue
         if b.status != exp.get("status"):
             problems.append(f"branch {key}: status {b.status!r} != {exp.get('status')!r} (reason: {b.reason})")
-        if exp.get("reason_contains") and exp["reason_contains"].lower() not in b.reason.lower():
+        if exp.get("reason_contains") and not contains(b.reason, exp["reason_contains"]):
             problems.append(f"branch {key}: reason {b.reason!r} does not contain {exp['reason_contains']!r}")
         if "statistical" in exp and bool(b.statistical) != bool(exp["statistical"]):
             problems.append(f"branch {key}: statistical {b.statistical} != {exp['statistical']}")
@@ -95,8 +156,9 @@ def compare(result, expected: dict) -> list[str]:
         problems.append(f"unsupported {sorted(cov.unsupported)} != {sorted(expected['unsupported'])}")
     all_warnings = " || ".join(result.package.warnings + cov.warnings + result.table_model.warnings + result.data.warnings)
     for text in expected.get("warnings_contain") or []:
-        if text.lower() not in all_warnings.lower():
+        if not contains(all_warnings, text):
             problems.append(f"no warning contains {text!r}")
+    compare_texts(result, expected, all_warnings, problems)
     if expected.get("checks_pass"):
         for c in result.checks:
             if not c.passed:
@@ -119,6 +181,13 @@ def case_matches(result, case, scenario, want) -> bool:
         return False
     if "contact_count" in want and case.contact_count != want["contact_count"]:
         return False
+    for k, rule in (want.get("contact_constraints") or {}).items():
+        t, f = k.split(".", 1)
+        if not value_satisfies(case.contact_values.get((t, f)), rule):
+            return False
+    for table, present in (want.get("has_row") or {}).items():
+        if not rows_match(result, case, table, present):
+            return False
     if "emails_sent" in want and case.emails_sent != want["emails_sent"]:
         return False
     if "random" in want:
@@ -132,6 +201,37 @@ def case_matches(result, case, scenario, want) -> bool:
         if "expected_high" in r and case.random.expected_high != r["expected_high"]:
             return False
     return True
+
+
+def value_satisfies(value, rule: dict) -> bool:
+    """`contact_constraints`: not_null, not_in, and strict numeric bounds gt / lt (never on a bound)."""
+    if rule.get("not_null") and (value is None or value == ""):
+        return False
+    if value in (rule.get("not_in") or []):
+        return False
+    if "gt" in rule or "lt" in rule:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return False
+        if "gt" in rule and not number > rule["gt"]:
+            return False
+        if "lt" in rule and not number < rule["lt"]:
+            return False
+    return True
+
+
+def rows_match(result, case, table: str, present: bool) -> bool:
+    """`has_row`: every contact of the case has a row in the table's CSV data (True), or none has (False).
+
+    A row belongs to a contact when one of its cells holds the contact key.
+    """
+    if not case.contact_keys:
+        return False
+    data = result.data.tables.get(table)
+    rows = data.rows if data is not None else []
+    found = [any(key in row.values() for row in rows) for key in case.contact_keys]
+    return all(found) if present else not any(found)
 
 
 @pytest.mark.parametrize("example", example_dirs(), ids=lambda d: d.name)

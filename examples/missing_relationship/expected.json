@@ -1,0 +1,69 @@
+{
+  "journey_name": "EX_MissingRelationship",
+  "activity_count": 5,
+  "table_levels": {
+    "DE_MR_Entry": "contact"
+  },
+  "branches": {
+    "SPLIT-1/path_a": {
+      "status": "covered"
+    },
+    "SPLIT-1/remainder_path": {
+      "status": "covered"
+    },
+    "SPLIT-2/path_a": {
+      "status": "not covered",
+      "reason_contains": "relazione"
+    },
+    "SPLIT-2/remainder_path": {
+      "status": "not covered",
+      "reason_contains": [
+        "non supportat",
+        "relazione"
+      ]
+    }
+  },
+  "scenario_count": {
+    "min": 1,
+    "max": 1
+  },
+  "case_count": {
+    "min": 2,
+    "max": 2
+  },
+  "contact_count": 6,
+  "cases": [
+    {
+      "contact_values": {
+        "DE_MR_Entry.Channel": "Email"
+      },
+      "manual_actions": [],
+      "contact_count": 3
+    },
+    {
+      "contact_constraints": {
+        "DE_MR_Entry.Channel": {
+          "not_null": true,
+          "not_in": [
+            "Email"
+          ]
+        }
+      },
+      "end_activity": "UPDATE-3",
+      "manual_actions": [],
+      "contact_count": 3
+    }
+  ],
+  "report_contains": [
+    "Package Manager",
+    [
+      "ENTITY_NOT_FOUND",
+      "Unable to find attribute relationship"
+    ]
+  ],
+  "report_not_contains": [
+    "UNSUPPORTED_AMPSCRIPT",
+    "UNRESOLVED_VARIABLE"
+  ],
+  "checks_pass": true
+}

@@ -37,6 +37,22 @@ only then is `expected.json` changed (in the same commit). A failing example is 
 | `case_mismatch_insensitive` | Same package, `case_insensitive_text: true` | 3 / 3 / 9; reachability flips (remainder unreachable instead) |
 | `unsupported_operator` | Condition operator outside the spec's list (`Between`); found by trying to break the generator (it raised instead of reporting) | 1 / 2 / 6; both outcomes of the split not covered ("unsupported") |
 | `boolean_exhaustive` | `Is true` / `Is false` / remainder on a non-nullable and on a nullable Boolean | 1 / 3 / 9; remainder unreachable only for the non-nullable field (relies on null not matching `Is false`, assumptions row 7) |
+| `journey_data_split` | Journey Data conditions (`Event.<key>.<field>`, `IsEphemeralAttribute`) on the entry table, DE entry with no Contact Builder model; `IsNull` on the contact key, `Is`, `Equal`, `GreaterThan` on a Decimal | 1 / 4 / 12; key `IsNull` unreachable; numbers strictly inside the ranges, not-null representatives |
+| `journey_data_snapshot` | Update contact rewrites an entry field: a later Journey Data split sees the entry value, a Contact Data split on the same field the written one | 1 / 2 / 6; both later remainders unreachable |
+| `between_inclusive` | `Between` `10\|20` (bounds included) with `GreaterThan 20` and `Equal 20` on a Number | 1 / 3 / 9; `Equal 20` unreachable; values > 20, in (10, 20), < 10 and not null |
+| `row_absent_isnull` | Existence test via `IsNull` on the key of a group-to-set table | 1 / 3 / 9; absent contacts have no row in that CSV; no space-only cells |
+| `row_absent_attribute_comparison` | Existence test written as key `Equal` `ValueParameterName="Event.<key>.SubscriberKey"` | 1 / 3 / 9; read as "the contact has a row" |
+| `attribute_comparison_unsupported` | `ValueParameterName` comparing two ordinary fields | 1 / 2 / 6; that split not covered ("non supportat"); report opens with the warning |
+| `missing_relationship` | Attribute set with no relationship in the export; Package Manager issues (WARNING listed, INFO not) | 1 / 2 / 6; reason names the relationship |
+| `run_once_entry` | EmailAudience entry with `scheduleFlowMode` `runOnce` | 1 / 2 / 6; report: Run Once, new version; testbook: new version and run identifier |
+| `cloudpages_entry` | CloudPages Smart Capture entry, `JOURNEY_UNSUPPORTED_ENTRY` issue | 1 / 2 / 6; report: test a copy with a DE entry; issue listed |
+| `engagement_short_window` | Open split 5 minutes after its email, another 2 days after | 1 / 4 / 12; warning for the short window only; testbook gives a minimum duration |
+| `update_inserts_row` | Update contact on an existence-tested table inserts the row | 1 / 2 / 6; the later existence test sees the row |
+| `journey_data_other_event` | Journey Data key naming an event definition other than the trigger's | 1 / 2 / 6; that split not covered ("non supportat") |
+| `row_absent_other_fields` | `IsNotNull` existence test, then `IsNull` / `Equal` on another field of the absent row | 1 / 2 / 6; `IsNull` true, `Equal` false on an absent row |
+| `once_and_done_entry`, `single_entry_all_versions` | `entryMode` OnceAndDone / SingleEntryAcrossAllVersions with an automation entry | 1 / 2 / 6; testbook names the run identifier |
+| `default_missing_column` | `defaults.mobileNumber` naming a column the entry table lacks | 1 / 2 / 6; report names the column |
+| `unused_asset` | An image and an email no activity uses, with an unresolvable `publishedURL` reference | 1 / 2 / 6; no warning and no report line about them |
 | `pilot` | The spec's acceptance criteria on the real export (default settings + real inbox) | >= 23 scenarios, >= 33 cases, >= 146 contacts (proven minima); 137 of 259 branches unreachable |
 | `pilot_case_insensitive` | The pilot with case-insensitive text (what the earlier tool assumed) | >= 41 / 59 / 224 (41 is the earlier tool's "40 + 1"); 91 unreachable |
 
@@ -74,6 +90,7 @@ yet can ignore them, but they are part of the expected answer.
 | `cases[i].random` | `random_split`, pilots | `{activity_key, expected_low, expected_high}` equals `Case.random` (1..9 for 50 contacts at 10%) |
 | `contact_count: {min, max}` | pilots | a range, like `scenario_count` and `case_count` |
 | `branches_any_of` | pilots | `{branch: [allowed statuses]}` for the three branches whose status depends on the generator's cover; together with `branches` it lists every split outcome |
+| `cases[i].contact_constraints`, `cases[i].has_row`, `report_contains`, `report_not_contains`, `report_head_contains`, `testbook_contains`, `warnings_not_contain`, `csv_no_space_cells`, lists of alternatives | extension examples | see `docs/plan.md`, section "Esempi" |
 
 ## What expected.json cannot express yet
 
@@ -94,6 +111,8 @@ yet can ignore them, but they are part of the expected answer.
 
 ```
 python examples/build_examples.py
+python examples/build_fresh_examples.py
+python examples/build_extension_examples.py
 ```
 
 rewrites every `package.json` and checks, for every example: valid JSON, one selected journey, every

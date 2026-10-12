@@ -1,0 +1,64 @@
+{
+  "journey_name": "EX_AttributeComparisonUnsupported",
+  "activity_count": 5,
+  "csv_tables": [
+    "DE_AU_Entry",
+    "DE_AU_Prefs"
+  ],
+  "table_levels": {
+    "DE_AU_Entry": "contact",
+    "DE_AU_Prefs": "contact"
+  },
+  "branches": {
+    "SPLIT-1/path_a": {
+      "status": "covered"
+    },
+    "SPLIT-1/remainder_path": {
+      "status": "covered"
+    },
+    "SPLIT-2/path_a": {
+      "status": "not covered",
+      "reason_contains": "non supportat"
+    },
+    "SPLIT-2/remainder_path": {
+      "status": "not covered",
+      "reason_contains": "non supportat"
+    }
+  },
+  "scenario_count": {
+    "min": 1,
+    "max": 1
+  },
+  "case_count": {
+    "min": 2,
+    "max": 2
+  },
+  "contact_count": 6,
+  "cases": [
+    {
+      "has_row": {
+        "DE_AU_Prefs": true
+      },
+      "contact_values": {
+        "DE_AU_Prefs.Active": "True"
+      },
+      "manual_actions": [],
+      "contact_count": 3
+    },
+    {
+      "has_row": {
+        "DE_AU_Prefs": true
+      },
+      "contact_values": {
+        "DE_AU_Prefs.Active": "False"
+      },
+      "end_activity": "UPDATE-3",
+      "manual_actions": [],
+      "contact_count": 3
+    }
+  ],
+  "report_head_contains": [
+    "non supportat"
+  ],
+  "checks_pass": true
+}
