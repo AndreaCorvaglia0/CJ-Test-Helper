@@ -73,7 +73,7 @@ def report_head(report: str) -> str:
     return "\n".join(head)
 
 
-def testbook_text(result) -> str:
+def _testbook_text(result) -> str:
     import openpyxl
 
     book = openpyxl.load_workbook(io.BytesIO(outputs.write_testbook(result)))
@@ -99,7 +99,7 @@ def compare_texts(result, expected: dict, all_warnings: str, problems: list[str]
             if not contains(head, text):
                 problems.append(f"the opening of report.md does not contain {text!r}")
     if expected.get("testbook_contains"):
-        book = testbook_text(result)
+        book = _testbook_text(result)
         for text in expected["testbook_contains"]:
             if not contains(book, text):
                 problems.append(f"testbook.xlsx does not contain {text!r}")

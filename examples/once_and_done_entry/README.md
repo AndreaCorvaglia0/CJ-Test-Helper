@@ -20,7 +20,8 @@ entry query `SELECT M.ContactId, M.Emailaddress FROM [DE_Master] M`.
 2. **Modalità di ingresso.** Spec, "Entry source and procedure": "Entry modes `OnceAndDone` (no re-entry) and
    `SingleEntryAcrossAllVersions`: the testbook says every attempt needs a new run identifier." Il testbook contiene
    "run identifier". Con l'ingresso da automation la procedura resta quella del pilota ("Automation (the pilot) | As
-   before"), e oggi il testbook di un journey da automation non nomina il run identifier: la verifica distingue.
+   before"), e prima delle estensioni il testbook di un journey da automation non nominava il run identifier: la
+   verifica distingue il generatore esteso da quello di prima.
 
 ## Non verificato
 

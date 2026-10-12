@@ -26,7 +26,8 @@ Tabelle: `DE_RO_Entry` (ingresso: `SubscriberKey`, `EmailAddress`, `Optin` Boole
    and the testbook". Quindi:
    - report.md nomina Run Once e la nuova versione del journey (`versione`);
    - il testbook dice che un nuovo tentativo richiede una nuova versione e un nuovo run identifier.
-   Oggi nessuno dei due testi contiene "versione", e il testbook non contiene "run identifier".
+   Prima delle estensioni nessuno dei due testi conteneva "versione", e il testbook non conteneva "run identifier":
+   la verifica distingue il generatore esteso da quello di prima.
 
 ## Non verificato
 
@@ -34,5 +35,5 @@ Tabelle: `DE_RO_Entry` (ingresso: `SubscriberKey`, `EmailAddress`, `Optin` Boole
   nessun campo di attivazione (non c'è una entry query), quindi non c'è niente da osservare.
 - "The entry data extension must hold only test rows when the journey is activated; report.md says so for Run Once
   entries.": la formulazione non è fissata dalla spec, quindi non è controllata.
-- La frase "Importa ogni CSV, poi attiva il journey": "attiva" compare già nei testbook di oggi (attivazione dello
-  scenario) e non distinguerebbe nulla.
+- La frase "Importa ogni CSV, poi attiva il journey": "attiva" compariva già nei testbook di prima delle estensioni
+  (attivazione dello scenario) e non distinguerebbe nulla.
