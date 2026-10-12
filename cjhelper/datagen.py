@@ -22,6 +22,19 @@ path sends a message to a phone". None of the activity types supported by the Po
 ``Settings.fake_phone`` and ``Contact.uses_real_phone`` is always False. ``_uses_real_phone`` is
 the hook to change when an SMS activity type is supported.
 
+Spec, "Extensions beyond the pilot":
+
+- "A contact whose row is absent has no row in that table's CSV. This is the only exception to 'each
+  contact row finds its rows in the linked tables'." The tables with the "row present / row absent"
+  variable are ``CoverageResult.row_fields``; their linked field reads None in the case's values when the
+  row is absent. The entry rows and the other tables are unchanged.
+- "The deadline of a manual open or click is computed from the waits between the email and the
+  engagement split, with a warning when the window is under one hour." coverage.py gives each manual action
+  its waits (``Case.action_windows``); the deadline is the date written for the last wait by attribute
+  among them plus the fixed waits after it, and ``Case.not_before`` is the same for the case's whole path.
+- An entry that no automation feeds (Run Once, recurring schedule, CloudPages form, API event) has no entry
+  query by design: its entry rows come from the general rules without a warning.
+
 Nothing here reads the clock or draws random numbers: the generation time is passed in, so the same
 inputs always give the same rows ("The output is reproducible").
 """
@@ -33,13 +46,17 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
+from .graph import case_paths, fixed_wait_minutes
 from .model import (
+    ENTRY_AUTOMATION,
+    GENERATED_KEY,
     KIND_DECISION,
     KIND_WAIT_ATTRIBUTE,
     KIND_WAIT_DURATION,
     KIND_WAIT_STO,
     LEVEL_CONTACT,
     LEVEL_SCENARIO,
+    ActionWindow,
     Case,
     ColumnRef,
     Contact,
@@ -123,6 +140,9 @@ _REQUIREMENT_KINDS = ("key", "split", "activation", "filter", "wait")
 _CURRENT_DATE_DEFAULTS = ("getdate()", "getutcdate()", "sysdatetime()")
 
 _SKIP = object()   # a rule that does not apply to this row: try the next rule
+
+# Spec, "Honest outcomes": "a warning when the window is under one hour".
+SHORT_WINDOW_MINUTES = 60
 
 # The manual action as a verb in the warnings ("open" and "click" are ManualAction.kind values).
 _ACTION_VERBS = {"open": "aprire", "click": "cliccare"}
@@ -287,15 +307,26 @@ def _dotnet_to_strftime(dotnet_format: str) -> str:
     return dotnet_to_strftime(dotnet_format)
 
 
-def case_paths(case: Case) -> list[list[str]]:
-    """Activity keys of every full path of a case.
+def _fixed_minutes(keys: list[str], activities: dict) -> Optional[int]:
+    """Fixed duration of the waits among ``keys`` in minutes (graph.fixed_wait_minutes); None when unknown."""
+    total = 0
+    for key in keys:
+        activity = activities.get(key)
+        if activity is None or activity.kind not in _WAIT_KINDS:
+            continue
+        minutes = fixed_wait_minutes(activity)
+        if minutes is None:
+            return None
+        total += minutes
+    return total
 
-    A statistical case's ``steps`` stop at the random split; each random branch continues it.
-    """
-    base = [step.activity_key for step in case.steps]
-    if case.random is not None and case.random.branches:
-        return [base + [step.activity_key for step in branch.steps] for branch in case.random.branches]
-    return [base]
+
+def _minutes_text(minutes: int) -> str:
+    """A duration in words: "5 minuti", "1 ora", "2 giorni"."""
+    for size, one, many in ((24 * 60, "giorno", "giorni"), (60, "ora", "ore"), (1, "minuto", "minuti")):
+        if minutes % size == 0:
+            return _count(minutes // size, one, many)
+    return _count(minutes, "minuto", "minuti")
 
 
 def manual_wait_rank(wait_key: str, case: Case, activities: Optional[dict] = None) -> int:
@@ -843,7 +874,10 @@ class _Generator:
 
     def _other_or_value(self, ref: FieldRef, value: Value) -> object:
         """The coverage's 'other' value of an email or phone field only means "not one of the
-        condition values": the address or number rules (spec, "Email" and "Phone") give it."""
+        condition values": the address or number rules (spec, "Email" and "Phone") give it. The
+        coverage's generated-key marker means "the generated key": the key rule gives it."""
+        if value == GENERATED_KEY:
+            return _SKIP
         other = self.coverage.other_values.get(ref)
         if other is None or value != other:
             return value
@@ -1055,6 +1089,95 @@ class _Generator:
                             f"{_ACTION_VERBS.get(action.kind, 'aprire o cliccare')} l'email prima che lo split venga valutato."
                         )
 
+    def _fill_timing(self, scenarios: list[Scenario]) -> None:
+        """Spec, "Honest outcomes": "The deadline of a manual open or click is computed from the waits between
+        the email and the engagement split, with a warning when the window is under one hour. The testbook gives
+        each case's minimum duration."
+
+        For each window coverage.py found, the deadline is the date written for its last wait by attribute plus
+        the fixed waits after it; without a wait by attribute the window is relative to the email (``minutes``).
+        A window is short when it is under one hour: its deadline is less than an hour after the generation
+        time, or its fixed waits last less than an hour. A short window with no wait at all is already reported
+        by ``_check_engagement_waits``. ``Case.not_before`` is the same date for the whole path of the case."""
+        activities = self.package.journey.activities
+        for scenario in scenarios:
+            for case in scenario.cases:
+                for window in case.action_windows:
+                    if window.attribute_wait_key is not None:
+                        moment = self._wait_moment(window.attribute_wait_key, window.minutes_after_attribute_wait,
+                                                   scenario, case)
+                        window.deadline = self._format_date(moment) if moment is not None else None
+                        window.short = (moment is not None
+                                        and moment - self.generation_time < timedelta(minutes=SHORT_WINDOW_MINUTES))
+                    else:
+                        window.short = window.minutes is not None and window.minutes < SHORT_WINDOW_MINUTES
+                    if window.short and window.wait_keys:
+                        self._warn_short_window(window, case, activities)
+                latest: Optional[datetime] = None
+                for keys in case_paths(case):
+                    waits = [key for key in keys if key in activities and activities[key].kind in _WAIT_KINDS]
+                    attribute = [key for key in waits if activities[key].kind == KIND_WAIT_ATTRIBUTE]
+                    if not attribute:
+                        continue
+                    after = _fixed_minutes(waits[waits.index(attribute[-1]) + 1:], activities)
+                    moment = self._wait_moment(attribute[-1], after, scenario, case)
+                    if moment is not None and (latest is None or moment > latest):
+                        latest = moment
+                case.not_before = self._format_date(latest) if latest is not None else None
+
+    def _wait_moment(self, wait_key: str, minutes_after: Optional[int], scenario: Scenario,
+                     case: Case) -> Optional[datetime]:
+        """The date written for a wait by attribute in this case's rows, plus ``minutes_after``; None when the
+        date or the minutes are not known."""
+        activity = self.package.journey.activities.get(wait_key)
+        if activity is None or activity.wait_field is None or minutes_after is None:
+            return None
+        table = self._table(activity.wait_field[0])
+        field = table.field(activity.wait_field[1]) if table is not None else None
+        if field is None:
+            return None
+        level = self._levels.get(table.name.lower())
+        owner = scenario.key if level == LEVEL_SCENARIO else (case.contact_keys[0] if case.contact_keys else None)
+        row = self._row_index.get(table.name.lower(), {}).get(owner) if owner is not None else None
+        value = row.get(field.name) if row is not None else None
+        if value is None:
+            return None
+        try:
+            moment = datetime.strptime(value, self.settings.date_format)
+        except ValueError:
+            return None
+        return moment + timedelta(minutes=minutes_after)
+
+    def _warn_short_window(self, window: ActionWindow, case: Case, activities: dict) -> None:
+        """One warning per email and engagement split whose window is under one hour."""
+        email = activities.get(window.email_activity_key)
+        split = activities.get(window.activity_key)
+        email_name = email.email_name if email is not None and email.email_name else window.email_activity_key
+        split_name = f"'{split.name}' ({window.activity_key})" if split is not None and split.name else window.activity_key
+        action = next((a for a in case.manual_actions if a.activity_key == window.activity_key), None)
+        verb = _ACTION_VERBS.get(action.kind if action is not None else "", "aprire o cliccare")
+        if len(window.wait_keys) == 1:
+            waits, last = f"il wait {window.wait_keys[0]}", ("può terminare", "dura")
+        else:
+            waits, last = f"i wait {', '.join(window.wait_keys)}", ("possono terminare", "durano in tutto")
+        if window.attribute_wait_key is not None:
+            self._warn(
+                f"La scadenza per {verb} l'email {email_name!r} prima dell'engagement split {split_name} è il "
+                f"{window.deadline}, meno di un'ora dopo l'ora di generazione: il tester ha meno di un'ora. "
+                "L'offset della data di wait prima di un engagement split si cambia nelle impostazioni."
+            )
+        elif window.minutes == 0:
+            self._warn(
+                f"Tra l'email {email_name!r} e l'engagement split {split_name} {waits} {last[0]} subito: il tester "
+                f"potrebbe non avere il tempo di {verb} l'email prima che lo split venga valutato."
+            )
+        else:
+            self._warn(
+                f"Tra l'email {email_name!r} e l'engagement split {split_name} {waits} {last[1]} "
+                f"{_minutes_text(window.minutes)}: il tester ha meno di un'ora per {verb} l'email prima che lo split "
+                "venga valutato."
+            )
+
     @staticmethod
     def _has_wait_before(case: Case, action: ManualAction, activities: dict) -> bool:
         for keys in case_paths(case):
@@ -1082,12 +1205,14 @@ class _Generator:
         for table, level in self._tables_plan:
             if table is self._entry:
                 continue
-            contexts = scenario_rows if level == LEVEL_SCENARIO else contact_rows
+            contexts = scenario_rows if level == LEVEL_SCENARIO else self._present_rows(table, contact_rows)
             rows = [self._generic_row(table, context) for context in contexts]
             rows_by_table[table.name] = rows
             self._index_rows(table, level, contexts, rows)
         if self._entry is not None and any(table is self._entry for table, _ in self._tables_plan):
             rows_by_table[self._entry.name] = self._entry_rows(contact_rows)
+            self._index_rows(self._entry, LEVEL_CONTACT, contact_rows, rows_by_table[self._entry.name])
+        self._fill_timing(scenarios)
 
         tables = {
             table.name: TableData(table=table.name, columns=[f.name for f in _schema_fields(table)],
@@ -1106,6 +1231,20 @@ class _Generator:
                 for key in case.contact_keys:
                     contexts.append(_Row(len(contexts) + 1, scenario, case, key))
         return contexts
+
+    def _present_rows(self, table: Table, contexts: list[_Row]) -> list[_Row]:
+        """Spec, "Row present or absent": "A contact whose row is absent has no row in that table's CSV."
+        The rows left are numbered again, so ``n`` stays the row number in the table."""
+        linked = next((ref for name, ref in self.coverage.row_fields.items() if name.lower() == table.name.lower()),
+                      None)
+        if linked is None:
+            return contexts
+        present = [context for context in contexts
+                   if context.case is None or _lookup(context.case.contact_values, linked) != (True, None)]
+        if len(present) == len(contexts):
+            return contexts
+        return [_Row(number, context.scenario, context.case, context.contact_key)
+                for number, context in enumerate(present, 1)]
 
     def _generic_row(self, table: Table, row: _Row) -> dict[str, Value]:
         return {field.name: self._field_value(table, field, row) for field in _schema_fields(table)}
@@ -1134,10 +1273,14 @@ class _Generator:
         filled by the general rules like any contact-level table."""
         entry = self._entry
         if self.model.entry_query is None:
-            self._warn(
-                f"Nessuna entry query riempie {entry.name}, quindi le sue righe vengono generate dalle regole generali, "
-                "come per ogni tabella a livello di contatto, e niente garantisce che corrispondano alle tabelle sorgente."
-            )
+            event = self.package.entry_event
+            if event is None or event.kind == ENTRY_AUTOMATION:
+                # An entry that no automation feeds has no entry query by design: nothing to warn about.
+                self._warn(
+                    f"Nessuna entry query riempie {entry.name}, quindi le sue righe vengono generate dalle regole "
+                    "generali, come per ogni tabella a livello di contatto, e niente garantisce che corrispondano alle "
+                    "tabelle sorgente."
+                )
             return [self._generic_row(entry, context) for context in contexts]
         rows: list[dict[str, Value]] = []
         for context in contexts:

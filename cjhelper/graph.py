@@ -6,6 +6,19 @@ points to. Step 2: decision split outcomes are tried in order, the first true on
 wins, the remainder means none matched. Update-contact writes are tracked so a
 later split sees the written value.
 
+Spec, "Extensions beyond the pilot":
+
+- Data sources. A Journey Data condition (``Condition.source == SOURCE_JOURNEY``) reads the
+  entry row as it was at entry: "later Update contact writes do not change it". Contact Data
+  is read live, so it sees the writes ("applies to Contact Data only").
+- Row present or absent. For the tables given in ``row_fields`` (table -> its field linked
+  to the contact key) a contact may have no row: the row is absent when that field reads
+  null. "On an absent row, IsNull on any of its fields is true and every other operator is
+  false": every field of an absent row reads null. "An Update contact on that table inserts
+  the row: later reads see it present": the linked field then reads GENERATED_KEY, the
+  written fields their written value, the other fields null (assumption: a row inserted by
+  an Update contact has no value in the fields it does not write).
+
 The walker here serves two callers:
 
 - coverage.py explores the journey symbolically: some field values are not yet
@@ -35,6 +48,8 @@ from .model import (
     KIND_WAIT_ATTRIBUTE,
     KIND_WAIT_DURATION,
     KIND_WAIT_STO,
+    GENERATED_KEY,
+    SOURCE_JOURNEY,
     Activity,
     BranchRef,
     Condition,
@@ -122,25 +137,27 @@ ValueLookup = Callable[[FieldRef], "Value | Unknown"]
 
 
 def evaluate(formula: Optional[Formula], lookup: ValueLookup, schema: Schema,
-             case_insensitive: bool) -> "bool | Unknown":
+             case_insensitive: bool, snapshot: Optional[ValueLookup] = None) -> "bool | Unknown":
     """Evaluate a split formula. UNKNOWN propagates only when it could still change the answer.
 
     AND: any False -> False; else any UNKNOWN -> UNKNOWN; else True.
     OR:  any True -> True;   else any UNKNOWN -> UNKNOWN; else False.
     The remainder outcome has no formula and is handled by the caller.
+    ``lookup`` answers Contact Data conditions; ``snapshot``, when given, answers Journey Data
+    conditions (the entry row as it was at entry), otherwise ``lookup`` answers them too.
     """
     if formula is None:
         return True
     if isinstance(formula, Condition):
         ref = schema.canonical((formula.table, formula.field))
-        value = lookup(ref)
+        value = _reader(formula, lookup, snapshot)(ref)
         if isinstance(value, Unknown):
             return UNKNOWN
         return criteria.evaluate_condition(formula, value, schema.field_type(ref), case_insensitive)
     assert isinstance(formula, ConditionGroup)
     saw_unknown = False
     for item in formula.items:
-        r = evaluate(item, lookup, schema, case_insensitive)
+        r = evaluate(item, lookup, schema, case_insensitive, snapshot)
         if isinstance(r, Unknown):
             saw_unknown = True
         elif formula.operator == "AND" and r is False:
@@ -152,13 +169,47 @@ def evaluate(formula: Optional[Formula], lookup: ValueLookup, schema: Schema,
     return formula.operator == "AND"
 
 
-def first_unknown_field(formula: Optional[Formula], lookup: ValueLookup, schema: Schema) -> Optional[FieldRef]:
+def first_unknown_field(formula: Optional[Formula], lookup: ValueLookup, schema: Schema,
+                        snapshot: Optional[ValueLookup] = None) -> Optional[FieldRef]:
     """The first field, in document order, whose value is not decided yet."""
     for cond in formula_conditions(formula):
         ref = schema.canonical((cond.table, cond.field))
-        if isinstance(lookup(ref), Unknown):
+        if isinstance(_reader(cond, lookup, snapshot)(ref), Unknown):
             return ref
     return None
+
+
+def _reader(cond: Condition, lookup: ValueLookup, snapshot: Optional[ValueLookup]) -> ValueLookup:
+    """Journey Data conditions read the snapshot taken at entry, Contact Data conditions the live value."""
+    if snapshot is not None and cond.source == SOURCE_JOURNEY:
+        return snapshot
+    return lookup
+
+
+def is_null(value: "Value | Unknown") -> bool:
+    """Null as the criteria read it: None or an empty string (criteria.evaluate_condition)."""
+    return value is None or value == ""
+
+
+def row_lookup(lookup: ValueLookup, row_fields: dict[str, FieldRef]) -> ValueLookup:
+    """Spec, "Row present or absent": "On an absent row, IsNull on any of its fields is true and every other
+    operator is false (confirmed: a contact with no row reads its key as null)".
+
+    ``row_fields`` maps a lower-case table name to its field linked to the contact key (canonical); the
+    row is absent when that field reads null, and every field of an absent row then reads null.
+    """
+    if not row_fields:
+        return lookup
+
+    def read(ref: FieldRef):
+        linked = row_fields.get(ref[0].lower())
+        if linked is None or linked == ref:
+            return lookup(ref)
+        present = lookup(linked)
+        if isinstance(present, Unknown):
+            return UNKNOWN
+        return None if is_null(present) else lookup(ref)
+    return read
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +233,7 @@ class WalkState:
     writes: list[Write] = field(default_factory=list)
     waits: list[str] = field(default_factory=list)            # wait activity keys
     overrides: dict[FieldRef, Value] = field(default_factory=dict)   # update-contact writes, canonical refs
+    inserted: set[str] = field(default_factory=set)           # lower-case tables an update contact wrote into
     visited: set[str] = field(default_factory=set)
     current: Optional[str] = None                             # activity key to execute next
     stop: Optional[str] = None                                # STOP_* once the walk ended
@@ -192,7 +244,8 @@ class WalkState:
     def clone(self) -> "WalkState":
         return WalkState(
             steps=list(self.steps), emails_sent=list(self.emails_sent), writes=list(self.writes),
-            waits=list(self.waits), overrides=dict(self.overrides), visited=set(self.visited),
+            waits=list(self.waits), overrides=dict(self.overrides), inserted=set(self.inserted),
+            visited=set(self.visited),
             current=self.current, stop=None, stop_detail="", pending_field=None, pending_outcomes=[],
         )
 
@@ -238,18 +291,26 @@ def engagement_verdict(activity: Activity, state: WalkState, emails: dict[str, E
 class Walker:
     """Executes activities one at a time against a value lookup.
 
-    ``lookup(ref)`` returns the contact's value for a canonical field ref, or UNKNOWN.
-    Update-contact writes recorded in ``state.overrides`` take precedence over the lookup.
+    ``lookup(ref)`` returns the contact's value for a canonical field ref, as it is at entry, or UNKNOWN.
+    For Contact Data, update-contact writes recorded in ``state.overrides`` take precedence over the
+    lookup; Journey Data always reads the lookup (the snapshot taken at entry).
+    ``row_fields`` lists the tables with the "row present / row absent" variable (table -> its field
+    linked to the contact key, as in TableModel.existence_tested); see the module docstring.
     """
 
     def __init__(self, journey: Journey, schema: Schema, emails: dict[str, EmailAsset],
-                 case_insensitive: bool, now: Optional[datetime] = None, date_format: str = "%Y-%m-%d %H:%M"):
+                 case_insensitive: bool, now: Optional[datetime] = None, date_format: str = "%Y-%m-%d %H:%M",
+                 row_fields: Optional[dict[str, FieldRef]] = None):
         self.journey = journey
         self.schema = schema
         self.emails = emails
         self.case_insensitive = case_insensitive
         self.now = now or datetime.now()
         self.date_format = date_format
+        self.row_fields: dict[str, FieldRef] = {}
+        for ref in (row_fields or {}).values():
+            linked = schema.canonical(ref)
+            self.row_fields[linked[0].lower()] = linked
         # Optional observer called when a decision split is taken, with the values of the fields
         # its outcomes read at that moment (coverage.py uses it to explain unreachable branches).
         self.on_decision: Optional[Callable[[Activity, dict[FieldRef, Value]], None]] = None
@@ -263,9 +324,20 @@ class Walker:
         return state
 
     def value_of(self, state: WalkState, ref: FieldRef, lookup: ValueLookup) -> "Value | Unknown":
+        """Contact Data, read live: the value written by an update contact, else the contact's row."""
         if ref in state.overrides:
             return state.overrides[ref]
-        return lookup(ref)
+        linked = self.row_fields.get(ref[0].lower())
+        if linked is not None and ref[0].lower() in state.inserted:
+            present = lookup(linked)
+            if not isinstance(present, Unknown) and is_null(present):
+                # The row was absent and an update contact inserted it.
+                return GENERATED_KEY if ref == linked else None
+        return row_lookup(lookup, self.row_fields)(ref)
+
+    def snapshot_of(self, ref: FieldRef, lookup: ValueLookup) -> "Value | Unknown":
+        """Journey Data: the entry row as it was at entry, whatever the update contacts wrote."""
+        return row_lookup(lookup, self.row_fields)(ref)
 
     def run(self, state: WalkState, lookup: ValueLookup,
             choose: Optional[Callable[[Activity, WalkState], Optional[Outcome]]] = None) -> WalkState:
@@ -342,6 +414,9 @@ class Walker:
         def value(ref: FieldRef):
             return self.value_of(state, ref, lookup)
 
+        def snapshot(ref: FieldRef):
+            return self.snapshot_of(ref, lookup)
+
         def observe() -> None:
             if self.on_decision is None:
                 return
@@ -349,7 +424,7 @@ class Walker:
             for o in activity.outcomes:
                 for cond in formula_conditions(o.formula):
                     ref = self.schema.canonical((cond.table, cond.field))
-                    v = value(ref)
+                    v = _reader(cond, value, snapshot)(ref)
                     if not isinstance(v, Unknown):
                         seen[ref] = v
             self.on_decision(activity, seen)
@@ -371,7 +446,7 @@ class Walker:
                                      f"non è supportato: {outcome.unsupported_reason}")
                 return
             try:
-                result = evaluate(outcome.formula, value, self.schema, self.case_insensitive)
+                result = evaluate(outcome.formula, value, self.schema, self.case_insensitive, snapshot)
             except criteria.UnsupportedOperator as exc:
                 state.steps.append(Step(activity.key, None))
                 state.stop = STOP_ERROR
@@ -379,7 +454,7 @@ class Walker:
                 return
             if isinstance(result, Unknown):
                 state.stop = STOP_UNDETERMINED
-                state.pending_field = first_unknown_field(outcome.formula, value, self.schema)
+                state.pending_field = first_unknown_field(outcome.formula, value, self.schema, snapshot)
                 state.visited.discard(activity.key)   # the caller will re-run this activity
                 return
             if result:
@@ -394,7 +469,8 @@ class Walker:
         state.stop_detail = f"lo split '{activity.key}' non trova alcun branch corrispondente e non ha un remainder"
 
     def _update(self, activity: Activity, state: WalkState) -> None:
-        """Spec: written values are tracked so a later split reads the updated value."""
+        """Spec: written values are tracked so a later split reads the updated value (Contact Data only);
+        a write into a table with the "row present / row absent" variable inserts the contact's row."""
         for w in activity.writes:
             ref = self.schema.canonical((w.table, w.field))
             value = w.value
@@ -402,6 +478,48 @@ class Walker:
                 value = self.now.strftime(self.date_format)
             state.overrides[ref] = value
             state.writes.append(Write(ref[0], ref[1], value))
+            if ref[0].lower() in self.row_fields:
+                state.inserted.add(ref[0].lower())
+
+
+# ---------------------------------------------------------------------------
+# Paths and waits
+# ---------------------------------------------------------------------------
+
+def case_paths(case) -> list[list[str]]:
+    """Activity keys of every full path of a case (model.Case).
+
+    A statistical case's ``steps`` stop at the random split; each random branch continues it.
+    """
+    base = [step.activity_key for step in case.steps]
+    if case.random is not None and case.random.branches:
+        return [base + [step.activity_key for step in branch.steps] for branch in case.random.branches]
+    return [base]
+
+
+# Minutes per wait unit as written in the export (waitUnit). A month and a year count their shortest
+# length, 28 and 365 days, because the durations computed here are minimum durations.
+WAIT_UNIT_MINUTES = {
+    "MINUTE": 1, "HOUR": 60, "DAY": 24 * 60, "WEEK": 7 * 24 * 60, "MONTH": 28 * 24 * 60, "YEAR": 365 * 24 * 60,
+}
+
+
+def fixed_wait_minutes(activity: Activity) -> Optional[int]:
+    """The shortest time a wait by duration or a send-time wait holds a contact, in minutes.
+
+    Spec, "Honest outcomes": the window of a manual action and the minimum duration of a case come from
+    the waits on the path. A wait by duration lasts its amount (``specifiedTime``, a time of day the wait
+    ends at, can only make it longer). A send-time wait may send at once, so it counts 0. A wait by attribute
+    counts 0 here: it ends at a date, which is a value of the data (datagen.py). None when the amount or the
+    unit cannot be read.
+    """
+    if activity.kind == KIND_WAIT_DURATION:
+        unit = (activity.wait_unit or "").strip().upper()
+        per_unit = WAIT_UNIT_MINUTES.get(unit[:-1] if unit.endswith("S") else unit)
+        if per_unit is None or activity.wait_amount is None or activity.wait_amount < 0:
+            return None
+        return activity.wait_amount * per_unit
+    return 0
 
 
 # ---------------------------------------------------------------------------

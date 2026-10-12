@@ -223,6 +223,10 @@ Chiama `sqlparse_lite.parse_query` da sé. Regole (spec "Table selection" e "Cla
 | `Journey.entry_mode`, `goal_count`, `exit_count` | `entryMode` del journey; goal ed exit criteria presenti (non modellati) |
 | `Package.missing_relationships` | Tabelle lette da uno split tramite un attribute set senza relazioni nell'export |
 | `TableModel.existence_tested` | Tabelle con la variabile "riga presente / riga assente" -> campo collegato alla chiave del contatto |
+| `CoverageResult.row_fields`, `row_absent(case, table)`, `GENERATED_KEY` | Le stesse tabelle come le usa la coverage; nei valori del caso il campo collegato vale `GENERATED_KEY` (riga presente) o None (riga assente) |
+| `Case.unknown_from`, `Case.unknown_reason`, `RandomBranch.unknown_from`, `RandomBranch.unknown_reason` | Il percorso atteso non è noto da questa attività in poi, e perché |
+| `ActionWindow`, `Case.action_windows` | Finestra di ogni azione manuale: wait tra email e split, durata fissa, ultimo wait by attribute, scadenza, sotto un'ora |
+| `Case.min_duration_minutes`, `Case.not_before` | Durata minima del caso (wait a durata fissa) e data prima della quale non può finire (wait by attribute) |
 
 ### graph.py e coverage.py (lead)
 
@@ -235,6 +239,36 @@ Producono `CoverageResult`. Ciò su cui i consumatori possono contare:
 - `Scenario.run_order` parte da 1; gli scenari con azioni manuali vengono per primi. `Case.id` è `S01-C01`.
 - `Case.contact_count` è 3 oppure il numero di contatti del caso statistico. `Case.waits` elenca, in ordine, le chiavi delle activity wait attraversate.
 - `ManualAction` dice a datagen quali contatti hanno bisogno dell'inbox reale.
+
+Regole aggiunte dalla sezione della spec "Extensions beyond the pilot" (12 ottobre 2026):
+
+- Journey Data: una condizione `SOURCE_JOURNEY` legge la riga di ingresso com'era all'ingresso (la fotografia). Gli
+  Update contact cambiano solo ciò che leggono le condizioni Contact Data (`graph.evaluate(..., snapshot)`); per il
+  resto un campo Journey Data è un campo a livello di contatto della tabella di ingresso.
+- Riga presente o assente: per ogni tabella di `TableModel.existence_tested` il campo collegato alla chiave del
+  contatto ha il dominio `[GENERATED_KEY, None]`: `GENERATED_KEY` è "riga presente", None è "riga assente".
+  `CoverageResult.row_fields` elenca queste tabelle (tabella -> campo collegato) e `CoverageResult.row_absent(case,
+  tabella)` dice se i contatti del caso non hanno la riga. Su una riga assente ogni campo vale None: `IsNull` è vero,
+  ogni altro operatore è falso, e nei `Case.contact_values` gli altri campi di quella tabella sono None. Un Update
+  contact che scrive in quella tabella inserisce la riga: dopo, il campo collegato vale `GENERATED_KEY`, i campi
+  scritti il valore scritto, gli altri None (assunzione). `graph.Walker(..., row_fields=...)` applica queste regole:
+  checks.py, che simula i contatti dai file, deve passargli `TableModel.existence_tested`.
+- Valori: su un campo Number, Decimal o Date confrontato con `GreaterThan`, `GreaterThanOrEqual`, `LessThan`,
+  `LessThanOrEqual` o `Between`, i valori delle condizioni tagliano i valori in intervalli e il dominio prende un
+  valore strettamente dentro ciascun intervallo (sotto il più basso, in mezzo a due vicini, sopra il più alto: per un
+  Decimal anche alla sua scala), poi i valori citati dagli altri operatori; un estremo non è mai provato. Un campo
+  di testo non riceve valori dagli intervalli, e un warning lo dice.
+- Preferenza: tra valori che coprono gli stessi branch vince quello con meno null e righe assenti, poi meno righe
+  assenti, poi meno valori citati al posto di valori interni a un intervallo. Decide il rappresentante di ogni classe
+  di contatti e lo scenario tenuto per ogni firma. Tra scenari diversi che coprono gli stessi branch conta solo il
+  terzo criterio: il criterio dei null cambierebbe lo scenario S18 del pilota, che deve restare identico.
+- `Case.unknown_from` e `Case.unknown_reason` (anche su `RandomBranch`): l'attività in cui il percorso simulato si è
+  fermato senza uscire dal journey (elemento non supportato, operatore non valutabile, ...), e perché; da lì in poi il
+  percorso atteso non è noto.
+- `Case.action_windows`: una `ActionWindow` per ogni azione manuale, con i wait tra l'email e l'engagement split, la
+  loro durata fissa in minuti (`graph.fixed_wait_minutes`: un send-time wait vale 0, un mese 28 giorni) e l'ultimo
+  wait by attribute tra loro. `Case.min_duration_minutes`: la durata fissa dei wait del percorso più lungo del caso
+  (None se una durata non è leggibile).
 
 ### datagen.py
 
@@ -270,6 +304,16 @@ Implementa esattamente le "Data generation rules" della spec, in ordine di prior
   `False`, Date ora di generazione, Number/Decimal `str(n)`, Locale `en-US`.
 - `scenarios_rows`: una per scenario: `scenario_key, run_order, has_manual_action, is_statistical, case_count,
   contact_count, first_contact_key, last_contact_key, activate` più una colonna per ogni campo dello scenario `Table.Field`.
+- Riga assente (sezione "Extensions beyond the pilot"): un contatto il cui caso ha la riga assente in una tabella di
+  `CoverageResult.row_fields` non ha righe nel CSV di quella tabella; le righe rimaste sono numerate di nuovo. Le
+  righe di ingresso e le altre tabelle non cambiano. Il valore `GENERATED_KEY` della coverage è la chiave generata.
+- Un ingresso che nessuna automation alimenta (Run Once, pianificazione ricorrente, form, API event) non ha una entry
+  query per costruzione: le righe di ingresso vengono dalle regole generali senza warning.
+- Finestre delle azioni manuali: per ogni `ActionWindow` con un wait by attribute, `deadline` = la data scritta per
+  quel wait nelle righe del caso più la durata fissa dei wait dopo di esso; senza wait by attribute la finestra è
+  `minutes` minuti dall'arrivo dell'email. `short` quando la finestra è sotto un'ora (scadenza a meno di un'ora
+  dall'ora di generazione, o `minutes` < 60), con un warning per email ed engagement split.
+  `Case.not_before` = la stessa data per l'intero percorso del caso.
 
 ### outputs.py
 

@@ -180,3 +180,93 @@ def test_between_and_row_present_conditions_are_evaluated():
     assert st.steps[0] == Step("SPLIT-1", "remainder_path")
     st = w.run(w.start(), lookup_from({("DE_Master", "Channel"): "e"}))
     assert st.stop == graph.STOP_UNDETERMINED and st.pending_field == ("DE_Master", "ContactId")
+
+
+# ---------------------------------------------------------------------------
+# Spec, "Extensions beyond the pilot": Journey Data snapshot, row present or absent, waits
+# ---------------------------------------------------------------------------
+
+FORM = table("DE_Form", [field("ContactId", pk=True, nullable=False), field("Consent", "Boolean"),
+                         field("Source", "Text", length=20)], sendable_field="ContactId")
+
+
+def row_walker(acts):
+    """A walker that knows DE_Form has the "row present / row absent" variable on ContactId."""
+    j = journey(acts)
+    tables = {t.name: t for t in (MASTER, ENTRY, FORM)}
+    return graph.Walker(j, graph.Schema(tables), {}, False, datetime(2026, 10, 11, 12, 0),
+                        row_fields={"DE_Form": ("DE_Form", "ContactId")}), j
+
+
+def test_journey_data_reads_the_snapshot_taken_at_entry_and_contact_data_the_written_value():
+    """Spec: Journey Data "is the snapshot taken at entry: later Update contact writes do not change it";
+    "a later split that reads the same field sees the updated value" applies to Contact Data only."""
+    from cjhelper.model import SOURCE_JOURNEY, Condition
+
+    journey_tier = Condition("DE_Master", "Channel", "Equal", "Gold", source=SOURCE_JOURNEY)
+    acts = [
+        update("UPD-1", "set", [("DE_Master", "Channel", "Silver")], "SPLIT-1"),
+        decision("SPLIT-1", "journey data", [("a", "A", "SPLIT-2", journey_tier)], remainder_next=None),
+        decision("SPLIT-2", "contact data", [("a", "A", None, cond("DE_Master", "Channel", "Equal", "Silver"))],
+                 remainder_next=None),
+    ]
+    w, j = build_walker(acts)
+    st = w.run(w.start(), lookup_from({("DE_Master", "Channel"): "Gold"}))
+    assert st.steps == [Step("UPD-1", "UPD-1-out"), Step("SPLIT-1", "a"), Step("SPLIT-2", "a")]
+    # the snapshot is used by evaluate only when it is given
+    snapshot = lookup_from({("DE_Master", "Channel"): "Gold"})
+    live = lookup_from({("DE_Master", "Channel"): "Silver"})
+    assert graph.evaluate(journey_tier, live, schema(), False, snapshot) is True
+    assert graph.evaluate(journey_tier, live, schema(), False) is False
+
+
+def test_absent_row_reads_null_in_every_field():
+    """Spec: "On an absent row, IsNull on any of its fields is true and every other operator is false"."""
+    acts = [decision("SPLIT-1", "s", [("null", "N", "UPD-N", cond("DE_Form", "Source", "IsNull")),
+                                      ("consent", "C", "UPD-C", cond("DE_Form", "Consent", "Is", "true"))],
+                     remainder_next="UPD-R"),
+            update("UPD-N", "N", [], None), update("UPD-C", "C", [], None), update("UPD-R", "R", [], None)]
+    w, j = row_walker(acts)
+    absent = lookup_from({("DE_Form", "ContactId"): None, ("DE_Form", "Source"): "Web", ("DE_Form", "Consent"): "True"})
+    assert w.run(w.start(), absent).steps[0] == Step("SPLIT-1", "null")
+    present = lookup_from({("DE_Form", "ContactId"): "TST_C1", ("DE_Form", "Source"): "Web",
+                           ("DE_Form", "Consent"): "True"})
+    assert w.run(w.start(), present).steps[0] == Step("SPLIT-1", "consent")
+    # the same masking as a plain lookup, for callers that evaluate formulas themselves
+    masked = graph.row_lookup(absent, {"de_form": ("DE_Form", "ContactId")})
+    assert masked(("DE_Form", "Consent")) is None and masked(("DE_Master", "Perm")) is graph.UNKNOWN
+
+
+def test_update_contact_inserts_an_absent_row():
+    """Spec: "An Update contact on that table inserts the row: later reads see it present"; the fields it does
+    not write read null (assumption)."""
+    acts = [
+        update("UPD-1", "record", [("DE_Form", "Source", "Journey")], "SPLIT-1"),
+        decision("SPLIT-1", "still absent?", [("a", "A", None, cond("DE_Form", "ContactId", "IsNull"))],
+                 remainder_next="SPLIT-2"),
+        decision("SPLIT-2", "consent", [("a", "A", None, cond("DE_Form", "Consent", "IsNull"))], remainder_next=None),
+    ]
+    w, j = row_walker(acts)
+    st = w.run(w.start(), lookup_from({("DE_Form", "ContactId"): None, ("DE_Form", "Consent"): "True"}))
+    assert st.steps[1:] == [Step("SPLIT-1", "remainder_path"), Step("SPLIT-2", "a")]
+    assert st.inserted == {"de_form"}
+    # a row that was there keeps its other values
+    st = w.run(w.start(), lookup_from({("DE_Form", "ContactId"): "TST_C1", ("DE_Form", "Consent"): "True"}))
+    assert st.steps[1:] == [Step("SPLIT-1", "remainder_path"), Step("SPLIT-2", "remainder_path")]
+
+
+def test_fixed_wait_minutes_and_case_paths():
+    from tests.helpers import wait_attr, wait_dur
+    from cjhelper.model import KIND_WAIT_STO, Activity, Case, RandomBranch, RandomInfo
+
+    assert graph.fixed_wait_minutes(wait_dur("W-1", 5, "MINUTES", None)) == 5
+    assert graph.fixed_wait_minutes(wait_dur("W-2", 2, "DAYS", None)) == 2 * 24 * 60
+    assert graph.fixed_wait_minutes(wait_dur("W-3", 1, "Hour", None)) == 60
+    assert graph.fixed_wait_minutes(wait_dur("W-4", 1, "MONTHS", None)) == 28 * 24 * 60   # the shortest month
+    assert graph.fixed_wait_minutes(wait_dur("W-5", 3, "FORTNIGHTS", None)) is None
+    assert graph.fixed_wait_minutes(wait_attr("W-6", "DE_Master", "Channel", None)) == 0
+    assert graph.fixed_wait_minutes(Activity("STO-1", "STOWAIT", KIND_WAIT_STO, "", [], wait_amount=24)) == 0
+    branch = RandomBranch("b", 50, (Step("U-2", None),), (), (), "U-2")
+    case = Case("S01-C01", "S01", 1, {}, [Step("U-1", "o"), Step("R-1", None)], [], [], [], [], "R-1", 50,
+                random=RandomInfo("R-1", [branch], 1, 9))
+    assert graph.case_paths(case) == [["U-1", "R-1", "U-2"]]

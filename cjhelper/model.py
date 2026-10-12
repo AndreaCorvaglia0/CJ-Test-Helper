@@ -516,6 +516,28 @@ class RandomBranch:
     emails_sent: tuple[str, ...]
     writes: tuple[Write, ...]
     end_activity_key: Optional[str]
+    unknown_from: Optional[str] = None   # as Case.unknown_from, for this branch's path
+    unknown_reason: str = ""
+
+
+@dataclass
+class ActionWindow:
+    """The time a tester has for one manual open or click (spec, "Extensions beyond the pilot", "Honest
+    outcomes": "The deadline of a manual open or click is computed from the waits between the email and the
+    engagement split, with a warning when the window is under one hour").
+
+    coverage.py fills the waits and their fixed duration; datagen.py fills ``deadline`` and ``short``,
+    because the date of a wait by attribute is the value it writes. Without a wait by attribute the
+    deadline is relative: ``minutes`` after the email arrives.
+    """
+    activity_key: str                    # the engagement split
+    email_activity_key: str
+    wait_keys: list[str]                 # waits between the email and the split, in path order
+    minutes: Optional[int]               # fixed duration of those waits (send-time waits count 0); None = unknown
+    attribute_wait_key: Optional[str] = None   # the last wait by attribute among them: the window ends at its date
+    minutes_after_attribute_wait: Optional[int] = 0   # plus the fixed duration of the waits after it
+    deadline: Optional[str] = None       # that date plus those minutes, in Settings.date_format (datagen)
+    short: bool = False                  # the window is under one hour (datagen)
 
 
 @dataclass
@@ -551,6 +573,18 @@ class Case:
     contact_keys: list[str] = field(default_factory=list)   # filled by datagen
     summary: str = ""                # short path summary for the testbook title
     inbox_blocked_reason: Optional[str] = None   # manual action impossible: a split fixes the address
+    # Spec, "Honest outcomes": "Past an unsupported element the expected result says the path is unknown from
+    # that activity on". The activity where the simulated path stopped without reaching an exit (an unsupported
+    # activity or branch, an operator the PoC cannot evaluate...), and why; None when the path is known to the end.
+    unknown_from: Optional[str] = None
+    unknown_reason: str = ""
+    action_windows: list[ActionWindow] = field(default_factory=list)   # one per manual action, same order
+    # Spec, "Honest outcomes": "The testbook gives each case's minimum duration." Fixed duration waits on the
+    # path, in minutes (send-time waits and waits by attribute count 0: the date of the last wait by attribute is
+    # ``not_before``); for a statistical case the longest of its branches. None when a duration is unknown.
+    min_duration_minutes: Optional[int] = 0
+    not_before: Optional[str] = None     # the case cannot end before this date: the last wait by attribute on
+                                         # its path plus the fixed waits after it (datagen); None without one
 
 
 @dataclass
@@ -595,10 +629,25 @@ class CoverageResult:
     other_values: dict[FieldRef, Value] = field(default_factory=dict)   # the 'other' value of each field
     warnings: list[str] = field(default_factory=list)
     stats: dict[str, int] = field(default_factory=dict)
+    # Spec, "Row present or absent": table -> its field linked to the contact key, for each table with the
+    # "row present / row absent" variable (TableModel.existence_tested, as coverage uses it). In
+    # Case.contact_values that field holds GENERATED_KEY when the contact has a row and None when it has none;
+    # the other fields of an absent row are None too, and datagen writes no row for that contact.
+    row_fields: dict[str, FieldRef] = field(default_factory=dict)
 
     @property
     def cases(self) -> list[Case]:
         return [c for s in self.scenarios for c in s.cases]
+
+    def row_absent(self, case: Case, table: str) -> bool:
+        """True when the contacts of ``case`` have no row in ``table`` (spec, "Row present or absent")."""
+        ref = self.row_fields.get(table)
+        return ref is not None and ref in case.contact_values and case.contact_values[ref] is None
+
+
+# The value of a key field in coverage domains and contact values: "the generated key" (data rule 1). For the
+# field linked to the contact key of a table with the "row present / row absent" variable it means "row present".
+GENERATED_KEY = "<generated key>"
 
 
 # ---------------------------------------------------------------------------

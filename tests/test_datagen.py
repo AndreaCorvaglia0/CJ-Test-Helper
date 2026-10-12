@@ -1102,3 +1102,106 @@ def test_contact_level_field_in_a_scenario_row_with_different_case_values_is_war
     warned = [w for w in data.warnings if f"{CONFIG}.Label" in w]
     assert len(warned) == 1
     assert "S01" in warned[0] and "'Aaa'" in warned[0]
+
+
+# ---------------------------------------------------------------------------
+# Spec, "Extensions beyond the pilot": rows present or absent, windows of the manual actions
+# ---------------------------------------------------------------------------
+
+from cjhelper import coverage as coverage_module  # noqa: E402
+from cjhelper.model import ENTRY_RUN_ONCE  # noqa: E402
+from tests import helpers as h  # noqa: E402
+
+H_ENTRY = h.table("DE_Entry", [h.field("ContactId", pk=True, nullable=False), h.field("Email", "EmailAddress")],
+                  sendable_field="ContactId")
+H_FORM = h.table("DE_Form", [h.field("ContactId", pk=True, nullable=False), h.field("Consent", "Boolean"),
+                             h.field("Note", "Text", length=20)])
+H_MASTER = h.table("DE_Master", [h.field("ContactId", pk=True, nullable=False), h.field("Perm", "Boolean"),
+                                 h.field("Reminder", "Date")])
+
+
+def helper_world(acts, tables, levels, existence=None, emails=None, entry_kind=None, **settings):
+    """Coverage of a small helper-built journey, ready for generate_data (entry with no entry query)."""
+    pkg = h.package(h.journey(acts), tables, emails)
+    if entry_kind is not None:
+        pkg.entry_event.kind = entry_kind
+    groups = [("contact", [(t.name, "ContactId") for t in tables])]
+    model = h.table_model("DE_Entry", "ContactId", levels, groups, tables)
+    model.existence_tested = dict(existence or {})
+    s = Settings(generation_time=GEN_TIME, **settings)
+    cov = coverage_module.compute_coverage(pkg, model, s, GEN_TIME)
+    return World(pkg, model, cov, s, GEN_TIME)
+
+
+def form_world(**kwargs):
+    acts = [h.decision("SPLIT-1", "form?", [("none", "no form", "UPD-1", h.cond("DE_Form", "ContactId", "IsNull"))],
+                       remainder_next="SPLIT-2"),
+            h.decision("SPLIT-2", "consent", [("yes", "yes", "UPD-2", h.cond("DE_Form", "Consent", "Is", "true"))],
+                       remainder_next="UPD-3"),
+            h.update("UPD-1", "1", [], None), h.update("UPD-2", "2", [], None), h.update("UPD-3", "3", [], None)]
+    return helper_world(acts, [H_ENTRY, H_FORM], {"DE_Entry": LEVEL_CONTACT, "DE_Form": LEVEL_CONTACT},
+                        existence={"DE_Form": ("DE_Form", "ContactId")}, **kwargs)
+
+
+def test_contact_whose_row_is_absent_has_no_row_in_that_table():
+    """Spec: "A contact whose row is absent has no row in that table's CSV"; entry rows are unchanged."""
+    world = form_world()
+    data = run(world)
+    absent = next(c for c in world.coverage.cases if c.end_activity_key == "UPD-1")
+    present = [c for c in world.coverage.cases if c is not absent]
+    form_keys = [row["ContactId"] for row in rows_of(data, "DE_Form")]
+    assert form_keys == [key for c in present for key in c.contact_keys]
+    assert not set(absent.contact_keys) & set(form_keys)
+    assert len(rows_of(data, "DE_Entry")) == 9
+    # placeholders count the rows of the table, which are fewer than the contacts
+    assert [row["Note"] for row in rows_of(data, "DE_Form")] == [f"TST_Note_{n}" for n in range(1, 7)]
+    # the linked key holds the generated key without a warning about the split value it replaces
+    assert not any("<generated key>" in w for w in data.warnings)
+
+
+def test_entry_without_an_automation_needs_no_entry_query():
+    data = run(form_world(entry_kind=ENTRY_RUN_ONCE))
+    assert not any("Nessuna entry query" in w for w in data.warnings)
+    assert any("Nessuna entry query" in w for w in run(form_world()).warnings)   # automation entry: still warned
+
+
+def engagement_world(minutes, **settings):
+    emails = {"A1": h.email_asset("A1", "Flash"), "A2": h.email_asset("A2", "Slow")}
+    acts = [h.decision("SPLIT-1", "perm", [("ok", "ok", "EMAIL-1", h.cond("DE_Master", "Perm", "Is", "true"))],
+                       remainder_next="EMAIL-2"),
+            h.email("EMAIL-1", "Flash", "A1", "WAIT-1"), h.wait_dur("WAIT-1", minutes, "MINUTES", "ENG-1"),
+            h.engagement("ENG-1", "Open Flash", "open", "EMAIL-1", None, None),
+            h.email("EMAIL-2", "Slow", "A2", "WAIT-2"), h.wait_attr("WAIT-2", "DE_Master", "Reminder", "WAIT-3"),
+            h.wait_dur("WAIT-3", 30, "MINUTES", "ENG-2"),
+            h.engagement("ENG-2", "Open Slow", "open", "EMAIL-2", None, None)]
+    return helper_world(acts, [H_ENTRY, H_MASTER], {"DE_Entry": LEVEL_CONTACT, "DE_Master": LEVEL_CONTACT},
+                        emails=emails, real_inbox="tester@example.com", **settings)
+
+
+def test_short_window_of_a_manual_action_is_warned_and_the_deadline_follows_the_wait_date():
+    """Spec, "Honest outcomes": "The deadline of a manual open or click is computed from the waits between the
+    email and the engagement split, with a warning when the window is under one hour"."""
+    world = engagement_world(5)
+    data = run(world)
+    flash = next(c for c in world.coverage.cases if c.manual_actions and c.end_activity_key == "ENG-1")
+    [window] = flash.action_windows
+    assert window.short and window.deadline is None and window.minutes == 5
+    assert any("'Flash'" in w and "ENG-1" in w and "WAIT-1" in w and "5 minuti" in w and "meno di un'ora" in w
+               for w in data.warnings)
+    slow = next(c for c in world.coverage.cases if c.manual_actions and c.end_activity_key == "ENG-2")
+    [window] = slow.action_windows
+    # the wait date before the engagement split is 24 hours after the generation time, plus the 30 minutes after it
+    assert window.deadline == "2026-10-12 10:00" and not window.short
+    assert slow.not_before == "2026-10-12 10:00"
+    assert not any("'Slow'" in w or "ENG-2" in w for w in data.warnings)
+    assert flash.not_before is None
+
+
+def test_long_fixed_window_is_not_warned_and_a_short_wait_date_is():
+    data = run(engagement_world(120))
+    assert not any("meno di un'ora" in w for w in data.warnings)
+    world = engagement_world(120, wait_offset_before_engagement_hours=0)
+    data = run(world)
+    slow = next(c for c in world.coverage.cases if c.manual_actions and c.end_activity_key == "ENG-2")
+    assert slow.action_windows[0].short and slow.action_windows[0].deadline == "2026-10-11 10:00"
+    assert any("'Slow'" in w and "2026-10-11 10:00" in w and "meno di un'ora" in w for w in data.warnings)
