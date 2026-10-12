@@ -342,9 +342,9 @@ FORM = table("DE_Form", [field("ContactId", pk=True, nullable=False), field("Con
 RANGES = table("DE_Config", [field("CampaignName", pk=True, nullable=False), field("Score", "Number", nullable=False)])
 
 
-def row_run(acts, settings=None):
+def row_run(acts, settings=None, form=FORM):
     """DE_Form is a contact-level table whose existence a split tests (TableModel.existence_tested)."""
-    tables = [ENTRY, MASTER, FORM]
+    tables = [ENTRY, MASTER, form]
     levels = {"DE_Entry": LEVEL_CONTACT, "DE_Master": LEVEL_CONTACT, "DE_Form": LEVEL_CONTACT}
     groups = [("contact", [("DE_Entry", "ContactId"), ("DE_Master", "ContactId"), ("DE_Form", "ContactId")])]
     tm = table_model("DE_Entry", "ContactId", levels, groups, tables)
@@ -378,6 +378,24 @@ def test_range_values_are_strictly_inside_the_ranges():
     # a text range gets no value from its bounds, and a warning; "low|high" is never a candidate value
     domain, _, warnings = coverage.build_domain("Text", [c("Between", "a|c"), c("Equal", "b")], True, False, fmt)
     assert domain == ["b", "OTHER", None] and "a|c" not in domain and any("intervalli di testo" in w for w in warnings)
+
+
+def test_branch_needing_a_value_inside_a_text_range_is_reported_as_unsupported():
+    """A text field gets no value inside a range, so a branch that needs one is not covered because of an
+    element the generator does not support (spec, "Honest outcomes"), not reported as unreachable."""
+    acts = [decision("SPLIT-1", "region", [("low", "low", "UPD-1", cond("DE_Config", "Channel", "LessThan", "A")),
+                                           ("sms", "sms", "UPD-2", cond("DE_Config", "Channel", "Equal", "SMS"))],
+                     remainder_next="UPD-3"),
+            update("UPD-1", "1", [], None), update("UPD-2", "2", [], None), update("UPD-3", "3", [], None)]
+    r = run(acts, [ENTRY, MASTER, CONFIG], scenario=True)
+    assert not any("non è negli schemi" in w for w in r.warnings)
+    low = status(r, "SPLIT-1", "low")
+    assert low.status == STATUS_NOT_COVERED and low.reason.startswith("branch non supportato")
+    assert "LessThan" in low.reason and "non raggiungibile" not in low.reason
+    assert r.unsupported == ["SPLIT-1/low"] and "Number, Decimal e Date" in r.unsupported_reasons["SPLIT-1/low"]
+    # the other branches of the split are still evaluated and covered
+    assert status(r, "SPLIT-1", "sms").status == STATUS_COVERED
+    assert status(r, "SPLIT-1", "remainder_path").status == STATUS_COVERED
 
 
 def test_between_cases_use_values_inside_the_ranges_and_not_null():
@@ -476,6 +494,28 @@ def test_update_contact_inserts_the_row_in_coverage():
     assert b.status == STATUS_NOT_COVERED and "ha sempre una riga in DE_Form" in b.reason
     inserted = next(c for c in r.cases if c.end_activity_key == "UPD-4")
     assert r.row_absent(inserted, "DE_Form")   # the CSV is the state before the run: no row yet
+
+
+def test_insert_that_may_fail_leaves_the_path_unknown_and_is_reported():
+    """docs/assumptions.md, rows 19 and 46: an insert that leaves a non-nullable field without a default empty
+    may fail. Spec, "Honest outcomes": past an element the walk cannot predict, the path is unknown, and the
+    branches only those contacts reach are not covered because of an unsupported element."""
+    strict = table("DE_Form", [field("ContactId", pk=True, nullable=False), field("Consent", "Boolean"),
+                               field("Source", "Text", length=20), field("Channel", "Text", nullable=False)])
+    acts = [decision("SPLIT-1", "visit?", [("none", "no visit", "UPD-1", cond("DE_Form", "ContactId", "IsNull"))],
+                     remainder_next="UPD-3"),
+            update("UPD-1", "record", [("DE_Form", "Source", "Journey")], "SPLIT-2"),
+            decision("SPLIT-2", "recorded?", [("none", "still none", "UPD-2", cond("DE_Form", "ContactId", "IsNull"))],
+                     remainder_next="UPD-4"),
+            update("UPD-2", "2", [], None), update("UPD-3", "3", [], None), update("UPD-4", "4", [], None)]
+    r = row_run(acts, form=strict)
+    stopped = next(c for c in r.cases if c.unknown_from is not None)
+    assert stopped.unknown_from == "UPD-1" and "Channel" in stopped.unknown_reason
+    assert "UPD-1" in r.unsupported and "può fallire" in r.unsupported_reasons["UPD-1"]
+    for outcome in ("none", "remainder_path"):
+        b = status(r, "SPLIT-2", outcome)
+        assert b.status == STATUS_NOT_COVERED and b.reason.startswith("a valle di un elemento non supportato")
+    assert status(r, "SPLIT-1", "none").status == STATUS_COVERED   # before the update
 
 
 def test_journey_data_is_not_changed_by_update_contact():

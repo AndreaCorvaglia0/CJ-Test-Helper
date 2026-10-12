@@ -94,7 +94,9 @@ Regole aggiunte dalla sezione della spec "Extensions beyond the pilot" (12 ottob
   branch non supportato, con il motivo. Lo stesso per un wait by attribute scritto `{{Event.<key>."Campo"}}`.
 - Confronto tra due attributi (`ValueParameterName`, oppure `ValueIsReference`): supportato solo nella forma "campo
   collegato alla chiave del contatto di una tabella a livello di contatto `Equal` la chiave del contatto" (la chiave del
-  contatto è il Journey Data dell'entry event del trigger sul campo che contiene la chiave del contatto). La condizione
+  contatto è il Journey Data dell'entry event del trigger sul campo che contiene la chiave del contatto; la stessa
+  chiave scritta come Contact Data, dall'attribute set della tabella di ingresso, non è riconosciuta e il confronto è
+  segnalato come non supportato: una lettura più stretta della spec, prudente). La condizione
   viene normalizzata in modo che `table.field` sia il campo collegato e `value_attribute` la chiave del contatto, e si legge
   "il contatto ha una riga in quella tabella". Ogni altra forma rende il branch non supportato, con il motivo; non viene
   mai letta come confronto con un valore vuoto. Un campo è collegato alla chiave del contatto quando lo è per una relazione
@@ -225,7 +227,8 @@ Chiama `sqlparse_lite.parse_query` da sé. Regole (spec "Table selection" e "Cla
 | `TableModel.existence_tested` | Tabelle con la variabile "riga presente / riga assente" -> campo collegato alla chiave del contatto |
 | `CoverageResult.row_fields`, `row_absent(case, table)`, `GENERATED_KEY` | Le stesse tabelle come le usa la coverage; nei valori del caso il campo collegato vale `GENERATED_KEY` (riga presente) o None (riga assente) |
 | `Case.unknown_from`, `Case.unknown_reason`, `RandomBranch.unknown_from`, `RandomBranch.unknown_reason` | Il percorso atteso non è noto da questa attività in poi, e perché |
-| `ActionWindow`, `Case.action_windows` | Finestra di ogni azione manuale: wait tra email e split, durata fissa, ultimo wait by attribute, scadenza, sotto un'ora |
+| `ActionWindow`, `Case.action_windows` | Finestra di ogni azione manuale: wait prima dell'email e tra email e split, durata fissa, ultimo wait by attribute, arrivo dell'email, scadenza, sotto un'ora |
+| `CoverageResult.unsupported_reasons` | Elementi di tipo supportato che il generatore non sa trattare per una parte dei contatti (un Update contact il cui inserimento può fallire, un branch che ordina un campo né numerico né data) -> motivo |
 | `Case.min_duration_minutes`, `Case.not_before` | Durata minima del caso (wait a durata fissa) e data prima della quale non può finire (wait by attribute) |
 
 ### graph.py e coverage.py (lead)
@@ -251,23 +254,33 @@ Regole aggiunte dalla sezione della spec "Extensions beyond the pilot" (12 ottob
   tabella)` dice se i contatti del caso non hanno la riga. Su una riga assente ogni campo vale None: `IsNull` è vero,
   ogni altro operatore è falso, e nei `Case.contact_values` gli altri campi di quella tabella sono None. Un Update
   contact che scrive in quella tabella inserisce la riga: dopo, il campo collegato vale `GENERATED_KEY`, i campi
-  scritti il valore scritto, gli altri None (assunzione). `graph.Walker(..., row_fields=...)` applica queste regole:
-  checks.py, che simula i contatti dai file, deve passargli `TableModel.existence_tested`.
+  scritti il valore scritto, gli altri il loro valore di default (un default `GETDATE()` vale l'ora della
+  simulazione), None se non ne hanno (assunzione, righe 20, 29 e 46 di docs/assumptions.md). Se l'inserimento lascia
+  vuoto un campo che non ammette null e non ha un default, può fallire (righe 19 e 46): il percorso si ferma
+  sull'Update contact (`STOP_UNSUPPORTED`, `Case.unknown_from`), la chiave dell'attività entra in
+  `CoverageResult.unsupported` e `unsupported_reasons`, e i branch che solo quei contatti raggiungerebbero sono "a
+  valle di un elemento non supportato". `graph.Walker(..., row_fields=...)` applica queste regole: checks.py, che
+  simula i contatti dai file, deve passargli `TableModel.existence_tested`.
 - Valori: su un campo Number, Decimal o Date confrontato con `GreaterThan`, `GreaterThanOrEqual`, `LessThan`,
   `LessThanOrEqual` o `Between`, i valori delle condizioni tagliano i valori in intervalli e il dominio prende un
   valore strettamente dentro ciascun intervallo (sotto il più basso, in mezzo a due vicini, sopra il più alto: per un
   Decimal anche alla sua scala), poi i valori citati dagli altri operatori; un estremo non è mai provato. Un campo
-  di testo non riceve valori dagli intervalli, e un warning lo dice.
+  di testo non riceve valori dagli intervalli, e un warning lo dice; un branch che resta non coperto per questo è
+  "branch non supportato" (non "non raggiungibile"), con la chiave `<split>/<outcome>` in
+  `CoverageResult.unsupported` e il motivo in `unsupported_reasons`, così report.md e la pagina si aprono con
+  l'avviso degli elementi non supportati.
 - Preferenza: tra valori che coprono gli stessi branch vince quello con meno null e righe assenti, poi meno righe
   assenti, poi meno valori citati al posto di valori interni a un intervallo. Decide il rappresentante di ogni classe
   di contatti e lo scenario tenuto per ogni firma. Tra scenari diversi che coprono gli stessi branch conta solo il
-  terzo criterio: il criterio dei null cambierebbe lo scenario S18 del pilota, che deve restare identico.
+  terzo criterio: il criterio dei null cambierebbe lo scenario S18 del pilota, che deve restare identico. Le due
+  regole della spec qui sono in conflitto: la scelta spetta al team (docs/progress.md, "Estensioni oltre il
+  pilota: da decidere con il team").
 - `Case.unknown_from` e `Case.unknown_reason` (anche su `RandomBranch`): l'attività in cui il percorso simulato si è
   fermato senza uscire dal journey (elemento non supportato, operatore non valutabile, ...), e perché; da lì in poi il
   percorso atteso non è noto.
 - `Case.action_windows`: una `ActionWindow` per ogni azione manuale, con i wait tra l'email e l'engagement split, la
-  loro durata fissa in minuti (`graph.fixed_wait_minutes`: un send-time wait vale 0, un mese 28 giorni) e l'ultimo
-  wait by attribute tra loro. `Case.min_duration_minutes`: la durata fissa dei wait del percorso più lungo del caso
+  loro durata fissa in minuti (`graph.fixed_wait_minutes`: un send-time wait vale 0, un mese 28 giorni), l'ultimo
+  wait by attribute tra loro e i wait del percorso prima dell'email (`wait_keys_before`), che ne ritardano l'arrivo. `Case.min_duration_minutes`: la durata fissa dei wait del percorso più lungo del caso
   (None se una durata non è leggibile).
 
 ### datagen.py
@@ -309,10 +322,15 @@ Implementa esattamente le "Data generation rules" della spec, in ordine di prior
   righe di ingresso e le altre tabelle non cambiano. Il valore `GENERATED_KEY` della coverage è la chiave generata.
 - Un ingresso che nessuna automation alimenta (Run Once, pianificazione ricorrente, form, API event) non ha una entry
   query per costruzione: le righe di ingresso vengono dalle regole generali senza warning.
-- Finestre delle azioni manuali: per ogni `ActionWindow` con un wait by attribute, `deadline` = la data scritta per
-  quel wait nelle righe del caso più la durata fissa dei wait dopo di esso; senza wait by attribute la finestra è
-  `minutes` minuti dall'arrivo dell'email. `short` quando la finestra è sotto un'ora (scadenza a meno di un'ora
-  dall'ora di generazione, o `minutes` < 60), con un warning per email ed engagement split.
+- Finestre delle azioni manuali: la finestra si apre quando l'email può arrivare, cioè l'ora di generazione più i
+  wait prima dell'email (`email_not_before`, quando la ritardano). Per ogni `ActionWindow` con un wait by attribute,
+  `deadline` = il momento in cui i contatti raggiungono lo split al più presto: dall'arrivo dell'email, un wait by
+  duration aggiunge la sua durata, un send-time wait niente, un wait by attribute trattiene fino alla data scritta
+  nelle righe del caso, o lascia passare subito se quella data è già passata. Senza ritardi è la data scritta più i
+  wait a durata fissa dopo di essa, come prima. Senza wait by attribute la finestra è `minutes` minuti dall'arrivo
+  dell'email. `short` quando la finestra è sotto un'ora (scadenza a meno di un'ora dall'arrivo dell'email, o
+  `minutes` < 60), con un warning per email ed engagement split che, quando l'email è ritardata, dice quando
+  arriva.
   `Case.not_before` = la stessa data per l'intero percorso del caso.
 
 ### outputs.py
@@ -358,7 +376,8 @@ Regole aggiunte dalla sezione della spec "Extensions beyond the pilot" (12 ottob
   altrimenti.
 - Scadenza delle azioni manuali da `Case.action_windows`: con un wait by attribute, `ActionWindow.deadline`
   ("Prima del ..."); senza, "Entro N dall'arrivo dell'email" quando i wait hanno una durata fissa; altrimenti "Appena
-  arriva l'email". Con `ActionWindow.short` la Note dice che la finestra è sotto l'ora. Un caso senza finestre (un
+  arriva l'email". Con `ActionWindow.short` la Note dice che la finestra è sotto l'ora (e, con
+  `email_not_before`, quando arriva l'email). Un caso senza finestre (un
   `Case` costruito a mano) usa ancora l'ultimo wait by attribute tra email e split.
 - Durata minima: il passo dei wait del testbook aggiunge "Durata minima del test: ..." da
   `Case.min_duration_minutes` e da `Case.not_before` quando questa data è dopo l'ora di generazione.
@@ -366,10 +385,15 @@ Regole aggiunte dalla sezione della spec "Extensions beyond the pilot" (12 ottob
   due condizioni, un confronto di testo, un wait by attribute, campi Date o Boolean nei CSV, un engagement split,
   l'automation del pilota, colonne ignorate della entry query, la pianificazione della data extension, `OnceAndDone`,
   `IsNull` o `IsNotNull` sulla chiave del contatto, una tabella collegata al contatto solo da una relazione
-  group-to-set, un confronto tra attributi, una tabella dal lato "Many" di una relazione). Righe di
-  docs/assumptions.md: da 1 a 6, da 23 a 28 e da 40 a 45.
+  group-to-set, un confronto tra attributi, una tabella dal lato "Many" di una relazione, un Update contact che
+  scrive in una tabella con la variabile "riga presente / riga assente"). Righe di docs/assumptions.md: da 1 a 6, da
+  23 a 28 e da 40 a 46.
 - Un branch non supportato (`<split>/<outcome>` in `CoverageResult.unsupported`) è descritto come branch dello split,
-  non come attività.
+  non come attività. Un elemento di `CoverageResult.unsupported_reasons` è descritto con il suo motivo: un Update
+  contact come "non supportato per una parte dei contatti", un branch che ordina un campo di testo come branch non
+  supportato i cui branch vicini restano valutati.
+- Nel passo dei wait del testbook, per un caso il cui percorso non è noto da un'attività in poi, la durata vale solo
+  per la parte nota del percorso, e il testo lo dice.
 
 ### checks.py (lead)
 

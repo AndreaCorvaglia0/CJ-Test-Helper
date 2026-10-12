@@ -239,7 +239,7 @@ def test_absent_row_reads_null_in_every_field():
 
 def test_update_contact_inserts_an_absent_row():
     """Spec: "An Update contact on that table inserts the row: later reads see it present"; the fields it does
-    not write read null (assumption)."""
+    not write read their default value, null when they have none (docs/assumptions.md, rows 20, 29 and 46)."""
     acts = [
         update("UPD-1", "record", [("DE_Form", "Source", "Journey")], "SPLIT-1"),
         decision("SPLIT-1", "still absent?", [("a", "A", None, cond("DE_Form", "ContactId", "IsNull"))],
@@ -253,6 +253,46 @@ def test_update_contact_inserts_an_absent_row():
     # a row that was there keeps its other values
     st = w.run(w.start(), lookup_from({("DE_Form", "ContactId"): "TST_C1", ("DE_Form", "Consent"): "True"}))
     assert st.steps[1:] == [Step("SPLIT-1", "remainder_path"), Step("SPLIT-2", "remainder_path")]
+
+
+def test_inserted_row_gives_unwritten_fields_their_default_and_may_fail_on_a_required_field():
+    """The spec says only that the insert makes the row present. For the other fields the walker follows the
+    assumptions listed for inserts (docs/assumptions.md, rows 19, 20, 29 and 46): an unwritten field reads its
+    default value; an insert that leaves a non-nullable field without a default empty may fail, so the path is
+    unknown from that Update contact on (spec, "Honest outcomes")."""
+    form = table("DE_Form", [field("ContactId", pk=True, nullable=False), field("Welcomed", "Boolean", default="True"),
+                             field("Seen", "Date", default="GETDATE()"), field("Source", "Text", length=20)],
+                 sendable_field="ContactId")
+    acts = [
+        update("UPD-1", "record", [("DE_Form", "Source", "Journey")], "SPLIT-1"),
+        decision("SPLIT-1", "welcomed?", [("a", "A", "SPLIT-2", cond("DE_Form", "Welcomed", "Is", "true"))],
+                 remainder_next=None),
+        decision("SPLIT-2", "seen?", [("a", "A", None, cond("DE_Form", "Seen", "IsNotNull"))], remainder_next=None),
+    ]
+    j = journey(acts)
+
+    def walker(form_table):
+        tables = {t.name: t for t in (MASTER, ENTRY, form_table)}
+        return graph.Walker(j, graph.Schema(tables), {}, False, datetime(2026, 10, 11, 12, 0),
+                            row_fields={"DE_Form": ("DE_Form", "ContactId")})
+
+    absent = lookup_from({("DE_Form", "ContactId"): None, ("DE_Form", "Welcomed"): None, ("DE_Form", "Seen"): None})
+    w = walker(form)
+    st = w.run(w.start(), absent)
+    assert st.stop == graph.STOP_EXIT and st.steps[1:] == [Step("SPLIT-1", "a"), Step("SPLIT-2", "a")]
+    assert w.inserted_default(("DE_Form", "Seen")) == "2026-10-11 12:00"
+    # A required field the update does not write: the insert may fail, the path is unknown from UPD-1 on.
+    strict = table("DE_Form", [field("ContactId", pk=True, nullable=False), field("Welcomed", "Boolean", default="True"),
+                               field("Seen", "Date", default="GETDATE()"), field("Source", "Text", length=20),
+                               field("Channel", "Text", nullable=False)], sendable_field="ContactId")
+    w = walker(strict)
+    st = w.run(w.start(), absent)
+    assert st.stop == graph.STOP_UNSUPPORTED and st.steps == [Step("UPD-1", None)] and st.current == "UPD-1"
+    assert "Channel" in st.stop_detail and "può fallire" in st.stop_detail and not st.writes
+    # A row that is there is updated, not inserted: nothing can fail.
+    st = w.run(w.start(), lookup_from({("DE_Form", "ContactId"): "TST_C1", ("DE_Form", "Welcomed"): "False",
+                                       ("DE_Form", "Seen"): None}))
+    assert st.stop == graph.STOP_EXIT and st.steps[1:] == [Step("SPLIT-1", "remainder_path")]
 
 
 def test_fixed_wait_minutes_and_case_paths():

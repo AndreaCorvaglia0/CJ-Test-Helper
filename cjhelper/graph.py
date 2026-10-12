@@ -16,8 +16,12 @@ Spec, "Extensions beyond the pilot":
   null. "On an absent row, IsNull on any of its fields is true and every other operator is
   false": every field of an absent row reads null. "An Update contact on that table inserts
   the row: later reads see it present": the linked field then reads GENERATED_KEY, the
-  written fields their written value, the other fields null (assumption: a row inserted by
-  an Update contact has no value in the fields it does not write).
+  written fields their written value. The spec says nothing about the other fields; the
+  walker follows the assumptions already listed for inserts (docs/assumptions.md, rows 19,
+  20, 29 and 46): an unwritten field reads its default value (``inserted_default``), null when
+  it has none, and an insert that leaves a non-nullable field without a default empty may
+  fail and take the contact out of the journey, so the path is unknown from that Update
+  contact on (``insert_problem``).
 
 The walker here serves two callers:
 
@@ -70,6 +74,9 @@ SPLIT_KINDS = (KIND_DECISION, KIND_ENGAGEMENT, KIND_RANDOM)
 WAIT_KINDS = (KIND_WAIT_DURATION, KIND_WAIT_ATTRIBUTE, KIND_WAIT_STO)
 
 DATETIME_NOW = "{{DateTime.Now}}"
+
+# Schema defaults that stand for the current date and time (``defaultValue`` as written, lower case, no spaces).
+CURRENT_DATE_DEFAULTS = ("getdate()", "getutcdate()", "sysdatetime()")
 
 
 class Unknown:
@@ -332,8 +339,52 @@ class Walker:
             present = lookup(linked)
             if not isinstance(present, Unknown) and is_null(present):
                 # The row was absent and an update contact inserted it.
-                return GENERATED_KEY if ref == linked else None
+                return GENERATED_KEY if ref == linked else self.inserted_default(ref)
         return row_lookup(lookup, self.row_fields)(ref)
+
+    def inserted_default(self, ref: FieldRef) -> Value:
+        """A field an Update contact did not write, in a row it inserted: the field's default value, as an
+        insert gives it (assumptions rows 20, 29 and 46; a current-date default is the walk's ``now``), or
+        null when the field has no default."""
+        table = self.schema.table(ref[0])
+        found = table.field(ref[1]) if table is not None else None
+        default = (found.default or "").strip() if found is not None else ""
+        if not default:
+            return None
+        if default.lower().replace(" ", "") in CURRENT_DATE_DEFAULTS:
+            return self.now.strftime(self.date_format)
+        return default
+
+    def insert_problem(self, activity: Activity, state: WalkState, lookup: ValueLookup) -> Optional[str]:
+        """Why this Update contact may fail for this contact, or None.
+
+        It inserts the contact's row in a table with the "row present / row absent" variable when the row is
+        absent and no earlier Update contact on the path inserted it. An insert that leaves a field that is
+        not nullable and has no default without a value fails, and the contact leaves the journey
+        (assumptions rows 19 and 46): the field linked to the contact key gets the contact key, the written
+        fields their value, the others nothing."""
+        written: dict[str, set[str]] = {}
+        for w in activity.writes:
+            ref = self.schema.canonical((w.table, w.field))
+            written.setdefault(ref[0].lower(), set()).add(ref[1].lower())
+        for table_name, fields in written.items():
+            linked = self.row_fields.get(table_name)
+            if linked is None or table_name in state.inserted:
+                continue
+            present = lookup(linked)
+            if isinstance(present, Unknown) or not is_null(present):
+                continue          # the row is there: an update, not an insert
+            table = self.schema.table(linked[0])
+            missing = [f.name for f in (table.fields if table is not None else [])
+                       if not f.is_nullable and not (f.default or "").strip()
+                       and f.name.lower() not in fields and f.name.lower() != linked[1].lower()]
+            if missing:
+                names = ", ".join(missing)
+                return (f"l'Update contact '{activity.key}' inserisce la riga del contatto in {linked[0]}, che manca, "
+                        f"ma non scrive {names}, che non {'ammette' if len(missing) == 1 else 'ammettono'} null e "
+                        f"non {'ha' if len(missing) == 1 else 'hanno'} un valore di default: l'inserimento può "
+                        "fallire e far uscire il contatto dal journey")
+        return None
 
     def snapshot_of(self, ref: FieldRef, lookup: ValueLookup) -> "Value | Unknown":
         """Journey Data: the entry row as it was at entry, whatever the update contacts wrote."""
@@ -382,6 +433,14 @@ class Walker:
             state.stop = STOP_UNSUPPORTED
             state.stop_detail = f"l'attività '{key}' è di un tipo non supportato, {activity.raw_type}"
         else:
+            if kind == KIND_UPDATE:
+                problem = self.insert_problem(activity, state, lookup)
+                if problem is not None:
+                    # Spec, "Honest outcomes": past an element the walk cannot predict, the path is unknown.
+                    state.steps.append(Step(key, None))
+                    state.stop = STOP_UNSUPPORTED
+                    state.stop_detail = problem
+                    return
             if kind == KIND_EMAIL:
                 state.emails_sent.append(key)
             elif kind == KIND_UPDATE:

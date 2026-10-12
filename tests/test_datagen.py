@@ -1197,6 +1197,38 @@ def test_short_window_of_a_manual_action_is_warned_and_the_deadline_follows_the_
     assert flash.not_before is None
 
 
+def delayed_email_world(**settings):
+    emails = {"A2": h.email_asset("A2", "Slow")}
+    acts = [h.wait_dur("WAIT-0", 2, "DAYS", "EMAIL-2"),
+            h.email("EMAIL-2", "Slow", "A2", "WAIT-2"), h.wait_attr("WAIT-2", "DE_Master", "Reminder", "ENG-2"),
+            h.engagement("ENG-2", "Open Slow", "open", "EMAIL-2", None, None)]
+    return helper_world(acts, [H_ENTRY, H_MASTER], {"DE_Entry": LEVEL_CONTACT, "DE_Master": LEVEL_CONTACT},
+                        emails=emails, real_inbox="tester@example.com", **settings)
+
+
+def test_window_of_a_manual_action_starts_when_the_email_can_arrive():
+    """Spec, "Honest outcomes": "The deadline of a manual open or click is computed from the waits between the
+    email and the engagement split, with a warning when the window is under one hour". The window opens when the
+    email arrives: a 2-day wait before the email sends it after the wait date (generation time plus 24 hours), so
+    the wait by attribute ends at once and the split is evaluated as soon as the email arrives."""
+    world = delayed_email_world()
+    data = run(world)
+    case = next(c for c in world.coverage.cases if c.manual_actions)
+    [window] = case.action_windows
+    assert window.wait_keys_before == ["WAIT-0"]
+    assert window.email_not_before == "2026-10-13 09:30" and window.deadline == "2026-10-13 09:30"
+    assert window.short
+    assert any("'Slow'" in w and "arriva non prima del 2026-10-13 09:30" in w and "non ha il tempo" in w
+               for w in data.warnings)
+    # An offset past the delay of the email leaves the tester a day: no warning, the deadline is the wait date.
+    world = delayed_email_world(wait_offset_before_engagement_hours=72)
+    data = run(world)
+    case = next(c for c in world.coverage.cases if c.manual_actions)
+    [window] = case.action_windows
+    assert window.email_not_before == "2026-10-13 09:30" and window.deadline == "2026-10-14 09:30"
+    assert not window.short and not any("'Slow'" in w for w in data.warnings)
+
+
 def test_long_fixed_window_is_not_warned_and_a_short_wait_date_is():
     data = run(engagement_world(120))
     assert not any("meno di un'ora" in w for w in data.warnings)

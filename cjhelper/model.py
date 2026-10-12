@@ -526,9 +526,10 @@ class ActionWindow:
     outcomes": "The deadline of a manual open or click is computed from the waits between the email and the
     engagement split, with a warning when the window is under one hour").
 
-    coverage.py fills the waits and their fixed duration; datagen.py fills ``deadline`` and ``short``,
-    because the date of a wait by attribute is the value it writes. Without a wait by attribute the
-    deadline is relative: ``minutes`` after the email arrives.
+    coverage.py fills the waits and their fixed duration; datagen.py fills ``deadline``, ``short`` and
+    ``email_not_before``, because the date of a wait by attribute is the value it writes. Without a wait by
+    attribute the deadline is relative: ``minutes`` after the email arrives. The window starts when the email
+    can arrive, so the waits before the email count too (``wait_keys_before``).
     """
     activity_key: str                    # the engagement split
     email_activity_key: str
@@ -536,8 +537,11 @@ class ActionWindow:
     minutes: Optional[int]               # fixed duration of those waits (send-time waits count 0); None = unknown
     attribute_wait_key: Optional[str] = None   # the last wait by attribute among them: the window ends at its date
     minutes_after_attribute_wait: Optional[int] = 0   # plus the fixed duration of the waits after it
-    deadline: Optional[str] = None       # that date plus those minutes, in Settings.date_format (datagen)
+    deadline: Optional[str] = None       # when the contacts reach the split at the earliest (datagen)
     short: bool = False                  # the window is under one hour (datagen)
+    wait_keys_before: list[str] = field(default_factory=list)   # waits on the path before the email, in order
+    email_not_before: Optional[str] = None   # the earliest arrival of the email, when the waits before it delay
+                                             # it past the generation time (datagen)
 
 
 @dataclass
@@ -634,6 +638,12 @@ class CoverageResult:
     # Case.contact_values that field holds GENERATED_KEY when the contact has a row and None when it has none;
     # the other fields of an absent row are None too, and datagen writes no row for that contact.
     row_fields: dict[str, FieldRef] = field(default_factory=dict)
+    # Elements of a supported type the generator cannot handle for some contacts: an activity at which some paths
+    # stop because the walk cannot predict it (an Update contact whose insert of an absent row may fail,
+    # graph.Walker.insert_problem), or a branch "<split>/<outcome>" whose condition compares a field that is not a
+    # number or a date by order (no value inside that range is generated). Key -> why; the keys are in
+    # ``unsupported`` too.
+    unsupported_reasons: dict[str, str] = field(default_factory=dict)
 
     @property
     def cases(self) -> list[Case]:

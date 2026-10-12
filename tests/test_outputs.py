@@ -20,6 +20,7 @@ from cjhelper.model import (
     GENERATED_KEY,
     KIND_WAIT_ATTRIBUTE,
     KIND_WAIT_DURATION,
+    KIND_UPDATE,
     ActionWindow,
     CheckResult,
     Field,
@@ -27,6 +28,7 @@ from cjhelper.model import (
     Relationship,
     Table,
     TableData,
+    Write,
 )
 from cjhelper.outputs import (
     REPORT_FILE,
@@ -576,12 +578,31 @@ def test_manual_action_windows_and_minimum_durations():
     case_open.action_windows = [ActionWindow("ENG-1", "EMAIL-1", ["WAIT-1", "WAIT-2"], minutes=0,
                                              attribute_wait_key="WAIT-2", deadline="2026-10-12 10:30")]
     assert "4. Prima del 2026-10-12 10:30, apri l'email 'Welcome'" in _rows(result)[0]["Detailed steps"]
+    # A short window because a wait before the email delays it: the note says when the email arrives.
+    case_open.action_windows = [ActionWindow("ENG-1", "EMAIL-1", ["WAIT-2"], minutes=0, attribute_wait_key="WAIT-2",
+                                             deadline="2026-10-13 09:30", short=True, wait_keys_before=["WAIT-0"],
+                                             email_not_before="2026-10-13 09:30")]
+    note = _rows(result)[0]["Note"]
+    assert "L'email arriva non prima del 2026-10-13 09:30, quindi la scadenza è a meno di un'ora dal suo arrivo" in note
+    assert "dall'ora di generazione" not in note
     # A date already past holds nobody, and an unknown duration is said.
     case_plain.min_duration_minutes, case_plain.not_before = 0, "2026-10-11 09:30"
     assert ("Durata minima del test: nessuna, perché i wait del percorso possono terminare subito."
             in _rows(result)[1]["Detailed steps"])
     case_plain.min_duration_minutes = None
     assert "Durata minima del test non nota" in _rows(result)[1]["Detailed steps"]
+
+
+def test_duration_of_a_path_unknown_past_an_activity_covers_only_the_known_part():
+    """Spec, "Honest outcomes": past an unsupported element the path is unknown, so are its waits."""
+    result = build_result()
+    case_open, case_plain = [c for s in result.coverage.scenarios for c in s.cases if s.id == "S01"]
+    for case in (case_open, case_plain):
+        case.unknown_from = case.steps[-1].activity_key
+    first, second = _rows(result)[:2]
+    assert ("La durata vale solo per la parte nota del percorso, fino a Log open (UPD-1): dopo, il percorso non è "
+            "noto e può avere altri wait.") in first["Detailed steps"]
+    assert "La durata vale solo per la parte nota del percorso" in second["Detailed steps"]
 
 
 def test_report_lists_only_the_assumptions_the_export_triggers():
@@ -600,3 +621,21 @@ def test_report_lists_only_the_assumptions_the_export_triggers():
     assert ("La relazione group-to-set che collega DE_Master al contatto usa la Contact Key (leftRelationshipIDs 3)"
             in after)
     assert "Una condizione su una tabella in relazione uno a molti (DE_Master)" in after
+    # An Update contact that writes into a table with the "row present / row absent" variable inserts its row.
+    assert "riga mancante" not in after
+    update = next(a for a in result.package.journey.activities.values() if a.kind == KIND_UPDATE)
+    update.writes.append(Write(MASTER, "Perm", "True"))
+    result.coverage.row_fields = {MASTER: (MASTER, "ContactId")}
+    assert ("Un Update contact che inserisce la riga mancante del contatto in DE_Master dà ai campi che non scrive il "
+            "loro valore di default, o null se non ne hanno.") in section()
+
+
+def test_update_contact_whose_insert_may_fail_is_listed_as_unsupported_for_some_contacts():
+    result = build_result()
+    update = next(a for a in result.package.journey.activities.values() if a.kind == KIND_UPDATE)
+    result.coverage.unsupported.append(update.key)
+    result.coverage.unsupported_reasons[update.key] = "l'Update contact può fallire"
+    report = write_report(result)
+    assert ("non è supportata per una parte dei contatti: l'Update contact può fallire. Per questi contatti il "
+            "percorso non è noto da quell'attività in poi") in report
+    assert "che il generatore non supporta" not in report

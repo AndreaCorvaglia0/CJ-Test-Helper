@@ -50,6 +50,7 @@ from .datagen import (
     case_paths,
     wait_precedes_manual_action,
 )
+from .graph import is_split
 from .model import (
     ENTRY_AUTOMATION,
     ENTRY_OTHER,
@@ -1104,13 +1105,32 @@ def _detailed_steps(context: _TestbookContext, scenario: Scenario, case: Case) -
         steps.append(f"Verifica che le righe dello scenario {scenario.key} siano state importate.")
     steps.append(_entry_step(context))
     waits = _wait_descriptions(context, scenario, case)
-    steps.append("Attendi che i contatti superino i wait del loro percorso: " + "; ".join(waits) + ". "
-                 + _duration_sentence(case, context.result.generation_time, context.settings.date_format)
-                 if waits else "Il percorso non ha wait.")
+    unknown = _unknown_from(case)
+    if waits:
+        text = ("Attendi che i contatti superino i wait del loro percorso: " + "; ".join(waits) + ". "
+                + _duration_sentence(case, context.result.generation_time, context.settings.date_format))
+        if unknown is not None:
+            # Spec, "Honest outcomes": past an unsupported element the path, and so its waits, are unknown.
+            text += (f" La durata vale solo per la parte nota del percorso, fino a "
+                     f"{_activity_label(context.journey, unknown)}: dopo, il percorso non è noto e può avere altri wait.")
+        steps.append(text)
+    elif unknown is not None:
+        steps.append(f"La parte nota del percorso, fino a {_activity_label(context.journey, unknown)}, non ha wait: "
+                     "dopo, il percorso non è noto e può avere dei wait.")
+    else:
+        steps.append("Il percorso non ha wait.")
     steps.extend(_manual_steps(context, scenario, case))
     steps.append("Raccogli le evidenze per ogni contatto: le email ricevute, i valori scritti dal journey e l'ultima "
                  "attività raggiunta.")
     return "\n".join(f"{number}. {text}" for number, text in enumerate(steps, 1))
+
+
+def _unknown_from(case: Case) -> Optional[str]:
+    """The activity from which the path of the case, or of one of its random branches, is unknown."""
+    if case.unknown_from is not None:
+        return case.unknown_from
+    branches = case.random.branches if case.random is not None else []
+    return next((b.unknown_from for b in branches if getattr(b, "unknown_from", None) is not None), None)
 
 
 def _entry_step(context: _TestbookContext) -> str:
@@ -1211,7 +1231,13 @@ def _note(context: _TestbookContext, scenario: Scenario, case: Case) -> str:
             notes.append("Se l'email arriva dopo quell'ora, genera di nuovo i dati.")
         if window is not None and window.short:
             # Spec, "Honest outcomes": "with a warning when the window is under one hour".
-            if deadline:
+            arrival = getattr(window, "email_not_before", None)
+            if deadline and arrival:
+                # The waits before the email delay it: the window starts when it arrives.
+                notes.append(f"L'email arriva non prima del {arrival}, quindi la scadenza è a meno di un'ora dal suo "
+                             "arrivo: genera di nuovo i dati con un offset della data di wait prima di un engagement "
+                             "split più ampio.")
+            elif deadline:
                 notes.append("La scadenza è a meno di un'ora dall'ora di generazione: se non c'è tempo, genera di nuovo "
                              "i dati con un offset della data di wait prima di un engagement split più ampio.")
             else:
@@ -1815,8 +1841,14 @@ def _root_text(journey: Journey, root: tuple[str, str], branches: list[BranchSta
     if not reason:
         inherited = _REASON_BEHIND_BRANCH.match(branches[0].reason or "")
         reason = inherited.group("reason") if inherited else ""
-    state, clause = _explain_reason(reason, journey, root[0], root[1])
     count = _lie_behind(len(branches))
+    if activity is not None and not is_split(activity):
+        # Not a split (an unsupported activity, an Update contact whose insert may fail): the simulated paths
+        # stop there, so there is no branch to name.
+        unsupported = _REASON_UNSUPPORTED.match(reason)
+        detail = unsupported.group("detail") if unsupported else reason
+        return f"{count} a valle di '{name}' ({root[0]}), dove il percorso simulato si ferma: {detail.rstrip('.')}."
+    state, clause = _explain_reason(reason, journey, root[0], root[1])
     if state is None:
         tail = f"che non è coperto: {clause}" if clause else "che non è coperto"
     else:
@@ -1951,10 +1983,22 @@ def _section_unsupported(result: GenerationResult) -> str:
         activity = journey.activities.get(key)
         label = _activity_label(journey, key)
         reason = getattr(activity, "unsupported_reason", None) if activity is not None else None
+        stopped = (getattr(result.coverage, "unsupported_reasons", None) or {}).get(key)
         split_key, _, outcome_key = key.partition("/")
         split = journey.activities.get(split_key) if activity is None and outcome_key else None
         outcome = split.outcome(outcome_key) if split is not None else None
-        if outcome is not None:
+        if stopped and outcome is not None:
+            # A branch whose condition orders a field that is not a number or a date: no value inside its range.
+            items.append(f"Il branch '{outcome.label or outcome.key}' dello split {_activity_label(journey, split_key)} "
+                         f"non è supportato: {stopped.rstrip('.')}. Questo branch e quelli a valle non sono coperti; gli "
+                         "altri branch dello split sono valutati.")
+        elif stopped:
+            # A supported activity the walk cannot predict for some contacts (an insert that may fail).
+            why = stopped.rstrip(".")
+            items.append(f"L'attività {label} non è supportata per una parte dei contatti: {why}. "
+                         "Per questi contatti il percorso non è noto da quell'attività in poi, e i branch che solo "
+                         "loro raggiungerebbero non sono coperti.")
+        elif outcome is not None:
             # An unsupported branch, written <split>/<outcome> in CoverageResult.unsupported.
             why = (outcome.unsupported_reason or "").rstrip(".")
             items.append(f"Il branch '{outcome.label or outcome.key}' dello split {_activity_label(journey, split_key)} "
@@ -2258,6 +2302,14 @@ def _extension_assumptions(result: GenerationResult, conditions: list) -> list[s
     if many:
         items.append(f"Una condizione su una tabella in relazione uno a molti ({_join_words(many)}) è vera se una "
                      "qualsiasi riga del contatto la soddisfa. Il generatore scrive una sola riga per contatto.")
+    row_tables = {table.lower(): table for table in (getattr(result.coverage, "row_fields", None) or {})}
+    inserted = _unique(row_tables[w.table.lower()] for activity in journey.activities.values()
+                       if activity.kind == KIND_UPDATE for w in activity.writes if w.table.lower() in row_tables)
+    if inserted:
+        items.append(f"Un Update contact che inserisce la riga mancante del contatto in {_join_words(inserted)} dà ai "
+                     "campi che non scrive il loro valore di default, o null se non ne hanno. Se lascia vuoto un campo "
+                     "che non ammette null e non ha un valore di default, l'inserimento fallisce e il contatto esce "
+                     "dal journey.")
     return items
 
 

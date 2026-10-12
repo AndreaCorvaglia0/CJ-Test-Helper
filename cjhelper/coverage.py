@@ -65,6 +65,7 @@ from .model import (
     KIND_ENGAGEMENT,
     KIND_RANDOM,
     KIND_UNSUPPORTED,
+    KIND_UPDATE,
     LEVEL_CONTACT,
     LEVEL_SCENARIO,
     STATUS_COVERED,
@@ -107,6 +108,7 @@ TEXT_TYPES = ("Text", "EmailAddress", "Phone", "Locale")
 ORDER_OPERATORS_UP = ("GreaterThan", "GreaterThanOrEqual")
 ORDER_OPERATORS_DOWN = ("LessThan", "LessThanOrEqual")
 RANGE_OPERATORS = ORDER_OPERATORS_UP + ORDER_OPERATORS_DOWN + ("Between",)
+RANGE_TYPES = ("Number", "Decimal", "Date")    # the field types whose ranges build_domain fills
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +465,10 @@ class CoverageEngine:
         self.reached_activities: set[str] = set()
         self.exploration_truncated = False
         self.classes_incomplete = False
+        # Elements of a supported type the generator cannot handle for some contacts: an activity where some paths
+        # stop (an Update contact whose insert may fail), or a branch "<split>/<outcome>" whose range on a text
+        # field gets no value (CoverageResult.unsupported_reasons): key -> why.
+        self.stopped_at: dict[str, str] = {}
 
     # -- step 3 and 4: fields, levels, domains ------------------------------------------
 
@@ -815,6 +821,9 @@ class CoverageEngine:
         stop = state.stop or graph.STOP_EXIT
         # Spec, "Honest outcomes": past an element the walk cannot evaluate, the path is unknown from there on.
         unknown_from = None if stop == graph.STOP_EXIT else (state.current or state.end_activity_key)
+        stopped = self.journey.activities.get(state.current or "")
+        if stop == graph.STOP_UNSUPPORTED and stopped is not None and stopped.kind == KIND_UPDATE:
+            self.stopped_at.setdefault(stopped.key, state.stop_detail)
         leaf = Leaf(id=len(self.leaves), class_id=cls.id, assigned=dict(assigned), manual=manual, randoms=randoms,
                     steps=list(state.steps), emails_sent=list(state.emails_sent), writes=list(state.writes),
                     waits=list(state.waits), stop=stop, stop_detail=state.stop_detail, unknown_from=unknown_from)
@@ -1135,9 +1144,11 @@ class CoverageEngine:
             scenario_fields=list(self.scenario_fields), contact_fields=list(self.contact_fields),
             domains=dict(self.domains), other_values=dict(self.other_values),
             unsupported=list(self.package.unsupported_activities) + [
-                f"{a.key}/{o.key}" for a in self.journey.activities.values() for o in a.outcomes if o.unsupported_reason],
+                f"{a.key}/{o.key}" for a in self.journey.activities.values() for o in a.outcomes if o.unsupported_reason]
+            + [key for key in self.stopped_at if key.partition("/")[0] in self.journey.activities],
             warnings=list(dict.fromkeys(self.warnings)), stats=stats,
-            row_fields={linked[0]: linked for linked in self.row_fields.values()})
+            row_fields={linked[0]: linked for linked in self.row_fields.values()},
+            unsupported_reasons=dict(self.stopped_at))
 
     # -- honest outcomes: windows of the manual actions and minimum durations -------------
 
@@ -1146,8 +1157,9 @@ class CoverageEngine:
         between the email and the engagement split ... The testbook gives each case's minimum duration."
 
         Fills ``case.action_windows`` (one per manual action: the waits between its email and its split,
-        their fixed duration, and the last wait by attribute among them, whose date datagen.py turns into
-        the deadline) and ``case.min_duration_minutes`` (the fixed waits of the longest path of the case)."""
+        their fixed duration, the last wait by attribute among them, whose date datagen.py turns into
+        the deadline, and the waits before the email, which delay its arrival and so the start of the
+        window) and ``case.min_duration_minutes`` (the fixed waits of the longest path of the case)."""
         activities = self.journey.activities
         paths = graph.case_paths(case)
         durations = [self._fixed_minutes(keys, need_dates=False) for keys in paths]
@@ -1160,10 +1172,11 @@ class CoverageEngine:
             waits = [k for k in keys[start + 1:end] if activities[k].kind in graph.WAIT_KINDS]
             attribute = [k for k in waits if activities[k].kind == KIND_WAIT_ATTRIBUTE]
             after = waits[waits.index(attribute[-1]) + 1:] if attribute else []
+            before = [k for k in keys[:max(start, 0)] if activities[k].kind in graph.WAIT_KINDS]
             windows.append(ActionWindow(
                 activity_key=action.activity_key, email_activity_key=action.email_activity_key, wait_keys=waits,
                 minutes=self._fixed_minutes(waits), attribute_wait_key=attribute[-1] if attribute else None,
-                minutes_after_attribute_wait=self._fixed_minutes(after)))
+                minutes_after_attribute_wait=self._fixed_minutes(after), wait_keys_before=before))
         case.action_windows = windows
 
     def _fixed_minutes(self, keys: list[str], need_dates: bool = True) -> Optional[int]:
@@ -1417,6 +1430,8 @@ class CoverageEngine:
 
     def _not_covered_reason(self, activity: Activity, outcome: Outcome, preds: dict[str, set[str]]) -> str:
         key = activity.key
+        if key in self.stopped_at:
+            return f"attività non supportata: {self.stopped_at[key]}"
         if key in self.package.unsupported_activities:
             if activity.unsupported_reason:
                 return f"attività non supportata: {activity.unsupported_reason}"
@@ -1447,6 +1462,17 @@ class CoverageEngine:
         # The split was reached but this outcome never matched.
         seen = self.reached_values.get(key, {})
         if activity.kind == KIND_DECISION and outcome.formula is not None:
+            for cond in formula_conditions(outcome.formula):
+                ref = self.schema.canonical((cond.table, cond.field))
+                ftype = self.schema.field_type(ref)
+                if cond.operator in RANGE_OPERATORS and ftype not in RANGE_TYPES and cond.value_attribute is None:
+                    # build_domain picks no value inside a range of such a field, so the branch may well be
+                    # reachable in Salesforce: an element the generator does not support, not an unreachable branch.
+                    why = (f"la condizione confronta {ref[0]}.{ref[1]}, un campo di tipo {ftype}, con {cond.operator}: il "
+                           "generatore sceglie valori dentro un intervallo solo per i campi Number, Decimal e Date, quindi "
+                           "nei dati di test nessun contatto la soddisfa, anche se in Salesforce un contatto potrebbe")
+                    self.stopped_at[f"{key}/{outcome.key}"] = why
+                    return f"branch non supportato: {why}"
             for cond in formula_conditions(outcome.formula):
                 ref = self.schema.canonical((cond.table, cond.field))
                 table = self.schema.table(ref[0])

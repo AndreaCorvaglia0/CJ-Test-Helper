@@ -105,3 +105,57 @@ Instradamento: Opus per il codice e il testo italiano, Sonnet per i controlli e 
 - Attività iniziale: `MULTICRITERIADECISIONV2-1` (Control Group Required). Tutte le 178 attività sono raggiungibili per struttura.
 - La entry query collega con join Master -> Target su `ContactId = SalesforceId` e Target -> Config su `Description = CampaignName`; filtri `C.active = 'True'`, `HAS_RUN = 'False'`, intervallo di date su `START_DATE`/`END_DATE`.
 - Con il confronto di default che distingue maiuscole e minuscole, `CHANNEL2 Equal 'EMAIL'` (controllo email del channel 2) non può mai essere vero su un percorso che l'ha raggiunto tramite `CHANNEL2 Equal 'Email'`, quindi gli engagement split dei channel 2 e 3 non sono raggiungibili del tutto; i loro branch Yes non sono comunque raggiungibili perché EMAILV2-1 viene inviata solo quando CHANNEL1 è Email, che instrada verso l'engagement split del channel 1.
+
+## Estensioni oltre il pilota: differenze sul pilota e decisioni per il team
+
+Spec, "Acceptance beyond the pilot": sul pilota CSV e `scenarios.csv` restano identici byte per byte, e le differenze di
+report.md e del testbook vanno elencate per il team. Confronto con gli output di prima delle estensioni, stessa ora di
+generazione (2026-10-11 12:00), stesso run identifier e stesso seed.
+
+### Differenze sul pilota
+
+- I quattro CSV e `scenarios.csv`: identici.
+- report.md: identico.
+- testbook.xlsx: 32 dei 33 test cambiano, solo nella colonna "Detailed steps". Il passo 3 (i wait) aggiunge la durata
+  minima del caso, dalla regola "The testbook gives each case's minimum duration": "Durata minima del test: nessuna,
+  perché i wait del percorso possono terminare subito." in 25 test; "Durata minima del test: i contatti non finiscono
+  il percorso prima del 2026-10-12 12:00." in 3; "Durata minima del test: 1 minuto; i contatti non finiscono il
+  percorso prima del 2026-10-11 12:01." in 3; "Durata minima del test: 1 minuto." in 1. Il test che non cambia
+  (S19-C01) non ha wait sul percorso.
+
+### Da decidere con il team
+
+1. **Preferenza "not null" e pilota identico (scenario S18).** La spec chiede che, tra valori che coprono gli stessi
+   branch, il generatore preferisca quelli il cui percorso non dipende da assunzioni non verificate ("not null, row
+   present"), e che sul pilota CSV e `scenarios.csv` restino identici. Sul pilota le due regole si contraddicono in un
+   solo punto: applicando la preferenza anche tra scenari diversi che coprono gli stessi branch, lo scenario S18
+   cambierebbe `DE_NCRM_AD_HOC_CONFIG.CHANNEL2` da vuoto a `OTHER`; tutti gli altri scenari restano uguali. Oggi vince
+   il pilota identico: la preferenza vale per il rappresentante di ogni classe di contatti e per lo scenario tenuto a
+   parità di percorsi, ma tra scenari diversi conta solo il criterio dei valori interni agli intervalli. Su un altro
+   journey con campi a livello di scenario che ammettono null, questo può tenere valori null il cui percorso dipende da
+   un'assunzione non verificata. Serve una decisione: accettare la differenza su S18, o confermare la scelta attuale.
+2. **Data del wait prima di un engagement split, con wait prima dell'email.** La spec dà a quella data l'ora di
+   generazione più 24 ore. Se dei wait prima dell'email la ritardano oltre quella data, il wait by attribute termina
+   subito e lo split viene valutato appena arriva l'email. Il generatore tiene la data della spec, misura la finestra
+   dall'arrivo dell'email e lo segnala con un warning (e nella Note del testbook), che indica di alzare l'offset
+   nelle impostazioni. Alternativa da valutare: aggiungere alla data i wait prima dell'email (cambierebbe i CSV di quei
+   journey; il pilota non ne ha).
+3. **Warning e issue su contenuti usati in modo indiretto.** I warning e le issue di Package Manager sugli asset che il
+   journey non usa vengono tolti, come chiede la spec. Vengono tolti anche quelli su contenuti usati solo in modo
+   indiretto, per esempio un'immagine dentro un'email inviata o la landing page CloudPages di un form di ingresso.
+   Va confermato, insieme al conflitto tra "asset non usato" e "issue di livello warning o error elencate" descritto
+   nel README dell'esempio `unused_asset`.
+4. **Livello delle issue.** Un'issue di livello WARNING con una causa di livello ERROR (esempio `missing_relationship`)
+   è riportata come "Package Manager segnala un errore". Un test unitario fissa questa scelta; se il team preferisce il
+   livello dell'issue, cambiano il test e il testo.
+5. **"valore predefinito".** Due messaggi del loader usano "valore predefinito" invece di "valore di default" del
+   glossario (docs/brand.md). Uno dei due compare nel report.md del pilota: correggerlo aggiunge una differenza che non
+   viene da una regola delle estensioni, quindi è rimandato a dopo che il team ha accettato questo elenco.
+
+### Lasciato agli esempi
+
+La spec chiede un esempio sintetico per ogni costrutto. Mancano ancora: entry da data extension con pianificazione
+ricorrente, entry da API event, segnalazione di entry filter, goal ed exit criteria, "report.md elenca solo le
+assunzioni che l'export attiva", "un solo scenario attivo" non offerto con Run Once, e gli operatori `NotEqual`,
+`GreaterThanOrEqual`, `LessThan`, `LessThanOrEqual`, `Contains`, `BeginsWith` ed `EndsWith`. Gli esempi li scrive chi
+ricava le risposte attese dalla spec senza leggere il codice.

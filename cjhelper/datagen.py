@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
-from .graph import case_paths, fixed_wait_minutes
+from .graph import CURRENT_DATE_DEFAULTS, case_paths, fixed_wait_minutes
 from .model import (
     ENTRY_AUTOMATION,
     GENERATED_KEY,
@@ -137,7 +137,7 @@ _PUSHED_BACK_KINDS = ("key", "split", "activation", "wait", "email", "phone", "d
 _REQUIREMENT_KINDS = ("key", "split", "activation", "filter", "wait")
 
 # Defaults that mean "the current date" in a Data Extension schema (the export writes GETDATE()).
-_CURRENT_DATE_DEFAULTS = ("getdate()", "getutcdate()", "sysdatetime()")
+_CURRENT_DATE_DEFAULTS = CURRENT_DATE_DEFAULTS   # shared with graph.Walker.inserted_default
 
 _SKIP = object()   # a rule that does not apply to this row: try the next rule
 
@@ -1094,21 +1094,28 @@ class _Generator:
         the email and the engagement split, with a warning when the window is under one hour. The testbook gives
         each case's minimum duration."
 
-        For each window coverage.py found, the deadline is the date written for its last wait by attribute plus
-        the fixed waits after it; without a wait by attribute the window is relative to the email (``minutes``).
-        A window is short when it is under one hour: its deadline is less than an hour after the generation
-        time, or its fixed waits last less than an hour. A short window with no wait at all is already reported
-        by ``_check_engagement_waits``. ``Case.not_before`` is the same date for the whole path of the case."""
+        The window of a manual action opens when the email can arrive: the generation time, delayed by the
+        waits before the email on the case's path (``ActionWindow.wait_keys_before``; ``email_not_before`` when
+        they delay it). With a wait by attribute between the email and the split, the deadline is the earliest
+        time the contacts reach the split (``_leave_waits``): each wait by attribute holds them until the date
+        written for it, or lets them go at once when that date has already passed. Without a wait by attribute
+        the window is relative to the email (``minutes``). A window is short when it is under one hour: its
+        deadline is less than an hour after the email can arrive, or its fixed waits last less than an hour. A
+        short window with no wait at all is already reported by ``_check_engagement_waits``.
+        ``Case.not_before`` is the same date for the whole path of the case."""
         activities = self.package.journey.activities
+        short = timedelta(minutes=SHORT_WINDOW_MINUTES)
         for scenario in scenarios:
             for case in scenario.cases:
                 for window in case.action_windows:
+                    email_at = self._leave_waits(window.wait_keys_before, self.generation_time, scenario, case)
+                    if email_at is not None and email_at > self.generation_time:
+                        window.email_not_before = self._format_date(email_at)
+                    start = email_at if email_at is not None else self.generation_time
                     if window.attribute_wait_key is not None:
-                        moment = self._wait_moment(window.attribute_wait_key, window.minutes_after_attribute_wait,
-                                                   scenario, case)
+                        moment = self._leave_waits(window.wait_keys, start, scenario, case)
                         window.deadline = self._format_date(moment) if moment is not None else None
-                        window.short = (moment is not None
-                                        and moment - self.generation_time < timedelta(minutes=SHORT_WINDOW_MINUTES))
+                        window.short = moment is not None and moment - start < short
                     else:
                         window.short = window.minutes is not None and window.minutes < SHORT_WINDOW_MINUTES
                     if window.short and window.wait_keys:
@@ -1124,6 +1131,30 @@ class _Generator:
                     if moment is not None and (latest is None or moment > latest):
                         latest = moment
                 case.not_before = self._format_date(latest) if latest is not None else None
+
+    def _leave_waits(self, wait_keys: list[str], start: datetime, scenario: Scenario,
+                     case: Case) -> Optional[datetime]:
+        """The earliest time a contact that reaches the first of ``wait_keys`` at ``start`` is past all of them,
+        in path order: a wait by duration adds its amount, a send-time wait nothing (it may send at once), a
+        wait by attribute holds the contact until the date written for it, or not at all once that date has
+        passed. None when a duration or a date is not known."""
+        activities = self.package.journey.activities
+        moment = start
+        for key in wait_keys:
+            activity = activities.get(key)
+            if activity is None:
+                continue
+            if activity.kind == KIND_WAIT_ATTRIBUTE:
+                until = self._wait_moment(key, 0, scenario, case)
+                if until is None:
+                    return None
+                moment = max(moment, until)
+            else:
+                minutes = fixed_wait_minutes(activity)
+                if minutes is None:
+                    return None
+                moment += timedelta(minutes=minutes)
+        return moment
 
     def _wait_moment(self, wait_key: str, minutes_after: Optional[int], scenario: Scenario,
                      case: Case) -> Optional[datetime]:
@@ -1160,7 +1191,22 @@ class _Generator:
             waits, last = f"il wait {window.wait_keys[0]}", ("può terminare", "dura")
         else:
             waits, last = f"i wait {', '.join(window.wait_keys)}", ("possono terminare", "durano in tutto")
-        if window.attribute_wait_key is not None:
+        if window.attribute_wait_key is not None and window.email_not_before is not None:
+            # The waits before the email delay its arrival: the window is measured from there.
+            delay = (f"i wait {', '.join(window.wait_keys_before)} che la precedono"
+                     if len(window.wait_keys_before) > 1 else f"il wait {window.wait_keys_before[0]} che la precede")
+            if window.deadline == window.email_not_before:
+                time_left = (f"lo split viene valutato appena arriva l'email, perché a quell'ora la data del wait "
+                             f"{window.attribute_wait_key} è già passata: il tester non ha il tempo di {verb} l'email")
+            else:
+                time_left = f"il tester ha meno di un'ora per {verb} l'email dopo il suo arrivo"
+            self._warn(
+                f"L'email {email_name!r} arriva non prima del {window.email_not_before}, per {delay}, e la scadenza "
+                f"per {verb} l'email prima dell'engagement split {split_name} è il {window.deadline}: {time_left}. "
+                "L'offset della data di wait prima di un engagement split si cambia nelle impostazioni: per dare "
+                "tempo al tester deve superare di almeno un'ora il ritardo dell'email."
+            )
+        elif window.attribute_wait_key is not None:
             self._warn(
                 f"La scadenza per {verb} l'email {email_name!r} prima dell'engagement split {split_name} è il "
                 f"{window.deadline}, meno di un'ora dopo l'ora di generazione: il tester ha meno di un'ora. "
