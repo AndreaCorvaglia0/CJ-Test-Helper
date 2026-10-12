@@ -160,3 +160,23 @@ def test_unsupported_outcome_stops_the_walk_only_when_it_is_reached():
     st = w.run(w.start(), lookup_from({("DE_Master", "Perm"): "False"}))
     assert st.stop == graph.STOP_UNSUPPORTED and st.steps == [Step("SPLIT-1", None)]
     assert "Between" in st.stop_detail
+
+
+def test_between_and_row_present_conditions_are_evaluated():
+    """Spec, "Extensions beyond the pilot": Between includes both bounds; the supported attribute comparison
+    reads "the contact has a row", true when the linked key field holds a value."""
+    from cjhelper.model import Condition
+
+    row_present = Condition("DE_Master", "ContactId", "Equal", None, value_attribute="Event.EV.ContactId")
+    acts = [decision("SPLIT-1", "s", [("a", "A", "UPD-A", cond("DE_Master", "Channel", "Between", "b|d")),
+                                      ("b", "B", "UPD-B", row_present)], remainder_next="UPD-R"),
+            update("UPD-A", "A", [], None), update("UPD-B", "B", [], None), update("UPD-R", "R", [], None)]
+    w, j = build_walker(acts)
+    st = w.run(w.start(), lookup_from({("DE_Master", "Channel"): "d", ("DE_Master", "ContactId"): "TST_C1"}))
+    assert st.steps[0] == Step("SPLIT-1", "a")
+    st = w.run(w.start(), lookup_from({("DE_Master", "Channel"): "e", ("DE_Master", "ContactId"): "TST_C1"}))
+    assert st.steps[0] == Step("SPLIT-1", "b")
+    st = w.run(w.start(), lookup_from({("DE_Master", "Channel"): "a", ("DE_Master", "ContactId"): None}))
+    assert st.steps[0] == Step("SPLIT-1", "remainder_path")
+    st = w.run(w.start(), lookup_from({("DE_Master", "Channel"): "e"}))
+    assert st.stop == graph.STOP_UNDETERMINED and st.pending_field == ("DE_Master", "ContactId")

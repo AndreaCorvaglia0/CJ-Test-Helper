@@ -1,7 +1,9 @@
 # Formato dell'export del package (ciò che legge il loader)
 
-Osservato sull'export pilota (`fixtures/CJ template complesso-v1.json`, `modelVersion` 9 del Package Manager).
-Sono descritte solo le parti che usa il generatore. Gli esempi fatti a mano devono seguire questa forma.
+Osservato sull'export pilota (`fixtures/CJ template complesso-v1.json`, `modelVersion` 9 del Package Manager)
+e, per i costrutti dell'ultima sezione, su altri quattro export reali tenuti fuori dalla repository (12 ottobre 2026;
+i nomi qui sotto sono inventati). Sono descritte solo le parti che usa il generatore. Gli esempi fatti a mano devono
+seguire questa forma.
 
 ```json
 {
@@ -21,7 +23,8 @@ Sono descritte solo le parti che usa il generatore. Gli esempi fatti a mano devo
 }
 ```
 
-Ogni entità è `{"issues": [], "originID": ..., "originEID": ..., "data": {...}}`; conta solo `data`.
+Ogni entità è `{"issues": [], "originID": ..., "originEID": ..., "data": {...}}`; il generatore legge `data` e, per le
+segnalazioni di Package Manager, `issues` (vedi "Costrutti oltre il pilota").
 
 ## Riferimenti
 
@@ -43,7 +46,8 @@ Gli altri placeholder (`{{mcpm:senderProfile}}`, `{{Context.*}}`, `{{Contact.*}}
       "ordinal": 15, "defaultValue": "False" } ] }
 ```
 
-Tipi osservati: `Text`, `Boolean`, `Date`, `EmailAddress`, `Phone`. `defaultValue` è assente oppure è una stringa
+Tipi osservati: `Text`, `Boolean`, `Date`, `EmailAddress`, `Phone` (pilota), `Decimal` con `"length": 24, "scale": 4`
+(altri export). `defaultValue` è assente oppure è una stringa
 (`"False"`, `"false"`, `"GETDATE()"`, `"GetDate()"`). Le tabelle sendable hanno `"sendableCustomObjectField": "ContactId"`
 e `"sendableSubscriberField": "_SubscriberKey"`: quel campo è la chiave del contatto.
 
@@ -140,7 +144,9 @@ Un outcome senza `next` è un'uscita dal journey. L'attività iniziale è quella
 Gli outcome sono valutati in ordine; `remainder_path` non ha criteria. Gruppi annidati:
 `<ConditionSet Operator="AND"><Condition .../><ConditionSet Operator="OR"><Condition .../><Condition Operator="IsNull"><Value><![CDATA[]]></Value></Condition></ConditionSet></ConditionSet>`.
 Il `Key` della condizione è `<attribute set name>.<field name>`; i nomi dei campi possono contenere spazi (`Control Group Required`).
-I valori Boolean sono scritti `true` / `false`. Operatori osservati: `Is`, `Equal`, `IsNull`.
+I valori Boolean sono scritti `true` / `false`. Operatori osservati nel pilota: `Is`, `Equal`, `IsNull`; negli altri
+export anche `IsNotNull`, `GreaterThan` e `Between`. Una condizione Contact Data porta in `UiMetaData` il
+`groupToSetRelationshipId` della relazione che collega il suo attribute set al contatto.
 
 ### Engagement split `ENGAGEMENTDECISION`
 
@@ -189,3 +195,109 @@ Send-time wait: `{"type": "STOWAIT", "configurationArguments": {"params": {"slid
 ```
 
 I valori possono essere stringhe o numeri (`"value": 1`).
+
+## Costrutti oltre il pilota
+
+Visti negli altri export del 12 ottobre 2026; regole nella sezione della spec "Extensions beyond the pilot".
+
+### Journey Data nelle condizioni
+
+```xml
+<Condition IsEphemeralAttribute="true"
+           Key="Event.{{mcpm#/entities/eventDefinitions/<ev id>/data/eventDefinitionKey}}.Score"
+           Operator="GreaterThan" UiMetaData="{}"><Value><![CDATA[20]]></Value></Condition>
+```
+
+Dopo la risoluzione la chiave è `Event.DEAudience-<guid>.Score`: la colonna `Score` della data extension dell'entry event
+con quella chiave. Nessun `AttributePath`, `UiMetaData` vuoto. Lo stesso `Event.<key>."Campo"` compare nei
+`defaults` del journey e può comparire in `waitEndDateAttributeExpression`.
+
+### Attributo confrontato con un attributo
+
+```xml
+<Condition Key="{{mcpm#/entities/attributeSets/<set id>/data/name}}.SubscriberKey" Operator="Equal"
+           UiMetaData="{&quot;groupToSetRelationshipId&quot;:&quot;{{mcpm#/entities/attributeRelationships/<rel id>/data/id}}&quot;}"
+           ValueParameterName="Event.CloudPagesSma-<guid>.SubscriberKey"><Value><![CDATA[]]></Value></Condition>
+```
+
+Il `<Value>` è vuoto: il secondo termine è l'attributo in `ValueParameterName` (qui la chiave del contatto letta dai
+Journey Data). Fonti pubbliche mostrano anche la forma speculare: la chiave è il campo `Event.<key>.<campo>`,
+`ValueIsReference="true"` e il `<Value>` contiene `<attribute set>.<campo>`.
+
+### Between
+
+```xml
+<Condition IsEphemeralAttribute="true" Key="Event.DEAudience-<guid>.Score" Operator="Between" UiMetaData="{}">
+  <Value><![CDATA[10|20]]></Value></Condition>
+```
+
+Il valore è `basso|alto`; la `criteriaDescription` dell'outcome lo tronca (`Score between 10`), quindi conta solo l'XML.
+
+### Data extension di ingresso fuori da Contact Builder
+
+La tabella di ingresso è sendable su `SubscriberKey` (`sendableSubscriberField: "_SubscriberKey"`) e non ha un
+attribute set. Le tabelle lette come Contact Data hanno un attribute set collegato al contatto da una sola relazione
+group-to-set:
+
+```json
+{ "name": "<group> <- DE_Form", "isGroupToSetRelationship": true,
+  "leftRelationshipIDs": [ { "type": "int16", "value": "3" } ],
+  "relationshipAttributes": [ { "rightAttributeName": "SubscriberKey" } ],
+  "leftItem":  { "relationshipType": "AttributeGroup", "cardinality": "One", "name": "<group>" },
+  "rightItem": { "relationshipType": "AttributeSet", "cardinality": "One", "name": "DE_Form" } }
+```
+
+Relazione mancante: in un export l'attribute set ha `"leftRelationships": ["#/entities/attributeRelationships/<id>/data"]`
+ma `attributeRelationships` è vuoto, e il `groupToSetRelationshipId` della condizione è un GUID letterale che non
+corrisponde ad alcuna entità.
+
+### Entry source
+
+Data extension con pianificazione Run Once (`EmailAudience`):
+
+```json
+{ "name": "...", "type": "EmailAudience", "eventDefinitionKey": "DEAudience-<guid>",
+  "dataExtensionId": "{{mcpm#/entities/dataExtensions/<entry de id>/data/id}}",
+  "metaData": { "scheduleState": "No Schedule", "criteriaDescription": null,
+                "scheduleFlowMode": "runOnce", "runOnceScheduleMode": "onPublish" },
+  "arguments": { "serializedObjectType": 3, "dataExtensionId": "<entry de id>", "automationId": "<guid>",
+                 "criteria": "", "useHighWatermark": false } }
+```
+
+L'`automationId` è un GUID nudo che non corrisponde ad alcuna automation dell'export (lo scheduler creato da Journey
+Builder, assunzione). Nel pilota (`AutomationAudience`) `metaData` è `{"scheduleFlowMode": "automation"}`, c'è un
+oggetto `schedule` e `automationId` è un riferimento a un'automation dell'export.
+
+Form CloudPages (`CloudPagesSmartCaptureSubmissionEvent`):
+
+```json
+{ "type": "CloudPagesSmartCaptureSubmissionEvent", "eventDefinitionKey": "CloudPagesSma-<guid>",
+  "dataExtensionId": "{{mcpm#/entities/dataExtensions/<form de id>/data/id}}",
+  "metaData": { "criteriaDescription": "", "scheduleState": "No Schedule" },
+  "configurationArguments": { "applicationExtensionKey": "cloudpages-jb-event-smart-capture", "smartCaptureFormID": 1234 },
+  "arguments": { "serializedObjectType": 0, "dataTargetName": "<form de>", "formName": "<form>", "criteria": "" } }
+```
+
+Il trigger del journey ha lo stesso `type` e `configurationArguments` con `criteria` e `filterDefinitionId` (il GUID
+di soli zeri quando non c'è un filtro di ingresso).
+
+### Journey
+
+`entryMode` vale `MultipleEntries` (pilota), `OnceAndDone` o `SingleEntryAcrossAllVersions`. `goals` ed `exits` sono
+liste, vuote in tutti gli export visti. `defaults.mobileNumber` può nominare una colonna che la tabella di ingresso non ha.
+I wait by duration possono avere `waitDuration` come stringa (`"7"`) e `specifiedTime` (`"00:00"`).
+
+### Issues di Package Manager
+
+```json
+{ "type": "ENTITY_NOT_FOUND", "level": "WARNING",
+  "cause": { "type": "ATTRIBUTE_GROUP", "level": "ERROR", "message": "Unable to find attribute relationship" },
+  "entity": { "entityType": "attributeRelationships", "retrievalProperty": "id", "value": "<guid>",
+              "locationInformation": { "activityName": "<split>", "activityType": "MULTICRITERIADECISION" } } }
+```
+
+Altri tipi visti: `UNSUPPORTED_FUNCTIONALITY` con `functionality` (`JOURNEY_UNSUPPORTED_ENTRY` sul journey con ingresso da
+form CloudPages, `UNSUPPORTED_BLOCK` con `blockType` sulle landing page) e `UNSUPPORTED_AMPSCRIPT` di livello `INFO`. Le
+`issues` stanno accanto a `data` in ogni entità; un export può averle anche al primo livello. Le entità `landingPages`,
+`primaryLandingPages` e `cloudPageCollections`, e gli asset che non sono email inviate dal journey (template, blocchi,
+immagini), servono solo al contenuto.

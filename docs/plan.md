@@ -85,6 +85,41 @@ def load_package(source) -> Package      # source: bytes, str (JSON text or path
 - Query: ogni voce di `queryActivities`; `Package.automation_queries[automation name]` elenca i nomi delle query
   in ordine di step (`steps[*].activities[*]` con `objectTypeId == 300`).
 
+Regole aggiunte dalla sezione della spec "Extensions beyond the pilot" (12 ottobre 2026):
+
+- Journey Data: una condizione con chiave `Event.<eventDefinitionKey>.<campo>` (segnata `IsEphemeralAttribute="true"`)
+  legge la colonna `<campo>` della tabella di ingresso dell'entry event del trigger: `Condition.table` diventa quella
+  tabella e `Condition.source` è `SOURCE_JOURNEY`, così il passo successivo può applicare la regola della fotografia
+  all'ingresso. Una chiave che nomina un altro event definition (il pilota ne ha due: vale quello del trigger) rende il
+  branch non supportato, con il motivo. Lo stesso per un wait by attribute scritto `{{Event.<key>."Campo"}}`.
+- Confronto tra due attributi (`ValueParameterName`, oppure `ValueIsReference`): supportato solo nella forma "campo
+  collegato alla chiave del contatto di una tabella a livello di contatto `Equal` la chiave del contatto" (la chiave del
+  contatto è il Journey Data dell'entry event del trigger sul campo che contiene la chiave del contatto). La condizione
+  viene normalizzata in modo che `table.field` sia il campo collegato e `value_attribute` la chiave del contatto, e si legge
+  "il contatto ha una riga in quella tabella". Ogni altra forma rende il branch non supportato, con il motivo; non viene
+  mai letta come confronto con un valore vuoto. Un campo è collegato alla chiave del contatto quando lo è per una relazione
+  group-to-set, o tramite relazioni tra tabelle a partire da uno di questi campi o dalla chiave del contatto della
+  tabella di ingresso.
+- `Between` con un valore che non è nella forma `basso|alto` rende il branch non supportato.
+- Relazione mancante: una condizione Contact Data su un attribute set che nessuna relazione dell'export nomina rende il
+  branch non supportato con il motivo "relazione mancante nell'export"; la tabella va in `Package.missing_relationships`.
+- `issues` di Package Manager di livello warning o error (anche nella `cause`), sia in cima all'export sia su ogni
+  entità: diventano warning in italiano, tranne quelli su asset e landing page che il journey non usa.
+- I warning sugli asset e sulle landing page che nessuna attività Email del journey invia vengono scartati, sia quelli
+  della risoluzione dei riferimenti sia le `issues` (anche quando l'asset mancante è un'immagine di un'email inviata).
+- Entry source: `EntryEvent.kind` viene dal `type` dell'event definition (`ENTRY_SOURCE_TYPES`) e, per una data
+  extension, da `metaData.scheduleFlowMode` (`SCHEDULE_FLOW_MODES`): `ENTRY_AUTOMATION` (il pilota), `ENTRY_RUN_ONCE`,
+  `ENTRY_SCHEDULED` (pianificazione ricorrente o non riconosciuta, con un warning), `ENTRY_OTHER` (form CloudPages,
+  API event e ogni altro tipo). Restano anche `event_type`, `schedule_mode`, `run_once_mode` ed `entry_filter`.
+  `arguments.automationId` diventa `automation_name` solo per un ingresso da automation: su una data extension con la sua
+  pianificazione è lo scheduler di Journey Builder (assunzione) e non si segnala nulla.
+- Criteri di ingresso (`arguments.criteria` dell'evento, `configurationArguments.criteria` e `filterDefinitionId` del
+  trigger, `metaData.criteriaDescription`), goal ed exit criteria non sono modellati: se presenti, un warning.
+  `Journey.entry_mode` (`entryMode`), `Journey.goal_count` e `Journey.exit_count` li riportano.
+- Un valore predefinito del journey (`defaults.email`, `defaults.mobileNumber`) che legge una colonna che la tabella
+  di ingresso non ha -> warning.
+- `Field.scale` è letto per i campi Decimal.
+
 ### criteria.py
 
 ```python
@@ -100,13 +135,22 @@ class UnsupportedOperator(Exception): ...
   `Key` si divide al primo `.` in set e campo (i nomi dei campi possono contenere spazi). Un set con un solo elemento
   si riduce a quell'elemento. Un set vuoto o un elemento sconosciuto -> `CriteriaError`.
 - Operatori, tutti dalla spec: `Is`, `Equal`, `IsNull` (pilota) più `NotEqual`, `IsNotNull`, `GreaterThan`,
-  `LessThan`, `GreaterThanOrEqual`, `LessThanOrEqual`, `Contains`, `BeginsWith`, `EndsWith` (ripresi dal vecchio tool).
+  `LessThan`, `GreaterThanOrEqual`, `LessThanOrEqual`, `Contains`, `BeginsWith`, `EndsWith` (ripresi dal vecchio tool)
+  e `Between` (sezione "Extensions beyond the pilot": valore `basso|alto`, estremi inclusi).
+- Chiavi: `Event.<eventDefinitionKey>.<campo>` è Journey Data (`source = SOURCE_JOURNEY`, `table` = la chiave
+  dell'evento finché il loader non la mappa); `IsEphemeralAttribute="true"` su una chiave in un'altra forma ->
+  `CriteriaError`. `ValueParameterName="<attributo>"` (con `<Value>` vuoto) o `ValueIsReference="true"` (l'attributo
+  nel `<Value>`) -> `value_attribute`, nessun valore letterale. Funzioni di supporto: `split_attribute(text)` e
+  `between_bounds(value)`.
   Semantica in `evaluate_condition` (il valore è sempre la stringa CSV oppure None):
   - Boolean: confronto dopo la conversione in minuscolo, accettando `true/false/1/0`.
   - Text, EmailAddress, Phone, Locale: corrispondenza esatta; non distingue maiuscole e minuscole quando lo dice l'impostazione.
   - Number/Decimal: confronto numerico. Date: leggi entrambi i lati (`YYYY-MM-DD[ HH:MM[:SS]]`, ISO); i valori
     di condizione con la sola data si confrontano sulla parte della data.
   - `IsNull`: None oppure `""`. `IsNotNull`: l'opposto. Ogni altro operatore su None -> False (assunzione, da elencare).
+  - `Between`: `basso <= valore <= alto` con il confronto del tipo del campo; un valore non `basso|alto` -> `UnsupportedOperator`.
+  - Confronto tra attributi (`value_attribute`, solo `Equal`, forma controllata dal loader): vero quando il campo ha un
+    valore, cioè quando il contatto ha la riga.
   - Operatore sconosciuto -> `UnsupportedOperator`.
 
 ### sqlparse_lite.py
@@ -156,6 +200,29 @@ Chiama `sqlparse_lite.parse_query` da sé. Regole (spec "Table selection" e "Cla
 - `activation_field`: dai filtri della entry query, il primo `EqualityFilter` su un campo Boolean di una tabella
   a livello di scenario con valore `True`/`true`; altrimenti None.
 - Ogni decisione finisce in `TableRole.reason` o in `warnings`, in parole semplici.
+- Riga presente o assente (sezione "Extensions beyond the pilot"): `TableModel.existence_tested` = tabella -> campo
+  collegato alla chiave del contatto, per ogni tabella a livello di contatto, diversa dalla tabella di ingresso, di cui
+  uno split valutato verifica l'esistenza (`IsNull` / `IsNotNull` su quel campo, o il confronto tra attributi supportato).
+  Mai per le tabelle lette dalle query che popolano la tabella di ingresso (la entry query e quelle che ne alimentano le
+  sorgenti). Il motivo della tabella lo dice.
+- I livelli restano quelli del campo di join, non la cardinalità dichiarata in Contact Builder.
+- Un ingresso non alimentato da un'automation (Run Once, pianificazione ricorrente, form, API event) non ha di norma una
+  entry query: non si segnala. Un ingresso da automation la cui automation manca dall'export lo dice così.
+- Una tabella in `Package.missing_relationships` resta selezionata (è letta da uno split), a livello di scenario, con
+  il motivo "relazione mancante nell'export" al posto dell'assunzione "una riga condivisa da tutti i contatti".
+- Le condizioni Journey Data di un altro entry event non nominano alcuna tabella e non producono warning qui.
+
+### Campi del modello aggiunti per le estensioni
+
+| Campo | Significato |
+| --- | --- |
+| `Condition.source` | `SOURCE_CONTACT` (Contact Data, letto quando il contatto arriva allo split) o `SOURCE_JOURNEY` (Journey Data, fotografia all'ingresso) |
+| `Condition.value_attribute` | L'attributo con cui il campo è confrontato, com'è scritto; nella forma supportata la chiave del contatto |
+| `Field.scale` | Cifre decimali di un campo Decimal |
+| `EntryEvent.kind`, `event_type`, `schedule_mode`, `run_once_mode`, `entry_filter` | Entry source e pianificazione; `ENTRY_*` in `model.py` |
+| `Journey.entry_mode`, `goal_count`, `exit_count` | `entryMode` del journey; goal ed exit criteria presenti (non modellati) |
+| `Package.missing_relationships` | Tabelle lette da uno split tramite un attribute set senza relazioni nell'export |
+| `TableModel.existence_tested` | Tabelle con la variabile "riga presente / riga assente" -> campo collegato alla chiave del contatto |
 
 ### graph.py e coverage.py (lead)
 

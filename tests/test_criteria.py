@@ -7,10 +7,12 @@ from cjhelper.criteria import (
     OPERATORS_WITHOUT_VALUE,
     CriteriaError,
     UnsupportedOperator,
+    between_bounds,
     evaluate_condition,
     parse_criteria,
+    split_attribute,
 )
-from cjhelper.model import Condition, ConditionGroup
+from cjhelper.model import SOURCE_CONTACT, SOURCE_JOURNEY, Condition, ConditionGroup, formula_text
 
 
 def condition_xml(key, operator, value="", wrappers=0, with_value=True):
@@ -110,8 +112,9 @@ def test_operators_without_value_get_none():
 
 
 def test_unknown_operator_is_parsed_and_rejected_only_when_evaluated():
-    condition = parse_criteria(filter_xml(condition_xml("A.x", "Between", "1")))
-    assert condition == Condition("A", "x", "Between", "1")
+    # Between used to be the example here; the extension section of the spec added it to the operators.
+    condition = parse_criteria(filter_xml(condition_xml("A.x", "NotContains", "1")))
+    assert condition == Condition("A", "x", "NotContains", "1")
     with pytest.raises(UnsupportedOperator):
         evaluate_condition(condition, "1", "Number", False)
 
@@ -165,10 +168,11 @@ def check(operator, actual, expected, field_type="Text", case_insensitive=False)
 
 
 def test_operator_table_holds_the_spec_operators():
+    # Spec, "Extensions beyond the pilot", "Operators, types and values": the supported operators.
     assert set(OPERATORS) == {
         "Is", "Equal", "IsNull",
         "NotEqual", "IsNotNull", "GreaterThan", "LessThan", "GreaterThanOrEqual", "LessThanOrEqual",
-        "Contains", "BeginsWith", "EndsWith",
+        "Contains", "BeginsWith", "EndsWith", "Between",
     }
     assert OPERATORS_WITHOUT_VALUE == {"IsNull", "IsNotNull"}
 
@@ -285,7 +289,7 @@ def test_is_null_and_is_not_null(actual, result):
 
 @pytest.mark.parametrize("operator", [
     "Is", "Equal", "NotEqual", "GreaterThan", "LessThan", "GreaterThanOrEqual", "LessThanOrEqual",
-    "Contains", "BeginsWith", "EndsWith",
+    "Contains", "BeginsWith", "EndsWith", "Between",
 ])
 @pytest.mark.parametrize("actual", [None, ""])
 def test_any_other_operator_on_null_is_false(operator, actual):
@@ -301,7 +305,126 @@ def test_null_operators_ignore_the_condition_value():
     assert evaluate_condition(Condition("T", "f", "IsNull", "ignored"), None, "Text", False) is True
 
 
-@pytest.mark.parametrize("operator", ["Between", "equal", "IsIn", ""])
+@pytest.mark.parametrize("operator", ["NotContains", "equal", "IsIn", ""])
 def test_unknown_operator_raises_unsupported_operator(operator):
     with pytest.raises(UnsupportedOperator):
         evaluate_condition(Condition("T", "f", operator, "x"), "x", "Text", False)
+
+
+# ---------------------------------------------------------------------------
+# Extensions beyond the pilot: Journey Data, attribute comparisons, Between
+# ---------------------------------------------------------------------------
+
+def journey_condition_xml(key, operator, value=""):
+    """A Journey Data condition as the real exports write it: ephemeral attribute, no AttributePath."""
+    return (f'<Condition IsEphemeralAttribute="true" Key="{key}" Operator="{operator}" UiMetaData="{{}}">'
+            f"<Value><![CDATA[{value}]]></Value></Condition>")
+
+
+def test_journey_data_key_names_the_event_and_the_field():
+    xml = filter_xml(journey_condition_xml("Event.DEAudience-1.Score", "GreaterThan", "15"))
+    assert parse_criteria(xml) == Condition("DEAudience-1", "Score", "GreaterThan", "15",
+                                            source=SOURCE_JOURNEY)
+
+
+def test_journey_data_key_without_the_ephemeral_attribute_is_journey_data():
+    xml = filter_xml(condition_xml("Event.APIEvent-1.Field With Spaces", "IsNull"))
+    condition = parse_criteria(xml)
+    assert (condition.source, condition.table, condition.field) == (SOURCE_JOURNEY, "APIEvent-1", "Field With Spaces")
+
+
+def test_contact_data_key_keeps_the_contact_source():
+    condition = parse_criteria(filter_xml(condition_xml("Optin.SubscriberKey", "IsNull")))
+    assert (condition.source, condition.table, condition.value_attribute) == (SOURCE_CONTACT, "Optin", None)
+
+
+def test_ephemeral_attribute_on_a_key_that_is_not_journey_data_is_rejected():
+    xml = filter_xml('<Condition IsEphemeralAttribute="true" Key="Master.Perm" Operator="Is">'
+                     "<Value><![CDATA[true]]></Value></Condition>")
+    with pytest.raises(CriteriaError, match="Journey Data"):
+        parse_criteria(xml)
+
+
+def test_value_parameter_name_is_an_attribute_not_an_empty_value():
+    xml = filter_xml('<Condition Key="Optin.SubscriberKey" Operator="Equal" UiMetaData="{}" '
+                     'ValueParameterName="Event.CloudPagesSma-7.SubscriberKey"><Value><![CDATA[]]></Value></Condition>')
+    condition = parse_criteria(xml)
+    assert condition == Condition("Optin", "SubscriberKey", "Equal", None, source=SOURCE_CONTACT,
+                                  value_attribute="Event.CloudPagesSma-7.SubscriberKey")
+    assert formula_text(condition) == "Optin.SubscriberKey Equal Event.CloudPagesSma-7.SubscriberKey"
+
+
+def test_value_is_reference_takes_the_attribute_from_the_value():
+    xml = filter_xml('<Condition IsEphemeralAttribute="true" Key="Event.DEAudience-1.SubscriberKey" Operator="Equal" '
+                     'ValueIsReference="true"><Value><![CDATA[Log Set.SubscriberKey]]></Value></Condition>')
+    condition = parse_criteria(xml)
+    assert (condition.source, condition.table, condition.field) == (SOURCE_JOURNEY, "DEAudience-1", "SubscriberKey")
+    assert (condition.value, condition.value_attribute) == (None, "Log Set.SubscriberKey")
+
+
+@pytest.mark.parametrize("xml", [
+    # an attribute and a literal at the same time
+    '<Condition Key="A.x" Operator="Equal" ValueParameterName="Event.E.y"><Value><![CDATA[1]]></Value></Condition>',
+    # a reference without the attribute it refers to
+    '<Condition Key="A.x" Operator="Equal" ValueIsReference="true"><Value><![CDATA[]]></Value></Condition>',
+])
+def test_contradictory_attribute_comparisons_are_rejected(xml):
+    with pytest.raises(CriteriaError):
+        parse_criteria(filter_xml(xml))
+
+
+@pytest.mark.parametrize("text, parts", [
+    ("Event.DEAudience-1.Score", (SOURCE_JOURNEY, "DEAudience-1", "Score")),
+    ("Config Set.Control Group", (SOURCE_CONTACT, "Config Set", "Control Group")),
+    ("Event.Field", (SOURCE_CONTACT, "Event", "Field")),     # no event key: read as a set called Event
+    ("NoDot", None),
+    (".x", None),
+])
+def test_split_attribute(text, parts):
+    assert split_attribute(text) == parts
+
+
+@pytest.mark.parametrize("value, bounds", [
+    ("10|20", ("10", "20")),
+    (" 8 | 15 ", ("8", "15")),
+    ("10000", None),
+    ("1|2|3", None),
+    ("|5", None),
+    (None, None),
+])
+def test_between_bounds(value, bounds):
+    assert between_bounds(value) == bounds
+
+
+@pytest.mark.parametrize("actual, result", [
+    ("100", True), ("100.0000", True), ("250.5", True), ("300", True),     # both bounds included (confirmed)
+    ("99.9999", False), ("300.0001", False), ("-1", False), ("abc", False),
+])
+@pytest.mark.parametrize("field_type", ["Number", "Decimal"])
+def test_between_includes_both_bounds(field_type, actual, result):
+    assert check("Between", actual, "100|300", field_type) is result
+
+
+def test_between_on_dates_and_text():
+    assert check("Between", "2026-10-11 10:00", "2026-10-11|2026-10-12", "Date") is True
+    assert check("Between", "2026-10-13 00:00", "2026-10-11|2026-10-12", "Date") is False
+    assert check("Between", "b", "a|c") is True
+    assert check("Between", "d", "a|c") is False
+    assert check("Between", "5", "10|1", "Number") is False      # reversed bounds match nothing
+
+
+def test_between_value_not_written_low_high_cannot_be_evaluated():
+    with pytest.raises(UnsupportedOperator, match="basso\\|alto"):
+        check("Between", "5", "10000", "Number")
+
+
+@pytest.mark.parametrize("actual, result", [("TST_R01_C0001", True), ("x", True), (None, False), ("", False)])
+def test_attribute_comparison_reads_whether_the_row_is_there(actual, result):
+    condition = Condition("Optin", "SubscriberKey", "Equal", None, value_attribute="Event.E.SubscriberKey")
+    assert evaluate_condition(condition, actual, "Text", False) is result
+
+
+def test_attribute_comparison_with_another_operator_cannot_be_evaluated():
+    condition = Condition("Optin", "SubscriberKey", "NotEqual", None, value_attribute="Event.E.SubscriberKey")
+    with pytest.raises(UnsupportedOperator):
+        evaluate_condition(condition, "x", "Text", False)

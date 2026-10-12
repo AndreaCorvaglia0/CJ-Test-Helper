@@ -30,6 +30,9 @@ if not SQLPARSE_WRITTEN:
 
 from cjhelper import tables  # noqa: E402
 from cjhelper.model import (  # noqa: E402
+    ENTRY_AUTOMATION,
+    ENTRY_OTHER,
+    ENTRY_RUN_ONCE,
     KIND_DECISION,
     KIND_UPDATE,
     KIND_WAIT_ATTRIBUTE,
@@ -39,6 +42,7 @@ from cjhelper.model import (  # noqa: E402
     ROLE_SOURCE,
     ROLE_SPLIT,
     ROLE_WRITTEN,
+    SOURCE_JOURNEY,
     Activity,
     ColumnRef,
     Condition,
@@ -806,6 +810,140 @@ def test_sql_and_criteria_spelling_is_normalised_to_the_schema(sql):
 
 
 # ---------------------------------------------------------------------------
+# Extensions beyond the pilot: entry source, row present or absent, missing relationship
+# ---------------------------------------------------------------------------
+
+FORM = "DE_Form"
+
+
+def run_once_package(activities, kind=ENTRY_RUN_ONCE, extra_tables=(), relationships=None):
+    """The shape of the new exports: a data extension entry (no automation, no query), the entry table
+    sendable on SubscriberKey outside Contact Builder, and a form table linked to the contact by a
+    group-to-set relationship on SubscriberKey."""
+    table_list = [
+        make_table(ENTRY, text("SubscriberKey", pk=True), text("Segment"), sendable_field="SubscriberKey"),
+        make_table(FORM, text("SubscriberKey", pk=True), boolean("Consent"), sendable_field="SubscriberKey"),
+        *extra_tables,
+    ]
+    if relationships is None:
+        relationships = [relation(None, None, FORM, "SubscriberKey")]
+    package = make_package(table_list, activities, relationships=relationships)
+    package.entry_event = EntryEvent(key="EV", name="EV", table=ENTRY, automation_name=None, kind=kind,
+                                     event_type="EmailAudience", schedule_mode="runOnce")
+    return package
+
+
+def journey_cond(field, operator, value=None):
+    return Condition(table=ENTRY, field=field, operator=operator, value=value, source=SOURCE_JOURNEY)
+
+
+@pytest.mark.parametrize("kind", [ENTRY_RUN_ONCE, ENTRY_OTHER])
+def test_entry_not_fed_by_an_automation_needs_no_entry_query(sql, kind):
+    model = tables.build_table_model(run_once_package([decision("SPLIT-1", journey_cond("Segment", "Equal", "A"))],
+                                                      kind=kind))
+    assert model.entry_query is None
+    assert model.warnings == []
+    assert "non popolata da alcuna query dell'export" in model.tables[ENTRY].reason
+
+
+def test_automation_missing_from_the_export_is_named_as_such(sql):
+    package = make_package([make_table(ENTRY, text("ContactId", pk=True), sendable_field="ContactId")])
+    package.entry_event = EntryEvent(key="EV", name="EV", table=ENTRY, automation_name=None, kind=ENTRY_AUTOMATION)
+    model = tables.build_table_model(package)
+    assert model.warnings == [
+        "L'automation che alimenta l'entry event EV non è nell'export, e nessun'altra query dell'export popola "
+        "DE_Entry: non c'è una entry query, quindi l'unica sorgente è la tabella di ingresso"]
+
+
+@pytest.mark.parametrize("condition", [
+    cond(FORM, "SubscriberKey", None, "IsNull"),
+    cond(FORM, "subscriberkey", None, "IsNotNull"),
+    Condition(table=FORM, field="SubscriberKey", operator="Equal", value=None,
+              value_attribute="Event.EV.SubscriberKey"),
+])
+def test_existence_test_on_the_field_linked_to_the_contact_key(sql, condition):
+    model = tables.build_table_model(run_once_package([decision("SPLIT-1", condition)]))
+    # Spec, "Row present or absent": a contact-level table other than the entry table whose existence a
+    # split tests gets a "row present / row absent" variable.
+    assert model.existence_tested == {FORM: (FORM, "SubscriberKey")}
+    assert model.tables[FORM].level == LEVEL_CONTACT
+    assert model.tables[FORM].reason.endswith(
+        "Lo split SPLIT-1 verifica se il contatto ha una riga in questa tabella tramite SubscriberKey, il campo "
+        "collegato alla chiave del contatto: i contatti possono avere la riga o non averla.")
+
+
+def test_existence_tests_name_every_split(sql):
+    model = tables.build_table_model(run_once_package([
+        decision("SPLIT-1", cond(FORM, "SubscriberKey", None, "IsNull")),
+        decision("SPLIT-2", cond(FORM, "Consent")),
+        decision("SPLIT-3", cond(FORM, "SubscriberKey", None, "IsNull")),
+    ]))
+    assert model.existence_tested == {FORM: (FORM, "SubscriberKey")}
+    assert "Gli split SPLIT-1 e SPLIT-3 verificano se il contatto ha una riga" in model.tables[FORM].reason
+
+
+@pytest.mark.parametrize("condition", [
+    cond(FORM, "Consent", None, "IsNull"),                  # not the field linked to the contact key
+    cond(FORM, "SubscriberKey", "TST", "Equal"),            # a value, not an existence test
+    journey_cond("SubscriberKey", "IsNull"),                # the entry table: every contact has its row
+])
+def test_no_existence_test_for_other_conditions(sql, condition):
+    model = tables.build_table_model(run_once_package([decision("SPLIT-1", condition)]))
+    assert model.existence_tested == {}
+
+
+def test_no_existence_test_behind_an_unsupported_outcome(sql):
+    split = decision("SPLIT-1", cond(FORM, "SubscriberKey", None, "IsNull"))
+    split.outcomes[0].unsupported_reason = "not evaluated"
+    assert tables.build_table_model(run_once_package([split])).existence_tested == {}
+    # the outcomes after an unsupported one are never evaluated either
+    split = decision("SPLIT-1", cond(FORM, "Consent"), cond(FORM, "SubscriberKey", None, "IsNull"))
+    split.outcomes[0].unsupported_reason = "not evaluated"
+    assert tables.build_table_model(run_once_package([split])).existence_tested == {}
+
+
+def test_no_existence_test_for_a_table_the_entry_query_joins(sql):
+    package = pilot_like(sql)
+    package.journey.activities["SPLIT-3"] = decision("SPLIT-3", cond(MASTER, "ContactId", None, "IsNull"),
+                                                     cond(TARGET, "SalesforceId", None, "IsNotNull"))
+    model = tables.build_table_model(package)
+    # Spec: "No such variable for tables the entry query joins".
+    assert model.tables[MASTER].level == LEVEL_CONTACT and ROLE_SOURCE in model.tables[MASTER].roles
+    assert model.existence_tested == {}
+
+
+def test_table_whose_attribute_set_has_no_relationship(sql):
+    package = run_once_package([decision("SPLIT-1", cond(FORM, "Consent"))], relationships=[])
+    package.journey.activities["SPLIT-1"].outcomes[0].unsupported_reason = "relazione mancante nell'export"
+    package.missing_relationships = [FORM]
+    model = tables.build_table_model(package)
+    # Spec, "Missing relationship": its conditions are unsupported; the table is still read by a split.
+    assert model.tables[FORM].selected and model.tables[FORM].level == LEVEL_SCENARIO
+    assert "relazione mancante nell'export" in model.tables[FORM].reason
+    assert "assunzione" not in model.tables[FORM].reason
+    assert model.warnings == [
+        "La tabella DE_Form è letta da uno split tramite un attribute set che non ha alcuna relazione nell'export "
+        "(relazione mancante nell'export): le condizioni su questa tabella sono non supportate e le sue righe non "
+        "sono collegate ai contatti"]
+    assert model.existence_tested == {}
+
+
+def test_journey_data_of_another_event_names_no_table(sql):
+    other = Condition(table="DEAudience-2", field="Segment", operator="Equal", value="A", source=SOURCE_JOURNEY)
+    split = decision("SPLIT-1", other)
+    split.outcomes[0].unsupported_reason = "another entry event"
+    model = tables.build_table_model(run_once_package([split]))
+    assert model.warnings == []
+    assert model.selected_tables == [ENTRY]
+
+
+def test_journey_data_reads_the_entry_table(sql):
+    model = tables.build_table_model(run_once_package([decision("SPLIT-1", journey_cond("Segment", "Equal", "A"))]))
+    assert model.tables[ENTRY].roles == {ROLE_ENTRY, ROLE_SPLIT}
+    assert model.field_levels[(ENTRY, "Segment")] == LEVEL_CONTACT
+
+
+# ---------------------------------------------------------------------------
 # The pilot export, end to end (needs loader.py and sqlparse_lite.py)
 # ---------------------------------------------------------------------------
 
@@ -843,3 +981,5 @@ def test_pilot_export():
     assert model.contact_tables == [entry, target, master]
     assert model.scenario_tables == [config]
     assert not any("non è collegata alla tabella di ingresso" in w for w in model.warnings)
+    # the pilot never tests whether a row exists (its IsNull conditions read IsDunning of a source table)
+    assert model.existence_tested == {}

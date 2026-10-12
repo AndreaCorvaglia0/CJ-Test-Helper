@@ -22,6 +22,20 @@ Spec rules implemented here (docs/spec.md):
 
 - "One scenario at a time": the activation field is "suggested from the entry query filters".
 
+Rules of the spec section "Extensions beyond the pilot (agreed 12 October 2026)":
+
+- "Row present or absent": a contact-level table other than the entry table, whose existence a split
+  tests (IsNull or IsNotNull on its field linked to the contact key, or the supported attribute
+  comparison), is listed in ``TableModel.existence_tested``. Never for the tables the entry queries
+  read (the entry query and the queries feeding its sources), nor for the entry table.
+- "Table levels keep the rule of Classify fields by level (join field), not the cardinality
+  declared in Contact Builder": levels still follow the key groups below.
+- Entry source: an entry that is not fed by an automation (Run Once, recurring schedule, CloudPages
+  form, API event) normally has no entry query; that is not reported. An automation entry whose
+  automation is missing from the export is reported as such.
+- Missing relationship: a table read through an attribute set that no relationship of the export names
+  (``Package.missing_relationships``) is not linked to the contact; its reason says so.
+
 The SQL is read through ``sqlparse_lite.parse_query``; this module only looks at the parsed form.
 Every decision is explained in ``TableRole.reason`` or in ``TableModel.warnings``, in plain words.
 The parser warnings of the queries followed are repeated in ``TableModel.warnings``, prefixed
@@ -51,6 +65,8 @@ from typing import Optional
 
 from . import sqlparse_lite
 from .model import (
+    ENTRY_AUTOMATION,
+    KIND_DECISION,
     KIND_WAIT_ATTRIBUTE,
     LEVEL_CONTACT,
     LEVEL_SCENARIO,
@@ -58,6 +74,7 @@ from .model import (
     ROLE_SOURCE,
     ROLE_SPLIT,
     ROLE_WRITTEN,
+    SOURCE_JOURNEY,
     ColumnRef,
     EqualityFilter,
     FieldRef,
@@ -118,10 +135,12 @@ def build_table_model(package: Package) -> TableModel:
 
     contact_key = _contact_key_field(package, entry, names, warnings)
     keys = _link_keys(contact_key, package, source_queries, names, warnings)
-    levels, level_reasons = _table_levels(entry, selected, package.tables, keys, contact_key, warnings)
+    unlinked = {name for name in (names.table(t) for t in package.missing_relationships) if name}
+    levels, level_reasons = _table_levels(entry, selected, package.tables, keys, contact_key, warnings, unlinked)
     key_groups = _key_groups(keys, contact_key, levels, entry, selected, package.tables)
     field_levels = _field_levels(selected, package.tables, levels, key_groups, entry, entry_parsed, names)
     activation, activation_note = _activation_field(entry_parsed, levels, names, warnings)
+    existence, existence_splits = _existence_tested(package, entry, roles, levels, keys, contact_key, names)
 
     entry_query_name = entry_query.name if entry_query else None
     table_roles: dict[str, TableRole] = {}
@@ -129,6 +148,9 @@ def build_table_model(package: Package) -> TableModel:
         is_selected = name in selected
         if is_selected:
             note = activation_note if activation and activation[0] == name else ""
+            if name in existence:
+                note = " ".join(part for part in (note, _existence_note(existence[name], existence_splits[name]))
+                                if part)
             reason = _selected_reason(roles[name], uses[name], entry_query_name,
                                       levels[name], level_reasons[name], note)
         elif ROLE_WRITTEN in roles[name]:
@@ -150,6 +172,7 @@ def build_table_model(package: Package) -> TableModel:
         contact_tables=[name for name in selected if levels[name] == LEVEL_CONTACT],
         activation_field=activation,
         warnings=list(dict.fromkeys(warnings)),
+        existence_tested=existence,
     )
 
 
@@ -245,17 +268,24 @@ def _find_entry_queries(package: Package, entry: str, automation_queries: list[Q
     if in_automation:
         return in_automation
 
-    if package.entry_event is None:
+    event = package.entry_event
+    fed_by_automation = event is not None and event.kind == ENTRY_AUTOMATION
+    if event is None:
         why = "Il journey non ha un entry event"
-    elif not package.entry_event.automation_name:
-        why = f"L'entry event {package.entry_event.name} non è alimentato da un'automation"
+    elif not fed_by_automation:
+        why = f"L'entry event {event.name} non è alimentato da un'automation"
+    elif not event.automation_name:
+        why = f"L'automation che alimenta l'entry event {event.name} non è nell'export"
     else:
-        why = (f"Nessuna query dell'automation di ingresso {package.entry_event.automation_name} popola la tabella "
+        why = (f"Nessuna query dell'automation di ingresso {event.automation_name} popola la tabella "
                f"di ingresso {entry}")
     elsewhere = [q for q in package.queries if names.table(q.target_table) == entry]
     if not elsewhere:
-        warnings.append(f"{why}, e nessun'altra query dell'export popola {entry}: non c'è una entry query, "
-                        "quindi l'unica sorgente è la tabella di ingresso")
+        # An entry that no automation feeds (Run Once, recurring schedule, form, API event) is filled by the
+        # import itself: having no entry query is the normal case there, not something to report.
+        if event is None or fed_by_automation:
+            warnings.append(f"{why}, e nessun'altra query dell'export popola {entry}: non c'è una entry query, "
+                            "quindi l'unica sorgente è la tabella di ingresso")
     elif len(elsewhere) == 1:
         warnings.append(f"{why}; la query {elsewhere[0].name} popola {entry} e viene presa come entry query")
     else:
@@ -337,6 +367,8 @@ def _record_split_reads(package: Package, names: _Names, uses: dict[str, _Use], 
     for activity in package.journey.activities.values():
         for outcome in activity.outcomes:
             for condition in formula_conditions(outcome.formula):
+                if condition.source == SOURCE_JOURNEY and names.table(condition.table) is None:
+                    continue   # Journey Data of another entry event: names no table (loader.py reports it)
                 reads.append((activity.key, False, condition.table, condition.field))
         if activity.kind == KIND_WAIT_ATTRIBUTE and activity.wait_field:
             reads.append((activity.key, True, activity.wait_field[0], activity.wait_field[1]))
@@ -624,7 +656,8 @@ def _select_copies(source_queries: list[ParsedQuery], names: _Names) -> list[tup
 # ---------------------------------------------------------------------------
 
 def _table_levels(entry: str, selected: list[str], tables: dict[str, Table], keys: _KeyUnion,
-                  contact_key: FieldRef, warnings: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+                  contact_key: FieldRef, warnings: list[str],
+                  unlinked: frozenset[str] | set[str] = frozenset()) -> tuple[dict[str, str], dict[str, str]]:
     """Spec step 3: "A field is contact-level when its table has one row per contact (joined to the
     entry on the contact key). It is scenario-level when many contacts share one row (joined on any
     other field)."
@@ -638,7 +671,9 @@ def _table_levels(entry: str, selected: list[str], tables: dict[str, Table], key
       when they hold fields of the same group): a table first reached this way is joined on another
       field, so it is scenario-level; the neighbours of a scenario-level table are scenario-level too.
     - A selected table never reached is not joined to the entry at all: scenario-level, with a warning
-      (assumption: one row shared by all contacts).
+      (assumption: one row shared by all contacts). When its attribute set has no relationship in the
+      export (``unlinked``, spec: "relationship missing in the export"), the reason and the warning say
+      so instead: the splits reading it are unsupported, so its rows only fill the CSV.
 
     Only selected tables get a level, but the groups were built over every table, so a link that
     passes through a table without a CSV still counts.
@@ -669,7 +704,15 @@ def _table_levels(entry: str, selected: list[str], tables: dict[str, Table], key
                 queue.append(other)
 
     for name in selected:
-        if name not in levels:
+        if name not in levels and name in unlinked:
+            levels[name] = LEVEL_SCENARIO
+            reasons[name] = ("il suo attribute set non ha alcuna relazione nell'export (relazione mancante "
+                             "nell'export), quindi non si sa come è collegata al contatto: gli split che la leggono "
+                             "sono non supportati")
+            warnings.append(f"La tabella {name} è letta da uno split tramite un attribute set che non ha alcuna "
+                            "relazione nell'export (relazione mancante nell'export): le condizioni su questa tabella "
+                            "sono non supportate e le sue righe non sono collegate ai contatti")
+        elif name not in levels:
             levels[name] = LEVEL_SCENARIO
             reasons[name] = ("non collegata alla tabella di ingresso: trattata come una riga condivisa da tutti i "
                              "contatti (assunzione)")
@@ -755,6 +798,59 @@ def _field_levels(selected: list[str], tables: dict[str, Table], levels: dict[st
             if levels.get(source[0]) == LEVEL_SCENARIO:
                 out[(entry, target.name)] = LEVEL_SCENARIO
     return out
+
+
+# ---------------------------------------------------------------------------
+# Row present or absent
+# ---------------------------------------------------------------------------
+
+EXISTENCE_OPERATORS = frozenset({"IsNull", "IsNotNull"})
+
+
+def _existence_tested(package: Package, entry: str, roles: dict[str, set[str]], levels: dict[str, str],
+                      keys: _KeyUnion, contact_key: FieldRef,
+                      names: _Names) -> tuple[dict[str, FieldRef], dict[str, list[str]]]:
+    """Spec, "Row present or absent": "A contact-level table other than the entry table, whose existence a
+    split tests (IsNull or IsNotNull on its field linked to the contact key, or the attribute comparison
+    above), gets a contact-level variable "row present / row absent". No such variable for tables the entry
+    query joins, or that no split tests for existence."
+
+    The field linked to the contact key is a field of the table in the contact key's group. The tables the
+    entry query joins are read here as every source table (the entry query and the queries feeding its
+    sources), since a missing row there changes the entry rows themselves. Only conditions that are
+    evaluated count: an unsupported outcome, and the outcomes after it, are never evaluated.
+
+    Returns table -> the tested field, in order of first test, and table -> the splits testing it.
+    """
+    contact_root = keys.find(contact_key)
+    tested: dict[str, FieldRef] = {}
+    splits: dict[str, list[str]] = {}
+    for activity in package.journey.activities.values():
+        if activity.kind != KIND_DECISION:
+            continue
+        for outcome in activity.outcomes:
+            if outcome.unsupported_reason:
+                break   # the walk stops at an unsupported outcome: the outcomes after it are never evaluated
+            for condition in formula_conditions(outcome.formula):
+                if condition.operator not in EXISTENCE_OPERATORS and condition.value_attribute is None:
+                    continue
+                ref = names.field_ref(condition.table, condition.field)
+                if ref is None or ref not in keys or keys.find(ref) != contact_root:
+                    continue
+                table = ref[0]
+                if table == entry or levels.get(table) != LEVEL_CONTACT or ROLE_SOURCE in roles.get(table, set()):
+                    continue
+                tested.setdefault(table, ref)
+                _add_once(splits.setdefault(table, []), activity.key)
+    return tested, splits
+
+
+def _existence_note(ref: FieldRef, split_keys: list[str]) -> str:
+    """The sentence added to the reason of a table whose existence a split tests."""
+    who = (f"Lo split {split_keys[0]} verifica" if len(split_keys) == 1
+           else f"Gli split {_short_list(split_keys)} verificano")
+    return (f"{who} se il contatto ha una riga in questa tabella tramite {ref[1]}, il campo collegato alla chiave "
+            "del contatto: i contatti possono avere la riga o non averla.")
 
 
 # ---------------------------------------------------------------------------

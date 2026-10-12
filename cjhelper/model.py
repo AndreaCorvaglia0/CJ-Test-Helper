@@ -40,6 +40,7 @@ class Field:
     is_nullable: bool
     default: Optional[str]         # defaultValue as written in the export, e.g. "False", "GETDATE()"
     ordinal: int
+    scale: Optional[int] = None    # Decimal: digits after the decimal point ("scale" in the export); None otherwise
 
 
 @dataclass
@@ -96,18 +97,37 @@ class EmailAsset:
 # Split criteria (criteria.py produces these)
 # ---------------------------------------------------------------------------
 
+# Where a condition reads its value (spec, "Extensions beyond the pilot", "Data sources of a condition").
+SOURCE_CONTACT = "contact"   # Contact Data, <attribute set>.<field>: read live when the contact reaches the split
+SOURCE_JOURNEY = "journey"   # Journey Data, Event.<eventDefinitionKey>.<field>: the entry row, a snapshot taken at entry
+
+
 @dataclass(frozen=True)
 class Condition:
     """One atomic condition: ``table.field operator value``.
 
-    ``table`` is the attribute-set name as written in the XML; loader.py maps it
-    to the table name before anything else sees it. ``value`` is None for
-    operators without a value (IsNull, IsNotNull).
+    As criteria.py writes it, ``table`` is the attribute-set name of the key (Contact Data) or the
+    event definition key of ``Event.<key>.<field>`` (Journey Data); loader.py maps it to the table
+    name before anything else sees it (the trigger's entry table for Journey Data). ``value`` is None
+    for operators without a value (IsNull, IsNotNull) and when the value is another attribute.
+
+    ``source`` keeps the data source (SOURCE_CONTACT or SOURCE_JOURNEY), so that the snapshot rule of
+    Journey Data can be applied: Update contact writes never change what a Journey Data condition reads.
+
+    ``value_attribute`` is set when the condition compares the field with another attribute
+    (``ValueParameterName``, or ``ValueIsReference``) instead of a literal, written as in the export
+    (``Event.<key>.<field>`` or ``<attribute set>.<field>``). The only supported form is "the field
+    linked to the contact key of a contact-level table Equal the contact key", which loader.py
+    normalises so that ``table.field`` is that linked field: the condition reads "the contact has a row
+    in ``table``" (criteria.evaluate_condition: true when the field holds a value). Any other form is
+    reported as unsupported by loader.py, never read as a comparison with an empty value.
     """
     table: str
     field: str
-    operator: str                  # as written: Is, Equal, IsNull, NotEqual, ...
-    value: Value
+    operator: str                  # as written: Is, Equal, IsNull, NotEqual, Between, ...
+    value: Value                   # Between: "low|high" as written
+    source: str = SOURCE_CONTACT
+    value_attribute: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +156,8 @@ def formula_text(formula: Optional[Formula]) -> str:
     if formula is None:
         return "<remainder>"
     if isinstance(formula, Condition):
+        if formula.value_attribute is not None:
+            return f"{formula.table}.{formula.field} {formula.operator} {formula.value_attribute}"
         if formula.value is None:
             return f"{formula.table}.{formula.field} {formula.operator}"
         return f"{formula.table}.{formula.field} {formula.operator} {formula.value!r}"
@@ -228,6 +250,9 @@ class Journey:
     default_email_event_key: Optional[str] = None   # event key used by defaults.email, for the anomaly check
     default_email_field: Optional[str] = None       # entry table field the journey sends emails to (defaults.email)
     activity_count: int = 0
+    entry_mode: Optional[str] = None     # entryMode as written: MultipleEntries, OnceAndDone, SingleEntryAcrossAllVersions
+    goal_count: int = 0                  # goals defined on the journey: not modelled, reported by loader.py
+    exit_count: int = 0                  # exit criteria defined on the journey: not modelled, reported by loader.py
 
     def branches(self) -> list[tuple[Activity, Outcome]]:
         return [(a, o) for a in self.activities.values() for o in a.outcomes]
@@ -346,12 +371,25 @@ class ParsedQuery:
 # The whole export
 # ---------------------------------------------------------------------------
 
+# Entry source kinds (spec, "Extensions beyond the pilot", "Entry source and procedure"), read from the
+# event definition's type and metaData.scheduleFlowMode by loader.py.
+ENTRY_AUTOMATION = "automation"      # data extension fed and scheduled by an automation (the pilot)
+ENTRY_RUN_ONCE = "run_once"          # data extension, Run Once: only the rows present at activation enter
+ENTRY_SCHEDULED = "scheduled"        # data extension, recurring schedule (or a schedule mode not recognised)
+ENTRY_OTHER = "other"                # CloudPages form, API event or any other: not driven by a CSV import
+
+
 @dataclass
 class EntryEvent:
     key: str
     name: str
     table: str
-    automation_name: Optional[str]
+    automation_name: Optional[str]           # the feeding automation; only for an ENTRY_AUTOMATION entry
+    kind: str = ENTRY_AUTOMATION             # one of ENTRY_*
+    event_type: str = ""                     # type as written: AutomationAudience, EmailAudience, CloudPages...
+    schedule_mode: Optional[str] = None      # metaData.scheduleFlowMode as written: automation, runOnce, ...
+    run_once_mode: Optional[str] = None      # metaData.runOnceScheduleMode as written: onPublish, ...
+    entry_filter: Optional[str] = None       # entry filter criteria as written, when not empty (not modelled)
 
 
 @dataclass
@@ -366,6 +404,8 @@ class Package:
     automation_queries: dict[str, list[str]] = field(default_factory=dict)  # automation name -> query names in step order
     warnings: list[str] = field(default_factory=list)   # anything odd met while reading, in plain words
     unsupported_activities: list[str] = field(default_factory=list)  # keys of activities with an unknown type
+    missing_relationships: list[str] = field(default_factory=list)   # tables whose attribute set, read by a split,
+                                                                      # has no relationship in the export
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +480,10 @@ class TableModel:
     contact_tables: list[str]
     activation_field: Optional[FieldRef]        # suggested from the entry query filters
     warnings: list[str] = field(default_factory=list)
+    # Contact-level tables, other than the entry table and the tables the entry queries read, whose
+    # existence a split tests (IsNull / IsNotNull on the field linked to the contact key, or the supported
+    # attribute comparison): table -> that linked field. Each gets a "row present / row absent" variable.
+    existence_tested: dict[str, FieldRef] = field(default_factory=dict)
 
     @property
     def selected_tables(self) -> list[str]:
