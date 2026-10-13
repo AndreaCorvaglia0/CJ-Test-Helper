@@ -1,0 +1,60 @@
+{
+  "journey_name": "EX_RowAbsentOtherFields",
+  "activity_count": 6,
+  "csv_tables": [
+    "DE_PF_Entry",
+    "DE_PF_Profile"
+  ],
+  "table_levels": {
+    "DE_PF_Entry": "contact",
+    "DE_PF_Profile": "contact"
+  },
+  "branches": {
+    "SPLIT-1/path_a": {
+      "status": "covered"
+    },
+    "SPLIT-1/remainder_path": {
+      "status": "covered"
+    },
+    "SPLIT-2/path_a": {
+      "status": "covered"
+    },
+    "SPLIT-2/path_b": {
+      "status": "not covered",
+      "reason_contains": "non raggiungibile"
+    },
+    "SPLIT-2/remainder_path": {
+      "status": "not covered",
+      "reason_contains": "non raggiungibile"
+    }
+  },
+  "scenario_count": {
+    "min": 1,
+    "max": 1
+  },
+  "case_count": {
+    "min": 2,
+    "max": 2
+  },
+  "contact_count": 6,
+  "cases": [
+    {
+      "has_row": {
+        "DE_PF_Profile": true
+      },
+      "end_activity": "UPDATE-1",
+      "manual_actions": [],
+      "contact_count": 3
+    },
+    {
+      "has_row": {
+        "DE_PF_Profile": false
+      },
+      "end_activity": "UPDATE-2",
+      "manual_actions": [],
+      "contact_count": 3
+    }
+  ],
+  "unsupported": [],
+  "checks_pass": true
+}

@@ -864,8 +864,8 @@ def build_unsupported_operator() -> dict:
     j.decision("SPLIT-1", "Mail offers", [
         ("path_a", "true", criteria(pkg.cond(m, "IsMailOffers", "Is", "true")), "SPLIT-2", "IsMailOffers is True"),
         ("remainder_path", "false", None, "UPDATE-1", None)])
-    # "Between" is not in the spec's operator list (Is, Equal, IsNull, plus the earlier tool's
-    # not-equal, numeric comparisons, contains, begins-with, ends-with, is-not-null).
+    # "Between" was not in the spec's operator list when this example was written; the extension section
+    # added it with the value "low|high". '10000' is not written that way, so the branch stays unsupported.
     j.decision("SPLIT-2", "Postal code range", [
         ("path_a", "North", criteria(pkg.cond(m, "PostalCode", "Between", "10000")), "UPDATE-2",
          "PostalCode between 10000"),

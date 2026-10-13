@@ -23,6 +23,10 @@ import pytest
 
 from cjhelper.loader import ENGAGEMENT_KINDS, LoadError, load_package, resolve_references
 from cjhelper.model import (
+    ENTRY_AUTOMATION,
+    ENTRY_OTHER,
+    ENTRY_RUN_ONCE,
+    ENTRY_SCHEDULED,
     KIND_DECISION,
     KIND_EMAIL,
     KIND_ENGAGEMENT,
@@ -32,6 +36,8 @@ from cjhelper.model import (
     KIND_WAIT_ATTRIBUTE,
     KIND_WAIT_DURATION,
     KIND_WAIT_STO,
+    SOURCE_CONTACT,
+    SOURCE_JOURNEY,
     Condition,
     ConditionGroup,
     Relationship,
@@ -479,7 +485,7 @@ def test_unsupported_source_type_raises_load_error():
 def test_export_without_journey_raises_load_error():
     export = make_export()
     del export["entities"]["journeys"]
-    with pytest.raises(LoadError, match="no journey"):
+    with pytest.raises(LoadError, match="non contiene alcun journey"):
         load_package(export)
     with pytest.raises(LoadError):
         load_package({"name": "not an export"})
@@ -488,21 +494,21 @@ def test_export_without_journey_raises_load_error():
 def test_journey_without_trigger_raises_load_error():
     export = make_export()
     export["entities"]["journeys"][JOURNEY]["data"]["triggers"] = []
-    with pytest.raises(LoadError, match="entry"):
+    with pytest.raises(LoadError, match="trigger di ingresso"):
         load_package(export)
 
 
 def test_missing_entry_event_raises_load_error():
     export = make_export()
     del export["entities"]["eventDefinitions"][EVENT]
-    with pytest.raises(LoadError, match="entry"):
+    with pytest.raises(LoadError, match="entry event del journey non è nell'export"):
         load_package(export)
 
 
 def test_missing_entry_table_raises_load_error():
     export = make_export()
     del export["entities"]["dataExtensions"][ENTRY]
-    with pytest.raises(LoadError, match="entry table"):
+    with pytest.raises(LoadError, match="tabella di ingresso dell'entry event"):
         load_package(export)
 
 
@@ -523,7 +529,8 @@ def with_two_journeys(selected):
 def test_selected_journey_is_used():
     package = load_package(with_two_journeys([OTHER_JOURNEY]))
     assert package.journey.name == "J_Other"
-    assert not has_warning(package, "journeys") and not has_warning(package, "selected journey")
+    assert not has_warning(package, "seleziona") and not has_warning(package, "nessuno è selezionato")
+    assert not has_warning(package, "journey selezionato")
 
 
 def test_single_journey_is_used_without_selection():
@@ -531,13 +538,13 @@ def test_single_journey_is_used_without_selection():
     del export["selectedEntities"]
     package = load_package(export)
     assert package.journey.name == "J_Test"
-    assert not has_warning(package, "selects")
+    assert not has_warning(package, "seleziona")
 
 
 def test_several_journeys_without_selection_use_the_first_with_a_warning():
     package = load_package(with_two_journeys(None))
     assert package.journey.name == "J_Test"
-    assert has_warning(package, "2 journeys", "J_Test")
+    assert has_warning(package, "contiene 2 journey", "J_Test")
 
 
 def test_selected_journey_missing_from_the_export_is_reported():
@@ -558,7 +565,7 @@ def test_references_of_other_journeys_are_not_reported():
 def test_several_selected_journeys_use_the_first_with_a_warning():
     package = load_package(with_two_journeys([OTHER_JOURNEY, JOURNEY]))
     assert package.journey.name == "J_Other"
-    assert has_warning(package, "selects 2 journeys")
+    assert has_warning(package, "seleziona 2 journey")
 
 
 # ---------------------------------------------------------------------------
@@ -600,7 +607,7 @@ def test_two_tables_with_the_same_name_keep_the_first():
     export["entities"]["sharedDataExtensions"] = {"de-copy": table("DE_Log", [field("Other")])}
     package = load_package(export)
     assert package.tables["DE_Log"].id == LOG
-    assert has_warning(package, "Two tables are named DE_Log")
+    assert has_warning(package, "Due tabelle si chiamano DE_Log")
 
 
 def test_relationships_resolved_through_attribute_sets():
@@ -666,7 +673,7 @@ def test_entry_event_and_automation():
 def test_default_reading_another_entry_event_is_reported():
     package = load()
     assert has_warning(package, "mobileNumber", "DEAudience-2", "Old event", "DEAudience-1")
-    assert not has_warning(package, "default email")
+    assert not has_warning(package, "valore di default email")
 
 
 def test_default_email_reading_another_entry_event():
@@ -676,8 +683,11 @@ def test_default_email_reading_another_entry_event():
         "{{Event." + ref("eventDefinitions", OLD_EVENT, "eventDefinitionKey") + '."Emailaddress"}}']
     package = load_package(export)
     assert package.journey.default_email_event_key == "DEAudience-2"
-    assert has_warning(package, "default email", "DEAudience-2")
-    assert not has_warning(package, "mobileNumber")
+    assert has_warning(package, "valore di default email", "DEAudience-2")
+    assert not has_warning(package, "mobileNumber", "non dall'entry event")
+    # Spec, "Honest outcomes": "A journey default (email, mobile number) that names a column the entry data
+    # extension lacks is reported": mobileNumber now reads the trigger's event, whose table has no Mobile.
+    assert has_warning(package, "valore di default mobileNumber", "Mobile", "DE_Entry", "non ha questo campo")
 
 
 def test_entry_event_found_by_key_when_the_id_is_missing():
@@ -716,7 +726,7 @@ def test_several_start_candidates_take_the_first_with_a_warning():
     activities.insert(0, update("ORPHAN-1", None, [write(LOG, "Note", "x")]))
     package = load(activities)
     assert package.journey.start_key == "ORPHAN-1"
-    assert has_warning(package, "ORPHAN-1", "DECISION-1", "no incoming link")
+    assert has_warning(package, "ORPHAN-1", "DECISION-1", "collegamenti in entrata")
 
 
 def test_decision_outcomes_formula_and_remainder():
@@ -754,7 +764,7 @@ def test_condition_on_unknown_attribute_set_keeps_the_name_with_a_warning():
         '<Condition Key="DE_Log.Note" Operator="Equal"><Value><![CDATA[x]]></Value></Condition>')
     package = load(activities)
     assert package.journey.activities["DECISION-1"].outcomes[1].formula == Condition("DE_Log", "Note", "Equal", "x")
-    assert has_warning(package, "No attribute set is named DE_Log")
+    assert has_warning(package, "Nessun attribute set si chiama DE_Log")
 
 
 def test_condition_field_spelling_follows_the_schema():
@@ -788,20 +798,21 @@ def test_unreadable_criteria_make_the_split_unsupported():
     assert channel.kind == KIND_UNSUPPORTED and channel.raw_type == "MULTICRITERIADECISION"
     assert all(o.formula is None and not o.is_remainder for o in channel.outcomes)
     assert package.unsupported_activities == ["DECISION-1"]
-    assert has_warning(package, "DECISION-1", "unsupported", "SMS")
+    assert has_warning(package, "DECISION-1", "non supportata", "SMS")
 
 
 def test_unsupported_operator_is_reported():
+    # Between was the example here until the extension section of the spec added it to the operators.
     activities = default_activities()
     activities[0]["configurationArguments"]["criteria"]["path_sms"] = filter_definition(
-        condition(S_CONFIG, "CHANNEL", "Between", "A"))
+        condition(S_CONFIG, "CHANNEL", "NotContains", "A"))
     package = load(activities)
     channel = package.journey.activities["DECISION-1"]
     # Spec: an unknown operator is "listed in the report, and the branches behind it are marked as
     # not covered"; the outcome is unsupported instead of crashing the generation.
     assert channel.kind == KIND_DECISION
-    assert "Between" in channel.outcomes[1].unsupported_reason
-    assert has_warning(package, "DECISION-1", "Between", "not support")
+    assert "NotContains" in channel.outcomes[1].unsupported_reason
+    assert has_warning(package, "DECISION-1", "NotContains", "non supporta")
 
 
 def test_decision_without_remainder_is_reported():
@@ -888,13 +899,13 @@ def test_wait_by_attribute_without_any_field_is_reported():
     activities[2]["metaData"].pop("attribute")
     package = load(activities)
     assert package.journey.activities["WAITATTR-1"].wait_field is None
-    assert has_warning(package, "WAITATTR-1", "cannot be identified")
+    assert has_warning(package, "WAITATTR-1", "non è possibile identificare")
 
 
 def test_wait_by_attribute_offset_is_reported():
     activities = default_activities()
     activities[2]["configurationArguments"]["waitDuration"] = 2
-    assert has_warning(load(activities), "WAITATTR-1", "waitDuration of 2 DAYS")
+    assert has_warning(load(activities), "WAITATTR-1", "waitDuration di 2 DAYS")
 
 
 def test_wait_with_unknown_ui_type_is_unsupported():
@@ -983,6 +994,330 @@ def test_hand_built_export_warnings_are_the_expected_ones():
 
 
 # ---------------------------------------------------------------------------
+# Extensions beyond the pilot: conditions
+# ---------------------------------------------------------------------------
+
+def journey_condition(field_name, operator, value="", event_id=EVENT):
+    """A Journey Data condition as the real exports write it: Event.<eventDefinitionKey>.<field>."""
+    key = "Event.%s.%s" % (ref("eventDefinitions", event_id, "eventDefinitionKey"), field_name)
+    return (f'<Condition IsEphemeralAttribute="true" Key="{key}" Operator="{operator}" UiMetaData="{{}}">'
+            f"<Value><![CDATA[{value}]]></Value></Condition>")
+
+
+def comparison(set_id, field_name, operator, parameter):
+    """An attribute compared with another attribute (ValueParameterName, empty <Value>)."""
+    return (f'<Condition Key="{ref("attributeSets", set_id, "name")}.{field_name}" Operator="{operator}" '
+            f'UiMetaData="{{}}" ValueParameterName="{parameter}"><Value><![CDATA[]]></Value></Condition>')
+
+
+def load_sms_path(xml, export=None):
+    """Load the hand-built export with the SMS outcome of DECISION-1 reading ``xml``; returns (package, outcome)."""
+    export = export or make_export()
+    criteria = export["entities"]["journeys"][JOURNEY]["data"]["activities"][0]["configurationArguments"]["criteria"]
+    criteria["path_sms"] = filter_definition(xml)
+    package = load_package(export)
+    return package, package.journey.activities["DECISION-1"].outcomes[1]
+
+
+def test_journey_data_reads_the_trigger_entry_table():
+    package, sms = load_sms_path(journey_condition("flag", "Is", "true"))
+    # Spec: Event.<eventDefinitionKey>.<Field> "reads column Field of the data extension of the trigger's
+    # entry event"; the source is kept for the snapshot rule.
+    assert sms.formula == Condition("DE_Entry", "Flag", "Is", "true", source=SOURCE_JOURNEY)
+    assert sms.unsupported_reason is None
+    assert has_warning(package, "DE_Entry.flag", "Flag")
+    assert not has_warning(package, "Nessun attribute set si chiama Event")
+
+
+def test_journey_data_of_another_event_is_unsupported():
+    package, sms = load_sms_path(journey_condition("CampaignName", "Equal", "X", event_id=OLD_EVENT))
+    # Spec: "A key naming an event definition other than the trigger's is unsupported."
+    assert sms.formula.source == SOURCE_JOURNEY
+    assert "DEAudience-2" in sms.unsupported_reason and "Old event" in sms.unsupported_reason
+    assert "DEAudience-1" in sms.unsupported_reason
+    assert has_warning(package, "DECISION-1", "DEAudience-2", "non coperti")
+
+
+def test_attribute_comparison_on_the_linked_key_reads_row_present():
+    package, sms = load_sms_path(comparison(S_MASTER, "ContactId", "Equal", "Event.DEAudience-1.ContactId"))
+    # Spec: supported only as "key field of a contact-level linked table Equal the contact key".
+    assert sms.formula == Condition("DE_Master", "ContactId", "Equal", None, source=SOURCE_CONTACT,
+                                    value_attribute="Event.DEAudience-1.ContactId")
+    assert sms.unsupported_reason is None
+
+
+def test_mirror_attribute_comparison_is_normalised():
+    key = "Event.%s.ContactId" % ref("eventDefinitions", EVENT, "eventDefinitionKey")
+    xml = (f'<Condition IsEphemeralAttribute="true" Key="{key}" Operator="Equal" ValueIsReference="true">'
+           f"<Value><![CDATA[Master Set.ContactId]]></Value></Condition>")
+    package, sms = load_sms_path(xml)
+    assert sms.formula == Condition("DE_Master", "ContactId", "Equal", None, source=SOURCE_CONTACT,
+                                    value_attribute="Event.DEAudience-1.ContactId")
+    assert sms.unsupported_reason is None
+
+
+@pytest.mark.parametrize("set_id, field_name, operator, parameter", [
+    (S_MASTER, "Mobile", "Equal", "Event.DEAudience-1.ContactId"),          # not the field linked to the contact
+    (S_MASTER, "ContactId", "Equal", "Event.DEAudience-1.Emailaddress"),    # not the contact key
+    (S_MASTER, "ContactId", "NotEqual", "Event.DEAudience-1.ContactId"),    # not Equal
+    (S_MASTER, "ContactId", "Equal", "Event.DEAudience-2.ContactId"),       # another entry event
+    (S_CONFIG, "CampaignName", "Equal", "Event.DEAudience-1.CampaignName"),  # scenario-level table
+    (S_MASTER, "ContactId", "Equal", "Config Set.CampaignName"),             # two Contact Data fields
+])
+def test_other_attribute_comparisons_are_unsupported(set_id, field_name, operator, parameter):
+    package, sms = load_sms_path(comparison(set_id, field_name, operator, parameter))
+    # Spec: "Any other form is unsupported and reported; it is never read as a comparison with an empty value."
+    assert sms.formula.value is None and sms.formula.value_attribute == parameter
+    assert "confronta" in sms.unsupported_reason and parameter in sms.unsupported_reason
+    assert has_warning(package, "DECISION-1", parameter, "non coperti")
+
+
+def test_between_is_supported_when_written_low_high():
+    _, sms = load_sms_path(condition(S_CONFIG, "CHANNEL", "Between", "A|M"))
+    assert sms.formula == Condition("DE_Config", "CHANNEL", "Between", "A|M")
+    assert sms.unsupported_reason is None
+
+
+def test_between_value_not_written_low_high_is_unsupported():
+    package, sms = load_sms_path(condition(S_CONFIG, "CHANNEL", "Between", "A"))
+    assert "Between" in sms.unsupported_reason and "basso|alto" in sms.unsupported_reason
+    assert has_warning(package, "DECISION-1", "Between", "'A'", "non coperti")
+
+
+def test_attribute_set_without_relationship_is_unsupported():
+    export = make_export()
+    del export["entities"]["attributeRelationships"]["rel-ec"]     # the only relationship naming Config Set
+    package = load_package(export)
+    channel = package.journey.activities["DECISION-1"]
+    # Spec: "An attribute set read by a split with no relationship in the export: its conditions are
+    # unsupported, with the reason 'relationship missing in the export'."
+    assert all("relazione mancante nell'export" in o.unsupported_reason for o in channel.outcomes[:2])
+    assert package.missing_relationships == ["DE_Config"]
+    assert package.journey.activities["DECISION-2"].outcomes[0].unsupported_reason is None
+    assert has_warning(package, "DECISION-1", "relazione mancante nell'export")
+
+
+def test_pilot_shape_has_no_missing_relationship():
+    assert load().missing_relationships == []
+
+
+# ---------------------------------------------------------------------------
+# Extensions beyond the pilot: issues, asset warnings, schema
+# ---------------------------------------------------------------------------
+
+def test_package_manager_issues_of_level_warning_or_error_are_reported():
+    export = make_export()
+    entities = export["entities"]
+    entities["journeys"][JOURNEY]["issues"] = [
+        {"type": "ENTITY_NOT_FOUND", "level": "WARNING",
+         "cause": {"type": "ATTRIBUTE_GROUP", "level": "ERROR", "message": "Unable to find attribute relationship"},
+         "entity": {"entityType": "attributeRelationships", "retrievalProperty": "id", "value": "rel-404",
+                    "locationInformation": {"activityName": "Channel", "activityType": "MULTICRITERIADECISION"}}},
+        {"type": "UNSUPPORTED_AMPSCRIPT", "level": "INFO", "issue": "UNRESOLVED_VARIABLE"},
+    ]
+    entities["dataExtensions"][LOG]["issues"] = [
+        {"type": "UNSUPPORTED_FUNCTIONALITY", "level": "WARNING", "functionality": "SOMETHING_ODD"}]
+    export["issues"] = [{"type": "UNSUPPORTED_FUNCTIONALITY", "level": "ERROR", "functionality": "PACKAGE_LEVEL"}]
+    package = load_package(export)
+    # The level is the most severe of the issue and its cause (team decision, 13 October 2026): a WARNING issue
+    # with an ERROR cause is reported as an error.
+    assert has_warning(package, "Package Manager segnala un errore sul journey J_Test", "attributeRelationships",
+                       "rel-404", "'Channel'", "Messaggio di Package Manager: Unable to find attribute relationship")
+    assert has_warning(package, "Package Manager segnala un warning sulla data extension DE_Log", "SOMETHING_ODD")
+    assert has_warning(package, "Package Manager segnala un errore sul package", "PACKAGE_LEVEL")
+    assert not has_warning(package, "UNRESOLVED_VARIABLE")
+
+
+def test_issues_about_assets_the_journey_does_not_send_are_dropped():
+    export = make_export()
+    assets = export["entities"]["assets"]
+    assets["333"] = entity({"name": "Unused block", "assetType": {"name": "htmlblock"}, "views": {}})
+    assets["333"]["issues"] = [{"type": "ENTITY_NOT_FOUND", "level": "WARNING",
+                                "entity": {"entityType": "dataExtensions", "retrievalProperty": "name",
+                                           "value": "Lookup_DE"}}]
+    export["entities"]["landingPages"] = {"lp-1": entity({"name": "Form page"})}
+    export["entities"]["landingPages"]["lp-1"]["issues"] = [
+        {"type": "UNSUPPORTED_FUNCTIONALITY", "level": "WARNING", "functionality": "UNSUPPORTED_BLOCK"}]
+    assets[ASSET_LINK]["issues"] = [
+        # an image of the sent email: not used for routing or sending
+        {"type": "ENTITY_NOT_FOUND", "level": "WARNING",
+         "entity": {"entityType": "assets", "retrievalProperty": "fileProperties.publishedURL",
+                    "value": "https://image.example.com/x.png"}},
+        # a table the sent email looks up: about the sent asset itself
+        {"type": "ENTITY_NOT_FOUND", "level": "WARNING",
+         "entity": {"entityType": "dataExtensions", "retrievalProperty": "name", "value": "Content_DE"}},
+    ]
+    package = load_package(export)
+    assert not has_warning(package, "Lookup_DE")
+    assert not has_warning(package, "UNSUPPORTED_BLOCK")
+    assert not has_warning(package, "image.example.com")
+    assert has_warning(package, "sull'asset Welcome (111)", "Content_DE")
+
+
+def test_issues_about_content_used_only_indirectly_are_kept_only_when_errors():
+    """Team decision of 13 October 2026 (docs/progress.md): on content the journey uses only indirectly (an
+    image inside a sent email, a landing page linked from it) only the issues of level error stay; on content
+    the journey does not use at all every issue is dropped."""
+    export = make_export()
+    entities = export["entities"]
+    assets = entities["assets"]
+    assets[ASSET_LINK]["data"]["views"]["html"]["content"] += (
+        f'<a href="{ref("landingPages", "lp-1", "name")}">form</a>')
+    entities["landingPages"] = {"lp-1": entity({"name": "Linked page"}), "lp-2": entity({"name": "Lone page"})}
+    entities["landingPages"]["lp-1"]["issues"] = [
+        {"type": "UNSUPPORTED_FUNCTIONALITY", "level": "WARNING", "functionality": "LINKED_WARNING"},
+        {"type": "UNSUPPORTED_FUNCTIONALITY", "level": "ERROR", "functionality": "LINKED_ERROR"}]
+    entities["landingPages"]["lp-2"]["issues"] = [
+        {"type": "UNSUPPORTED_FUNCTIONALITY", "level": "ERROR", "functionality": "LONE_ERROR"}]
+    assets[ASSET_LINK]["issues"] = [
+        {"type": "ENTITY_NOT_FOUND", "level": "WARNING",
+         "entity": {"entityType": "assets", "retrievalProperty": "fileProperties.publishedURL",
+                    "value": "https://image.example.com/warning.png"}},
+        {"type": "ENTITY_NOT_FOUND", "level": "WARNING", "cause": {"level": "ERROR"},
+         "entity": {"entityType": "assets", "retrievalProperty": "fileProperties.publishedURL",
+                    "value": "https://image.example.com/error.png"}}]
+    package = load_package(export)
+    assert has_warning(package, "Package Manager segnala un errore sulla landing page Linked page", "LINKED_ERROR")
+    assert not has_warning(package, "LINKED_WARNING")
+    assert not has_warning(package, "LONE_ERROR")
+    assert has_warning(package, "Package Manager segnala un errore sull'asset Welcome (111)", "error.png")
+    assert not has_warning(package, "warning.png")
+
+
+def test_reference_warnings_about_assets_the_journey_does_not_send_are_dropped():
+    export = make_export()
+    assets = export["entities"]["assets"]
+    image = ref("assets", "555", "fileProperties/publishedURL")
+    assets["333"] = entity({"name": "Unused template", "views": {"html": {"content": f'<img src="{image}">'}},
+                            "data": {"x": ref("dataExtensions", "de-404", "name")}})
+    assets[ASSET_LINK]["data"]["views"]["html"]["content"] += f'<img src="{image}">'
+    export["entities"]["landingPages"] = {
+        "lp-1": entity({"name": "Page", "content": ref("primaryLandingPages", "lp-1", "definition/pageId")})}
+    package = load_package(export)
+    assert not has_warning(package, "assets/555")
+    assert not has_warning(package, "de-404")
+    assert not has_warning(package, "primaryLandingPages")
+    # the sent asset's own reference stays reported (test_hand_built_export_warnings_are_the_expected_ones)
+    assert has_warning(package, f"assets/{ASSET_LINK}", "legacyId")
+
+
+def test_decimal_scale_is_read():
+    export = make_export()
+    export["entities"]["dataExtensions"][LOG]["data"]["fields"].append(
+        dict(field("Score", "Decimal", ordinal=4, length=24), scale=4))
+    log_table = load_package(export).tables["DE_Log"]
+    assert (log_table.field("Score").type, log_table.field("Score").length, log_table.field("Score").scale) == (
+        "Decimal", 24, 4)
+    assert log_table.field("Note").scale is None
+
+
+# ---------------------------------------------------------------------------
+# Extensions beyond the pilot: entry source, entry mode, goals and exits
+# ---------------------------------------------------------------------------
+
+def with_entry_source(event_type, schedule_mode=None, automation_id="0a1b2c3d-0000-4000-8000-00000000abcd",
+                      **meta):
+    """The hand-built export with its entry event turned into another kind of entry source."""
+    export = make_export()
+    event = export["entities"]["eventDefinitions"][EVENT]["data"]
+    event["type"] = event_type
+    event["metaData"] = dict({"scheduleState": "No Schedule", "criteriaDescription": None}, **meta)
+    if schedule_mode is not None:
+        event["metaData"]["scheduleFlowMode"] = schedule_mode
+    event["arguments"] = {"automationId": automation_id, "criteria": "", "useHighWatermark": False}
+    export["entities"]["journeys"][JOURNEY]["data"]["triggers"][0]["type"] = event_type
+    return export
+
+
+def test_automation_entry_is_the_pilot_procedure():
+    event = load().entry_event
+    assert (event.kind, event.event_type, event.automation_name, event.entry_filter) == (
+        ENTRY_AUTOMATION, "AutomationAudience", "A_Entry", None)
+
+
+def test_run_once_entry_does_not_report_its_scheduler_as_an_automation():
+    package = load_package(with_entry_source("EmailAudience", "runOnce", runOnceScheduleMode="onPublish"))
+    event = package.entry_event
+    assert (event.kind, event.schedule_mode, event.run_once_mode, event.automation_name) == (
+        ENTRY_RUN_ONCE, "runOnce", "onPublish", None)
+    # the automationId of a Run Once data extension entry is the scheduler, not a feeding automation
+    assert not has_warning(package, "alimentato")
+
+
+def test_data_extension_entry_with_another_schedule_is_a_procedure_to_verify():
+    package = load_package(with_entry_source("EmailAudience", "everyHour"))
+    assert package.entry_event.kind == ENTRY_SCHEDULED
+    assert package.entry_event.automation_name is None
+    assert has_warning(package, "Entry event", "'everyHour'", "ricorrente", "da verificare")
+    assert not has_warning(package, "alimentato")
+    package = load_package(with_entry_source("EmailAudience"))
+    assert package.entry_event.kind == ENTRY_SCHEDULED
+    assert has_warning(package, "Entry event", "pianificazione non indicata", "da verificare")
+
+
+@pytest.mark.parametrize("event_type", ["CloudPagesSmartCaptureSubmissionEvent", "APIEvent", ""])
+def test_other_entry_sources_are_not_driven_by_an_import(event_type):
+    package = load_package(with_entry_source(event_type, automation_id=None))
+    assert package.entry_event.kind == ENTRY_OTHER
+    assert package.entry_event.table == "DE_Entry"
+
+
+def test_automation_entry_whose_automation_is_missing_is_reported():
+    export = make_export()
+    del export["entities"]["automations"][AUTOMATION]
+    package = load_package(export)
+    assert package.entry_event.kind == ENTRY_AUTOMATION and package.entry_event.automation_name is None
+    assert has_warning(package, "Entry event", "alimentato dall'automation", AUTOMATION)
+
+
+def test_entry_filter_is_reported():
+    export = make_export()
+    export["entities"]["eventDefinitions"][EVENT]["data"]["arguments"]["criteria"] = "<FilterDefinition/>"
+    package = load_package(export)
+    assert package.entry_event.entry_filter == "<FilterDefinition/>"
+    assert has_warning(package, "Entry event", "filtro di ingresso", "non lo modella")
+    export = make_export()
+    trigger = export["entities"]["journeys"][JOURNEY]["data"]["triggers"][0]
+    trigger["configurationArguments"] = {"criteria": "", "filterDefinitionId": "00000000-0000-0000-0000-000000000000"}
+    assert load_package(export).entry_event.entry_filter is None
+    trigger["configurationArguments"]["filterDefinitionId"] = "f-1"
+    assert load_package(export).entry_event.entry_filter == "filterDefinitionId f-1"
+
+
+def test_entry_mode_goals_and_exits():
+    package = load()
+    assert (package.journey.entry_mode, package.journey.goal_count, package.journey.exit_count) == (None, 0, 0)
+    export = make_export()
+    data = export["entities"]["journeys"][JOURNEY]["data"]
+    data.update(entryMode="OnceAndDone", goals=[{"key": "goal-1"}], exits=[{"key": "exit-1"}, {"key": "exit-2"}])
+    package = load_package(export)
+    assert (package.journey.entry_mode, package.journey.goal_count, package.journey.exit_count) == (
+        "OnceAndDone", 1, 2)
+    assert has_warning(package, "1 goal", "non li modella")
+    assert has_warning(package, "2 criteri di uscita", "non li modella")
+
+
+def test_wait_by_attribute_on_journey_data_reads_the_entry_table():
+    activities = default_activities()
+    key = ref("eventDefinitions", EVENT, "eventDefinitionKey")
+    activities[2]["configurationArguments"]["waitEndDateAttributeExpression"] = '{{Event.%s."Flag"}}' % key
+    assert load(activities).journey.activities["WAITATTR-1"].wait_field == ("DE_Entry", "Flag")
+    activities[2]["configurationArguments"]["waitEndDateAttributeExpression"] = '{{Event.%s."Flag"}}' % (
+        ref("eventDefinitions", OLD_EVENT, "eventDefinitionKey"))
+    package = load(activities)
+    assert package.journey.activities["WAITATTR-1"].wait_field is None
+    assert has_warning(package, "WAITATTR-1", "DEAudience-2", "non è l'entry event del trigger")
+
+
+def test_wait_by_attribute_fallback_reads_journey_data_too():
+    activities = default_activities()
+    key = ref("eventDefinitions", EVENT, "eventDefinitionKey")
+    activities[2]["configurationArguments"]["waitEndDateAttributeExpression"] = ""
+    activities[2]["metaData"]["attribute"]["id"] = f"Event.{key}.Flag"
+    assert load(activities).journey.activities["WAITATTR-1"].wait_field == ("DE_Entry", "Flag")
+
+
+# ---------------------------------------------------------------------------
 # The pilot export
 # ---------------------------------------------------------------------------
 
@@ -1008,6 +1343,9 @@ def test_pilot_entry_tables_and_relationships(pilot):
     assert pilot.journey.entry_table == "DE_NCM_AdHoc_Entry"
     assert pilot.entry_event.table == "DE_NCM_AdHoc_Entry"
     assert pilot.entry_event.automation_name == "A_SkyDE_NCRM_AdHoc_CJ_entry"
+    assert (pilot.entry_event.kind, pilot.entry_event.schedule_mode) == (ENTRY_AUTOMATION, "automation")
+    assert (pilot.journey.entry_mode, pilot.journey.goal_count, pilot.journey.exit_count) == ("MultipleEntries", 0, 0)
+    assert pilot.missing_relationships == []
     assert len(pilot.tables) == 7
     assert len(pilot.relationships) == 3
     group_to_set = [r for r in pilot.relationships if r.left_table is None]
@@ -1047,6 +1385,7 @@ def test_pilot_decision_conditions_name_real_tables(pilot):
             for condition_ in formula_conditions(outcome_.formula):
                 tables.add(condition_.table)
                 assert pilot.tables[condition_.table].field(condition_.field) is not None
+                assert condition_.source == SOURCE_CONTACT and condition_.value_attribute is None
     assert tables == {"SF_Master_DataExtension_DE", "DE_NCRM_AD_HOC_CONFIG"}
 
 
@@ -1077,7 +1416,7 @@ def test_pilot_update_contact_write_to_the_entry_table(pilot):
 def test_pilot_warnings(pilot):
     # two reading warnings plus the carried-over checks: constant writes into the Log table's three
     # primary-key fields and the one-to-one relationship to the entry table with a wider primary key
-    plain = [w for w in pilot.warnings if not w.startswith("suspicious pattern")]
+    plain = [w for w in pilot.warnings if not w.startswith("pattern sospetto")]
     assert len(plain) == 2, pilot.warnings
     assert has_warning(pilot, "assets/1806207", "legacyId")
     assert has_warning(pilot, "mobileNumber", "CJ_SkYDE_NCRM_Demo", "DEAudience-6021dd4c")
@@ -1086,7 +1425,7 @@ def test_pilot_warnings(pilot):
 def test_constant_write_into_primary_key_is_flagged():
     """Spec check: an update contact step that writes a constant into a primary-key field."""
     package = load(default_activities())
-    assert not any("primary-key field" in w for w in package.warnings)
+    assert not any("campo di chiave primaria" in w for w in package.warnings)
     activities = default_activities()
     activities.append({
         "key": "UPDATE-PK", "type": "UPDATECONTACTDATA", "name": "log",
@@ -1099,13 +1438,13 @@ def test_constant_write_into_primary_key_is_flagged():
         "outcomes": [{"key": "o", "next": None, "metaData": {}}],
     })
     package = load(activities)
-    flagged = [w for w in package.warnings if "primary-key field" in w]
+    flagged = [w for w in package.warnings if "campo di chiave primaria" in w]
     assert len(flagged) == 1 and "'FIXED'" in flagged[0] and "UPDATE-PK" in flagged[0]
 
 
 def test_pilot_flags_constant_writes_and_wide_one_to_one_join(pilot):
-    writes = [w for w in pilot.warnings if "primary-key field" in w]
+    writes = [w for w in pilot.warnings if "campo di chiave primaria" in w]
     assert any("DE_SkyDE_AdHoc_Log_partial.CampaignName" in w and "'DemoSKY'" in w for w in writes)
     assert any("DE_SkyDE_AdHoc_Log_partial.ActionId" in w and "'ActionId'" in w for w in writes)
-    joins = [w for w in pilot.warnings if "one-to-one relationship" in w]
+    joins = [w for w in pilot.warnings if "relazione uno a uno" in w]
     assert len(joins) == 1 and "DE_NCM_AdHoc_Entry" in joins[0] and "ActionId" in joins[0] and "CampaignName" in joins[0]

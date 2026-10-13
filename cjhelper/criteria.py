@@ -20,13 +20,25 @@ The condition's ``table`` is the attribute-set name as written in the key; loade
 maps it to the table name. The value may be wrapped in any number of
 ``<AttributePath>`` elements; an empty CDATA is an empty value.
 
+Shapes added by the spec section "Extensions beyond the pilot" (docs/export-format.md):
+
+- Journey Data: ``<Condition IsEphemeralAttribute="true" Key="Event.<eventDefinitionKey>.<field>" ...>``.
+  The condition gets ``source`` SOURCE_JOURNEY and ``table`` holds the event definition key; loader.py
+  maps it to the entry table of the trigger's entry event.
+- Attribute compared with an attribute: ``ValueParameterName="<attribute>"`` with an empty ``<Value>``,
+  or ``ValueIsReference="true"`` with the attribute as the ``<Value>``. The condition gets
+  ``value_attribute`` (as written) and no literal value; loader.py decides whether the form is the
+  supported one.
+- ``Between`` takes the value ``low|high`` and includes both bounds (confirmed by the team).
+
 Operators. Spec: "New activity types and operators are added by extending one lookup
 table each." ``OPERATORS`` below is that one table for operators: to support a new
 operator, add one entry to it (and, if the operator takes no value, list its name in
 ``OPERATORS_WITHOUT_VALUE`` right below it). Nothing else in the generator changes.
-The table holds the spec's pilot operators ``Is``, ``Equal``, ``IsNull`` and the
-earlier tool's operators that "can be carried over at low cost" (spec, "Supported in
-the PoC"). Any other operator raises ``UnsupportedOperator`` when evaluated; spec:
+The table holds the operators of the spec section "Extensions beyond the pilot": the
+pilot's ``Is``, ``Equal``, ``IsNull``, the earlier tool's operators that "can be carried
+over at low cost" (spec, "Supported in the PoC") and ``Between``. Any other operator
+raises ``UnsupportedOperator`` when evaluated; spec:
 "Anything else is not an error: it is listed in the report, and the branches behind
 it are marked as not covered."
 
@@ -42,6 +54,10 @@ Assumptions (the spec does not say; each is listed in the developer report):
 - Dates are read as ISO 8601 (``YYYY-MM-DD[ HH:MM[:SS]]``); a time zone offset is
   converted to UTC and dropped, values without one are compared as written.
 - A field type not listed in the model (or missing) is compared as text.
+- ``Between`` on text compares the strings, as the ordering operators do; a lower bound
+  above the upper bound matches nothing.
+- A key written ``Event.<key>.<field>`` is Journey Data even without ``IsEphemeralAttribute``
+  (every real export marks it); an attribute set called ``Event`` would be misread.
 """
 
 from __future__ import annotations
@@ -52,7 +68,10 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Callable, Optional, Union
 
-from .model import Condition, ConditionGroup, Formula, Value, formula_text
+from .model import SOURCE_CONTACT, SOURCE_JOURNEY, Condition, ConditionGroup, Formula, Value, formula_text
+
+JOURNEY_DATA_PREFIX = "Event"     # Journey Data keys: Event.<eventDefinitionKey>.<field>
+BETWEEN_SEPARATOR = "|"           # Between values: low|high
 
 
 class CriteriaError(Exception):
@@ -76,17 +95,18 @@ def parse_criteria(xml: str) -> Formula:
     documented shape and raise CriteriaError rather than being guessed as AND.
     """
     if not isinstance(xml, str) or not xml.strip():
-        raise CriteriaError("The criteria are empty.")
+        raise CriteriaError("I criteri sono vuoti.")
     try:
         root = ET.fromstring(xml)
     except ET.ParseError as error:
-        raise CriteriaError(f"The criteria are not valid XML ({error}).") from None
+        raise CriteriaError(f"I criteri non sono un XML valido ({error}).") from None
     if _tag(root) != "FilterDefinition":
-        raise CriteriaError(f"The criteria start with <{_tag(root)}> instead of <FilterDefinition>.")
+        raise CriteriaError(f"I criteri iniziano con <{_tag(root)}> invece che con <FilterDefinition>.")
     children = list(root)
     if len(children) != 1:
         raise CriteriaError(
-            f"<FilterDefinition> holds {len(children)} top-level elements; exactly one condition set is expected."
+            f"<FilterDefinition> contiene {len(children)} elementi di primo livello, mentre è atteso un solo "
+            "gruppo di condizioni."
         )
     return _parse_item(children[0])
 
@@ -97,47 +117,100 @@ def _parse_item(element: ET.Element) -> Formula:
         return _parse_set(element)
     if tag == "Condition":
         return _parse_condition(element)
-    raise CriteriaError(f"Unknown element <{tag}> in the criteria.")
+    raise CriteriaError(f"I criteri contengono l'elemento sconosciuto <{tag}>.")
 
 
 def _parse_set(element: ET.Element) -> Formula:
     """A ``<ConditionSet>``: its items joined by AND or OR; a single item stands alone."""
     items = [_parse_item(child) for child in element]
     if not items:
-        raise CriteriaError("A <ConditionSet> in the criteria is empty.")
+        raise CriteriaError("Un <ConditionSet> dei criteri è vuoto.")
     if len(items) == 1:
         return items[0]
     operator = (element.get("Operator") or "").strip().upper()
     if operator not in ("AND", "OR"):
-        raise CriteriaError(f"A <ConditionSet> has operator {element.get('Operator')!r}; AND or OR is expected.")
+        raise CriteriaError(f"Un <ConditionSet> ha l'operatore {element.get('Operator')!r}, mentre è atteso AND o OR.")
     return ConditionGroup(operator, tuple(items))
+
+
+def split_attribute(text: str) -> Optional[tuple[str, str, str]]:
+    """``(source, owner, field)`` of an attribute as written in a condition key or a value attribute.
+
+    ``Event.<eventDefinitionKey>.<field>`` is Journey Data: ``(SOURCE_JOURNEY, event key, field)``.
+    ``<attribute set>.<field>`` is Contact Data: ``(SOURCE_CONTACT, set name, field)``; plan: "Key
+    splits on the first . into set and field (field names may contain spaces)". None for anything else.
+    """
+    prefix, dot, rest = text.partition(".")
+    if prefix == JOURNEY_DATA_PREFIX and dot:
+        event_key, dot, field_name = rest.partition(".")
+        if dot and event_key and field_name:
+            return SOURCE_JOURNEY, event_key, field_name
+    set_name, dot, field_name = text.partition(".")
+    if not dot or not set_name or not field_name:
+        return None
+    return SOURCE_CONTACT, set_name, field_name
+
+
+def between_bounds(value: Value) -> Optional[tuple[str, str]]:
+    """``(low, high)`` of a Between value written ``low|high``; None when it is not written that way."""
+    if value is None:
+        return None
+    low, separator, high = value.partition(BETWEEN_SEPARATOR)
+    if not separator or BETWEEN_SEPARATOR in high or not low.strip() or not high.strip():
+        return None
+    return low.strip(), high.strip()
 
 
 def _parse_condition(element: ET.Element) -> Condition:
     """A ``<Condition Key="Set.Field" Operator="..">`` with its value.
 
-    Plan: "Key splits on the first . into set and field (field names may contain spaces)."
-    The value is None for operators without a value (model.Condition).
+    The key is Contact Data (``<attribute set>.<field>``) or Journey Data
+    (``Event.<eventDefinitionKey>.<field>``, see ``split_attribute``). The value is None for
+    operators without a value (model.Condition) and when the value is another attribute
+    (``ValueParameterName``, or ``ValueIsReference="true"`` with the attribute in ``<Value>``),
+    which goes to ``value_attribute`` as written.
     """
     key = element.get("Key") or ""
-    set_name, dot, field_name = key.partition(".")
-    if not dot or not set_name or not field_name:
-        raise CriteriaError(f"Condition key {key!r} is not written as <attribute set>.<field>.")
+    parts = split_attribute(key)
+    if parts is None:
+        raise CriteriaError(f"La chiave della condizione {key!r} non è scritta nella forma <attribute set>.<campo> "
+                            "né nella forma Event.<event definition key>.<campo>.")
+    source, owner, field_name = parts
+    if _true(element.get("IsEphemeralAttribute")) and source != SOURCE_JOURNEY:
+        raise CriteriaError(f"La condizione {key} è segnata come Journey Data (IsEphemeralAttribute), ma la chiave "
+                            "non è nella forma Event.<event definition key>.<campo>.")
     operator = (element.get("Operator") or "").strip()
     if not operator:
-        raise CriteriaError(f"Condition {key} has no operator.")
+        raise CriteriaError(f"La condizione {key} non ha un operatore.")
     values = _values(element)
     if len(values) > 1:
-        raise CriteriaError(f"Condition {key} holds {len(values)} values; one is expected.")
+        raise CriteriaError(f"La condizione {key} contiene {len(values)} valori, mentre ne è atteso uno.")
+    parameter = (element.get("ValueParameterName") or "").strip()
+    if parameter:
+        if values and values[0].strip():
+            raise CriteriaError(f"La condizione {key} ha sia un valore sia un attributo da confrontare "
+                                f"(ValueParameterName {parameter}).")
+        return Condition(table=owner, field=field_name, operator=operator, value=None, source=source,
+                         value_attribute=parameter)
+    if _true(element.get("ValueIsReference")):
+        if not values or not values[0].strip():
+            raise CriteriaError(f"La condizione {key} confronta il campo con un altro attributo (ValueIsReference), "
+                                "ma non indica quale.")
+        return Condition(table=owner, field=field_name, operator=operator, value=None, source=source,
+                         value_attribute=values[0].strip())
     if operator in OPERATORS_WITHOUT_VALUE:
         value: Value = None
     elif values:
         value = values[0]
     elif operator in OPERATORS:
-        raise CriteriaError(f"Condition {key} {operator} has no <Value>.")
+        raise CriteriaError(f"La condizione {key} {operator} non ha un <Value>.")
     else:
         value = None    # unknown operator: UnsupportedOperator is raised when it is evaluated
-    return Condition(table=set_name, field=field_name, operator=operator, value=value)
+    return Condition(table=owner, field=field_name, operator=operator, value=value, source=source)
+
+
+def _true(text: Optional[str]) -> bool:
+    return (text or "").strip().lower() == "true"
 
 
 def _values(element: ET.Element) -> list[str]:
@@ -150,7 +223,7 @@ def _values(element: ET.Element) -> list[str]:
         elif tag == "AttributePath":
             found.extend(_values(child))
         else:
-            raise CriteriaError(f"Unknown element <{tag}> in a condition.")
+            raise CriteriaError(f"Una condizione contiene l'elemento sconosciuto <{tag}>.")
     return found
 
 
@@ -174,7 +247,15 @@ def evaluate_condition(cond: Condition, value: Value, field_type: str, case_inse
     """
     test = OPERATORS.get(cond.operator)
     if test is None:
-        raise UnsupportedOperator(f"Operator {cond.operator!r} is not supported ({formula_text(cond)}).")
+        raise UnsupportedOperator(f"L'operatore {cond.operator!r} non è supportato ({formula_text(cond)}).")
+    if cond.value_attribute is not None:
+        # Spec, "Attribute compared with an attribute": supported only as "the field linked to the contact
+        # key Equal the contact key", read as "the contact has a row in that table" (loader.py checks the
+        # form). The row is there exactly when its linked field holds a value.
+        if cond.operator != "Equal":
+            raise UnsupportedOperator(f"Il confronto tra due attributi con l'operatore {cond.operator!r} non è "
+                                      f"supportato ({formula_text(cond)}).")
+        return not _is_null(value)
     if cond.operator in OPERATORS_WITHOUT_VALUE:
         return test(value, None, field_type, case_insensitive)
     if _is_null(value) or cond.value is None:
@@ -239,6 +320,16 @@ def _test_ends_with(actual: str, expected: str, field_type: str, case_insensitiv
     return _text_form(actual, field_type, case_insensitive).endswith(_text_form(expected, field_type, case_insensitive))
 
 
+def _test_between(actual: str, expected: str, field_type: str, case_insensitive: bool) -> bool:
+    """Spec: "Between takes the value low|high and includes both bounds (confirmed)"."""
+    bounds = between_bounds(expected)
+    if bounds is None:
+        raise UnsupportedOperator(f"Between ha il valore {expected!r}, che non è nella forma basso|alto.")
+    low, high = bounds
+    return (_compare(actual, low, field_type, case_insensitive) in (0, 1)
+            and _compare(actual, high, field_type, case_insensitive) in (-1, 0))
+
+
 # The one lookup table for operators (spec: "New activity types and operators are added
 # by extending one lookup table each"). Names as written in the criteria XML.
 OPERATORS: dict[str, OperatorTest] = {
@@ -256,6 +347,8 @@ OPERATORS: dict[str, OperatorTest] = {
     "Contains": _test_contains,
     "BeginsWith": _test_begins_with,
     "EndsWith": _test_ends_with,
+    # spec, "Extensions beyond the pilot": value low|high, both bounds included (confirmed)
+    "Between": _test_between,
 }
 
 # Operators of the table above that take no value: their condition value is None.

@@ -1,0 +1,72 @@
+{
+  "journey_name": "EX_BetweenInclusive",
+  "activity_count": 5,
+  "csv_tables": [
+    "DE_Entry",
+    "DE_Master"
+  ],
+  "table_levels": {
+    "DE_Entry": "contact",
+    "DE_Master": "contact"
+  },
+  "branches": {
+    "SPLIT-1/path_a": {
+      "status": "covered"
+    },
+    "SPLIT-1/path_b": {
+      "status": "covered"
+    },
+    "SPLIT-1/path_c": {
+      "status": "not covered",
+      "reason_contains": "non raggiungibile"
+    },
+    "SPLIT-1/remainder_path": {
+      "status": "covered"
+    }
+  },
+  "scenario_count": {
+    "min": 1,
+    "max": 1
+  },
+  "case_count": {
+    "min": 3,
+    "max": 3
+  },
+  "contact_count": 9,
+  "cases": [
+    {
+      "contact_constraints": {
+        "DE_Master.Score": {
+          "gt": 20
+        }
+      },
+      "end_activity": "UPDATE-1",
+      "manual_actions": [],
+      "contact_count": 3
+    },
+    {
+      "contact_constraints": {
+        "DE_Master.Score": {
+          "gt": 10,
+          "lt": 20
+        }
+      },
+      "end_activity": "UPDATE-2",
+      "manual_actions": [],
+      "contact_count": 3
+    },
+    {
+      "contact_constraints": {
+        "DE_Master.Score": {
+          "not_null": true,
+          "lt": 10
+        }
+      },
+      "end_activity": "UPDATE-4",
+      "manual_actions": [],
+      "contact_count": 3
+    }
+  ],
+  "unsupported": [],
+  "checks_pass": true
+}

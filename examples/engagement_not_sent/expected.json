@@ -6,7 +6,7 @@
   "branches": {
     "SPLIT-1/path_a": {"status": "covered"},
     "SPLIT-1/remainder_path": {"status": "covered"},
-    "ENGAGE-1/branchResult-1": {"status": "not covered", "reason_contains": "unreachable"},
+    "ENGAGE-1/branchResult-1": {"status": "not covered", "reason_contains": "non raggiungibile"},
     "ENGAGE-1/branchResult-2": {"status": "covered"}
   },
   "scenario_count": {"min": 1, "max": 1},

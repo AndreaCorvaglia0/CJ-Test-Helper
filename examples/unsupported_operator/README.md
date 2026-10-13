@@ -1,8 +1,14 @@
 # unsupported_operator
 
-A decision split whose condition uses an operator outside the spec's list (`Between`). Found while trying to
-break the generator: on 11 October 2026 the pipeline raised `UnsupportedOperator` on this package instead
-of reporting it.
+A decision split whose condition the generator cannot evaluate. Found while trying to break the generator: on
+11 October 2026 the pipeline raised `UnsupportedOperator` on this package instead of reporting it.
+
+**Correction, 12 October 2026.** When this example was written, `Between` was outside the spec's operator list.
+The section "Extensions beyond the pilot" added it: "Supported operators: ... `Between` ... `Between` takes the
+value `low|high`". The condition here is `PostalCode Between '10000'`, a value not written `low|high`, so it is
+still not evaluable and the expected answer does not change; only its reason does (step 1). An operator outside
+the list (`NotContains`) is now covered by the unit tests in `tests/test_loader.py`
+(`test_unsupported_operator_is_reported`) and `tests/test_criteria.py`.
 
 ## Journey
 
@@ -18,9 +24,10 @@ SPLIT-2 "Postal code range"             (DE_Master.PostalCode, Text(10))
 
 ## Expected answer, step by step
 
-1. **`Between` is unsupported.** Spec, "Supported in the PoC": "Condition operators | `Is`, `Equal`,
-   `IsNull`", and "The earlier tool's condition parser also handled not-equal, numeric comparisons,
-   contains, begins-with, ends-with and is-not-null." `Between` is none of these.
+1. **This `Between` is unsupported.** Spec, "Operators, types and values": "`Between` takes the value
+   `low|high`". `'10000'` has no `|`, so the bounds cannot be read and the branch is reported as unsupported,
+   never guessed. (Before the extension section the reason was that `Between` was outside the operator list of
+   "Supported in the PoC".)
 2. **No crash.** Spec: "Anything else is not an error: it is listed in the report, and the branches behind
    it are marked as not covered. New activity types and operators are added by extending one lookup table
    each." Known limits: "Only the listed activity types, operators and SQL patterns are understood; the rest

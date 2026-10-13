@@ -22,6 +22,19 @@ path sends a message to a phone". None of the activity types supported by the Po
 ``Settings.fake_phone`` and ``Contact.uses_real_phone`` is always False. ``_uses_real_phone`` is
 the hook to change when an SMS activity type is supported.
 
+Spec, "Extensions beyond the pilot":
+
+- "A contact whose row is absent has no row in that table's CSV. This is the only exception to 'each
+  contact row finds its rows in the linked tables'." The tables with the "row present / row absent"
+  variable are ``CoverageResult.row_fields``; their linked field reads None in the case's values when the
+  row is absent. The entry rows and the other tables are unchanged.
+- "The deadline of a manual open or click is computed from the waits between the email and the
+  engagement split, with a warning when the window is under one hour." coverage.py gives each manual action
+  its waits (``Case.action_windows``); the deadline is the date written for the last wait by attribute
+  among them plus the fixed waits after it, and ``Case.not_before`` is the same for the case's whole path.
+- An entry that no automation feeds (Run Once, recurring schedule, CloudPages form, API event) has no entry
+  query by design: its entry rows come from the general rules without a warning.
+
 Nothing here reads the clock or draws random numbers: the generation time is passed in, so the same
 inputs always give the same rows ("The output is reproducible").
 """
@@ -33,13 +46,18 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
+from .graph import CURRENT_DATE_DEFAULTS, case_paths, fixed_wait_minutes
 from .model import (
+    ENTRY_AUTOMATION,
+    ENTRY_RUN_ONCE,
+    GENERATED_KEY,
     KIND_DECISION,
     KIND_WAIT_ATTRIBUTE,
     KIND_WAIT_DURATION,
     KIND_WAIT_STO,
     LEVEL_CONTACT,
     LEVEL_SCENARIO,
+    ActionWindow,
     Case,
     ColumnRef,
     Contact,
@@ -100,15 +118,15 @@ _PRIORITY = {
 }
 
 _RULE_NAMES = {
-    "key": "generated key",
-    "split": "value required by a split",
-    "activation": "activation value of the one-active-scenario setting",
-    "filter": "value required by the entry query filter",
-    "wait": "wait date",
-    "email": "email address",
-    "phone": "phone number",
-    "date": "generation date",
-    "placeholder": "placeholder",
+    "key": "la chiave generata",
+    "split": "il valore richiesto da uno split",
+    "activation": "il valore di attivazione dell'impostazione \"Un solo scenario attivo alla volta\"",
+    "filter": "il valore richiesto dal filtro della entry query",
+    "wait": "la data del wait",
+    "email": "l'indirizzo email",
+    "phone": "il numero di telefono",
+    "date": "la data di generazione",
+    "placeholder": "il placeholder",
 }
 
 # Requirements an entry column passes back to the source column the select copies into it.
@@ -120,9 +138,15 @@ _PUSHED_BACK_KINDS = ("key", "split", "activation", "wait", "email", "phone", "d
 _REQUIREMENT_KINDS = ("key", "split", "activation", "filter", "wait")
 
 # Defaults that mean "the current date" in a Data Extension schema (the export writes GETDATE()).
-_CURRENT_DATE_DEFAULTS = ("getdate()", "getutcdate()", "sysdatetime()")
+_CURRENT_DATE_DEFAULTS = CURRENT_DATE_DEFAULTS   # shared with graph.Walker.inserted_default
 
 _SKIP = object()   # a rule that does not apply to this row: try the next rule
+
+# Spec, "Honest outcomes": "a warning when the window is under one hour".
+SHORT_WINDOW_MINUTES = 60
+
+# The manual action as a verb in the warnings ("open" and "click" are ManualAction.kind values).
+_ACTION_VERBS = {"open": "aprire", "click": "cliccare"}
 
 
 def generate_data(
@@ -140,6 +164,12 @@ def generate_data(
     return _Generator(package, model, coverage, settings, generation_time).run()
 
 
+def one_active_not_offered(package: Package) -> bool:
+    """Spec, "Entry source and procedure": with a Run Once entry "All scenarios enter together, so 'one
+    active scenario at a time' is not offered"."""
+    return package.entry_event is not None and package.entry_event.kind == ENTRY_RUN_ONCE
+
+
 def activation_setting(
     package: Package, model: TableModel, settings: Settings
 ) -> tuple[bool, Optional[FieldRef], list[str]]:
@@ -153,36 +183,45 @@ def activation_setting(
     The field comes from ``settings.activation_field``, else ``model.activation_field``. The mode
     needs a Boolean field of a table that gets a CSV; otherwise it is switched off with a warning.
     The returned field uses the schema spelling.
+
+    Spec, "Entry source and procedure", Run Once row: "All scenarios enter together, so 'one active scenario
+    at a time' is not offered": on a Run Once entry the setting is ignored, with a warning saying why.
     """
     warnings: list[str] = []
     ref = settings.activation_field or model.activation_field
     on = settings.one_active_scenario if settings.one_active_scenario is not None else ref is not None
     if not on:
         return False, None, warnings
+    if one_active_not_offered(package):
+        warnings.append(
+            "L'impostazione \"Un solo scenario attivo alla volta\" non si applica a un ingresso Run Once: tutti gli "
+            "scenari entrano insieme quando il journey viene attivato, quindi tutti gli scenari sono attivi nel CSV."
+        )
+        return False, None, warnings
     if ref is None:
         warnings.append(
-            "One active scenario at a time is switched on, but no activation field was given or "
-            "detected. Every scenario is active in the CSV."
+            "L'impostazione \"Un solo scenario attivo alla volta\" è attiva, ma nessun campo di attivazione è "
+            "stato indicato o rilevato. Tutti gli scenari sono attivi nel CSV."
         )
         return False, None, warnings
     table = _find_table(package.tables, ref[0])
     field = table.field(ref[1]) if table is not None else None
     if table is None or field is None:
         warnings.append(
-            f"The activation field {ref[0]}.{ref[1]} does not exist in the export. One active "
-            "scenario at a time is switched off, so every scenario is active in the CSV."
+            f"Il campo di attivazione {ref[0]}.{ref[1]} non esiste nell'export. L'impostazione \"Un solo "
+            "scenario attivo alla volta\" viene disattivata, quindi tutti gli scenari sono attivi nel CSV."
         )
         return False, None, warnings
     if table.name.lower() not in {name.lower() for name in model.selected_tables}:
         warnings.append(
-            f"The activation field {table.name}.{field.name} is in a table that gets no CSV. One "
-            "active scenario at a time is switched off, so every scenario is active in the CSV."
+            f"Il campo di attivazione {table.name}.{field.name} è in una tabella che non ha un CSV. L'impostazione "
+            "\"Un solo scenario attivo alla volta\" viene disattivata, quindi tutti gli scenari sono attivi nel CSV."
         )
         return False, None, warnings
     if _field_type(field) != "boolean":
         warnings.append(
-            f"The activation field {table.name}.{field.name} is of type {field.type}, not Boolean. "
-            "One active scenario at a time is switched off, so every scenario is active in the CSV."
+            f"Il campo di attivazione {table.name}.{field.name} è di tipo {field.type}, non Boolean. L'impostazione "
+            "\"Un solo scenario attivo alla volta\" viene disattivata, quindi tutti gli scenari sono attivi nel CSV."
         )
         return False, None, warnings
     return True, (table.name, field.name), warnings
@@ -250,9 +289,9 @@ def _as_text(value) -> Value:
     return str(value)
 
 
-def _count(number: int, noun: str) -> str:
-    """A number with its noun in the right form for the warnings: "1 case", "2 cases"."""
-    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+def _count(number: int, singular: str, plural: str) -> str:
+    """A number with its noun in the right form for the warnings: "1 caso", "2 casi"."""
+    return f"{number} {singular}" if number == 1 else f"{number} {plural}"
 
 
 _DOTNET_TOKENS = {"yyyy": "%Y", "MM": "%m", "dd": "%d", "HH": "%H", "mm": "%M", "ss": "%S"}
@@ -284,24 +323,42 @@ def _dotnet_to_strftime(dotnet_format: str) -> str:
     return dotnet_to_strftime(dotnet_format)
 
 
-def case_paths(case: Case) -> list[list[str]]:
-    """Activity keys of every full path of a case.
+def _fixed_minutes(keys: list[str], activities: dict) -> Optional[int]:
+    """Fixed duration of the waits among ``keys`` in minutes (graph.fixed_wait_minutes); None when unknown."""
+    total = 0
+    for key in keys:
+        activity = activities.get(key)
+        if activity is None or activity.kind not in _WAIT_KINDS:
+            continue
+        minutes = fixed_wait_minutes(activity)
+        if minutes is None:
+            return None
+        total += minutes
+    return total
 
-    A statistical case's ``steps`` stop at the random split; each random branch continues it.
-    """
-    base = [step.activity_key for step in case.steps]
-    if case.random is not None and case.random.branches:
-        return [base + [step.activity_key for step in branch.steps] for branch in case.random.branches]
-    return [base]
+
+def _minutes_text(minutes: int) -> str:
+    """A duration in words: "5 minuti", "1 ora", "2 giorni"."""
+    for size, one, many in ((24 * 60, "giorno", "giorni"), (60, "ora", "ore"), (1, "minuto", "minuti")):
+        if minutes % size == 0:
+            return _count(minutes // size, one, many)
+    return _count(minutes, "minuto", "minuti")
 
 
-def manual_wait_rank(wait_key: str, case: Case, activities: Optional[dict] = None) -> int:
-    """0 when the wait gives no time for a manual action; otherwise the position of its manual
-    action on the path (1 for the first engagement split, 2 for the second, ...), so that each
-    deadline comes one offset after the previous one."""
+def manual_wait_delay(wait_key: str, case: Case, offset_hours: int,
+                      activities: Optional[dict] = None) -> Optional[timedelta]:
+    """How long after the generation time a wait by attribute that leaves time for a manual action ends; None
+    when it lies between no email and the engagement split that needs an action on it.
+
+    Spec, "Dates", "Wait date before an engagement split", as decided by the team on 13 October 2026: the
+    fixed waits before the email on the path delay its arrival, so they are added to the date, and the window
+    still lasts the offset: generation time + the fixed waits before the email + the offset multiplied by
+    the position of the manual action on the path (1 for the first engagement split, 2 for the second, ...), so
+    that each deadline comes one offset after the previous one. A wait whose duration is unknown, and a wait
+    by attribute, count 0 here; ``_fill_timing`` still warns when the window is too short."""
     if not case.manual_actions:
-        return 0
-    best = 0
+        return None
+    best: Optional[timedelta] = None
     for keys in case_paths(case):
         if wait_key not in keys:
             continue
@@ -310,8 +367,16 @@ def manual_wait_rank(wait_key: str, case: Case, activities: Optional[dict] = Non
         for position, action in enumerate(actions, start=1):
             end = keys.index(action.activity_key)
             start = keys.index(action.email_activity_key) if action.email_activity_key in keys[:end] else -1
-            if wait_key in keys[start + 1:end]:
-                best = max(best, position)
+            if wait_key not in keys[start + 1:end]:
+                continue
+            before = 0
+            for key in keys[:max(start, 0)]:
+                activity = (activities or {}).get(key)
+                if activity is not None and activity.kind in _WAIT_KINDS:
+                    before += fixed_wait_minutes(activity) or 0
+            delay = timedelta(hours=offset_hours * position, minutes=before)
+            if best is None or delay > best:
+                best = delay
     return best
 
 
@@ -357,7 +422,7 @@ class _Rule:
 
     def describe(self) -> str:
         name = _RULE_NAMES[self.kind]
-        return f"{name} of entry column {self.via}" if self.via else name
+        return f"{name} della colonna di ingresso {self.via}" if self.via else name
 
 
 @dataclass
@@ -396,7 +461,7 @@ class _Generator:
 
         self._entry = _find_table(package.tables, model.entry_table)
         if self._entry is None:
-            self._warn(f"The entry table {model.entry_table} is not in the export, so it gets no rows.")
+            self._warn(f"La tabella di ingresso {model.entry_table} non è nell'export, quindi non riceve righe.")
         self._check_settings()
         self._tables_plan = self._plan_tables()
         self._levels = {table.name.lower(): level for table, level in self._tables_plan}
@@ -423,7 +488,7 @@ class _Generator:
         key = (table.name, field.name)
         if key not in self._placeholder_columns:
             self._placeholder_columns.add(key)
-            self.placeholders.append(f"{table.name}.{field.name}: {reason}. A placeholder is written.")
+            self.placeholders.append(f"{table.name}.{field.name}: {reason}. Viene scritto un placeholder.")
 
     def _table(self, name: str) -> Optional[Table]:
         return _find_table(self.package.tables, name)
@@ -437,8 +502,8 @@ class _Generator:
     def _check_settings(self) -> None:
         if "%" not in self.settings.date_format:
             self._warn(
-                f"The date format {self.settings.date_format!r} has no strftime directive, such as %Y. "
-                "Every date is written as that literal text."
+                f"Il formato data {self.settings.date_format!r} non contiene direttive strftime, come %Y. "
+                "Ogni data viene scritta così, come testo letterale."
             )
 
     def _plan_tables(self) -> list[tuple[Table, str]]:
@@ -447,11 +512,11 @@ class _Generator:
         for name in self.model.selected_tables:
             table = self._table(name)
             if table is None:
-                self._warn(f"The selected table {name} is not in the export, so it gets no CSV.")
+                self._warn(f"La tabella selezionata {name} non è nell'export, quindi non ha un CSV.")
                 continue
             plan.append((table, self._table_level(table)))
         if self._entry is not None and all(table is not self._entry for table, _ in plan):
-            self._warn(f"The entry table {self._entry.name} is not among the selected tables, so it gets no CSV.")
+            self._warn(f"La tabella di ingresso {self._entry.name} non è tra le tabelle selezionate, quindi non ha un CSV.")
         return plan
 
     def _table_level(self, table: Table) -> str:
@@ -464,7 +529,7 @@ class _Generator:
         if table.name.lower() in {name.lower() for name in self.model.scenario_tables}:
             return LEVEL_SCENARIO
         if table.name.lower() not in {name.lower() for name in self.model.contact_tables}:
-            self._warn(f"The level of table {table.name} is not known, so it gets one row per contact.")
+            self._warn(f"Il livello della tabella {table.name} non è noto, quindi riceve una riga per contatto.")
         return LEVEL_CONTACT
 
     def _index_key_groups(self) -> dict[tuple[str, str], int]:
@@ -490,7 +555,8 @@ class _Generator:
             if activity.kind != KIND_WAIT_ATTRIBUTE:
                 continue
             if activity.wait_field is None:
-                self._warn(f"The wait by attribute {activity.key} names no date field, so no field is filled for it.")
+                self._warn(f"Il wait by attribute {activity.key} non indica un campo data, quindi per questo wait non "
+                           "viene riempito nessun campo.")
                 continue
             waits.setdefault(_norm(activity.wait_field), []).append(activity.key)
         return waits
@@ -516,8 +582,8 @@ class _Generator:
                 key = _norm(ref)
                 if key in self._wait_fields and key not in condition_fields:
                     self._warn(
-                        f"{ref[0]}.{ref[1]} is listed by the coverage, but only a wait by attribute reads it. "
-                        "It is filled as a wait date."
+                        f"{ref[0]}.{ref[1]} è tra i campi della coverage, ma lo legge solo un wait by attribute. "
+                        "Viene riempito come data del wait."
                     )
                     continue
                 sources.setdefault(key, (level, ref))
@@ -537,32 +603,32 @@ class _Generator:
         if self.model.entry_query is not None and self.model.entry_query not in queries:
             queries.insert(0, self.model.entry_query)
         for query in queries:
-            label = "The entry query" if query is self.model.entry_query else f"The query {query.name}"
+            label = "La entry query" if query is self.model.entry_query else f"La query {query.name}"
             for flt in query.filters:
                 if isinstance(flt, UnsupportedFilter):
                     self._warn(
-                        f"{label} filter {flt.text!r} is not supported. The generated rows may not "
-                        "pass it, so the contacts may not enter the journey."
+                        f"{label} usa il filtro {flt.text!r}, che non è supportato. Le righe generate potrebbero "
+                        "non superarlo, quindi i contatti potrebbero non entrare nel journey."
                     )
                     continue
                 resolved = self._resolve_column(flt.column, query)
                 if resolved is None:
                     self._warn(
-                        f"{label} filters on {flt.column.table or '?'}.{flt.column.column}, which matches "
-                        "no field of a source table. The filter is not applied to the generated rows."
+                        f"{label} filtra su {flt.column.table or '?'}.{flt.column.column}, che non corrisponde a "
+                        "nessun campo di una tabella sorgente. Il filtro non viene applicato alle righe generate."
                     )
                     continue
                 table, field = resolved
                 if table is self._entry:
                     self._warn(
-                        f"{label} filters on the entry table itself, on the column {table.name}.{field.name}. "
-                        "The generated contacts are new, so the filter is not applied to the generated rows."
+                        f"{label} filtra sulla tabella di ingresso stessa, sulla colonna {table.name}.{field.name}. "
+                        "I contatti generati sono nuovi, quindi il filtro non viene applicato alle righe generate."
                     )
                     continue
                 if table.name.lower() not in self._levels:
                     self._warn(
-                        f"{label} filters on {table.name}.{field.name}, but {table.name} gets no CSV. "
-                        "The filter is not applied to the generated rows."
+                        f"{label} filtra su {table.name}.{field.name}, ma {table.name} non ha un CSV. "
+                        "Il filtro non viene applicato alle righe generate."
                     )
                     continue
                 key = _norm((table.name, field.name))
@@ -570,22 +636,22 @@ class _Generator:
                 if same_field and same_field[0] != flt:
                     if filter_source[key] == label:
                         self._warn(
-                            f"{label} has several filters on {table.name}.{field.name}. Only the first one "
-                            "is used to choose its value."
+                            f"{label} ha più filtri su {table.name}.{field.name}. Per sceglierne il valore si usa "
+                            "solo il primo."
                         )
                     else:
                         self._warn(
-                            f"{label} also filters on {table.name}.{field.name}. The filter of "
-                            f"{filter_source[key][0].lower() + filter_source[key][1:]} is used to choose its value."
+                            f"{label} filtra anche {table.name}.{field.name}. Per sceglierne il valore si usa il "
+                            f"filtro della {filter_source[key][3:]}."
                         )
                     continue
                 filter_source.setdefault(key, label)
                 same_field.append(flt)
                 if query is not self.model.entry_query:
                     self._warn(
-                        f"{label} filters {table.name}.{field.name}, and the automation runs it on {table.name}. "
-                        "The generated rows pass that filter too. This is an assumption: the automation's own "
-                        "queries must find them."
+                        f"{label} filtra {table.name}.{field.name} e l'automation la esegue su {table.name}. "
+                        "Anche le righe generate superano quel filtro. È un'assunzione: le query dell'automation "
+                        "devono trovarle."
                     )
         return filters
 
@@ -635,14 +701,14 @@ class _Generator:
                     continue
                 if field.name in explicit:
                     self._warn(
-                        f"The entry query fills {entry.name}.{field.name} twice. The first expression is used."
+                        f"La entry query riempie {entry.name}.{field.name} due volte. Si usa la prima espressione."
                     )
                     continue
                 explicit.add(field.name)
                 self._entry_plan[field.name] = item.expr   # an explicit item wins over a column copied by *
             if ignored:
                 self._warn(
-                    f"The entry query selects columns that {entry.name} does not have. These columns are ignored: "
+                    f"La entry query seleziona colonne che {entry.name} non ha. Queste colonne vengono ignorate: "
                     + ", ".join(ignored) + "."
                 )
         for column, expr in self._entry_plan.items():
@@ -711,9 +777,9 @@ class _Generator:
             value = self._normalise(_as_text(value), table, field)
             if rule.kind == "key" and field.length and value and len(value) > field.length:
                 self._warn(
-                    f"The generated keys are {_count(len(value), 'character')} long, but {table.name}.{field.name} "
-                    f"holds only {_count(field.length, 'character')}. The keys are not cut, so that the tables "
-                    "still join."
+                    f"Le chiavi generate sono lunghe {_count(len(value), 'carattere', 'caratteri')}, ma "
+                    f"{table.name}.{field.name} ne contiene solo {field.length}. Le chiavi non vengono tagliate, così "
+                    "le tabelle restano collegate dal join."
                 )
             self._report_overridden(table, field, row, rule, value, rules[position + 1:])
             return value
@@ -730,9 +796,9 @@ class _Generator:
             if isinstance(rule.detail, IsNullFilter) and rule.detail.negated:
                 if value is None or value == "":
                     self._warn(
-                        f"{table.name}.{field.name} gets the {chosen.describe()}, which is empty on some rows. "
-                        "The IS NOT NULL filter of the entry query on this field is not met, following the "
-                        "spec's priority order."
+                        f"{table.name}.{field.name} riceve {chosen.describe()}, che su alcune righe è vuoto. "
+                        "Secondo l'ordine di priorità della spec, il filtro IS NOT NULL della entry query su questo "
+                        "campo non è rispettato."
                     )
                 continue
             other = self._rule_value(rule, table, field, row)
@@ -741,9 +807,8 @@ class _Generator:
             other = self._normalise(_as_text(other), table, field)
             if other != value:
                 self._warn(
-                    f"{table.name}.{field.name} gets the {chosen.describe()} "
-                    f"instead of the {rule.describe()}, following the spec's priority order. "
-                    f"The {rule.describe()} would have been {other!r}."
+                    f"{table.name}.{field.name} riceve {chosen.describe()} e non {rule.describe()}, "
+                    f"secondo l'ordine di priorità della spec. Con {rule.describe()} il valore sarebbe stato {other!r}."
                 )
 
     def _rule_value(self, rule: _Rule, table: Table, field: Field, row: _Row) -> object:
@@ -788,8 +853,8 @@ class _Generator:
         if group.kind == "contact":
             if row.contact_key is None:
                 self._warn(
-                    f"{table.name}.{field.name} should hold the contact key, but {table.name} has one row per "
-                    "scenario. It is filled by the lower-priority rules."
+                    f"{table.name}.{field.name} dovrebbe contenere la chiave del contatto, ma {table.name} ha una riga "
+                    "per scenario. Lo riempiono le regole a priorità più bassa."
                 )
                 return _SKIP
             return row.contact_key
@@ -816,15 +881,15 @@ class _Generator:
         if level == LEVEL_SCENARIO:
             found, value = _lookup(row.scenario.values, ref)
             if not found:
-                self._warn(f"The coverage gives no value for {ref[0]}.{ref[1]} in scenario {row.scenario.id}, "
-                           "so the lower-priority rules fill it.")
+                self._warn(f"La coverage non dà un valore per {ref[0]}.{ref[1]} nello scenario {row.scenario.id}, "
+                           "quindi lo riempiono le regole a priorità più bassa.")
                 return _SKIP
             return self._other_or_value(ref, value)
         if row.case is not None:
             found, value = _lookup(row.case.contact_values, ref)
             if not found:
-                self._warn(f"The coverage gives no value for {ref[0]}.{ref[1]} in case {row.case.id}, "
-                           "so the lower-priority rules fill it.")
+                self._warn(f"La coverage non dà un valore per {ref[0]}.{ref[1]} nel caso {row.case.id}, "
+                           "quindi lo riempiono le regole a priorità più bassa.")
                 return _SKIP
             return self._other_or_value(ref, value)
         # A row shared by the whole scenario holds a contact-level field: its cases must agree.
@@ -833,14 +898,17 @@ class _Generator:
             return _SKIP
         if len(set(values)) > 1:
             self._warn(
-                f"{ref[0]}.{ref[1]} is read per contact, but its row is shared by scenario {row.scenario.id}, "
-                f"whose cases need different values. The value of the first case is written: {values[0]!r}."
+                f"{ref[0]}.{ref[1]} è letto a livello di contatto, ma la sua riga è condivisa dallo scenario "
+                f"{row.scenario.id}, i cui casi richiedono valori diversi. Viene scritto il valore del primo caso: {values[0]!r}."
             )
         return values[0]
 
     def _other_or_value(self, ref: FieldRef, value: Value) -> object:
         """The coverage's 'other' value of an email or phone field only means "not one of the
-        condition values": the address or number rules (spec, "Email" and "Phone") give it."""
+        condition values": the address or number rules (spec, "Email" and "Phone") give it. The
+        coverage's generated-key marker means "the generated key": the key rule gives it."""
+        if value == GENERATED_KEY:
+            return _SKIP
         other = self.coverage.other_values.get(ref)
         if other is None or value != other:
             return value
@@ -869,26 +937,26 @@ class _Generator:
     def _wait_value(self, wait_keys: tuple[str, ...], row: _Row) -> str:
         """Spec, "Dates": a wait date is the generation time plus the wait offset (default 0 hours, "so
         the wait ends at once"), or plus the offset before an engagement split (default 24 hours)
-        when a case crosses the wait and later needs a manual action. A scenario-level field is decided
-        over all the cases of its scenario, a contact-level field for the contact's own case."""
+        when a case crosses the wait and later needs a manual action; in that case the fixed waits before
+        the email are added too (``manual_wait_delay``, team decision of 13 October 2026). A scenario-level
+        field is decided over all the cases of its scenario, a contact-level field for the contact's own case."""
         cases = [row.case] if row.case is not None else list(row.scenario.cases)
         activities = self.package.journey.activities
-        rank = max((manual_wait_rank(key, case, activities) for case in cases for key in wait_keys), default=0)
-        if rank:
-            # Two engagement splits on one path need two deadlines: the second wait ends one offset
-            # after the first, so that the second email is sent before its own deadline starts.
-            hours = self.settings.wait_offset_before_engagement_hours * rank
-        else:
-            hours = self.settings.wait_offset_hours
-        return self._format_date(self.generation_time + timedelta(hours=hours))
+        # Two engagement splits on one path need two deadlines: the second wait ends one offset after the
+        # first, so that the second email is sent before its own deadline starts (``manual_wait_delay``).
+        delays = [manual_wait_delay(key, case, self.settings.wait_offset_before_engagement_hours, activities)
+                  for case in cases for key in wait_keys]
+        delays = [d for d in delays if d is not None]
+        delay = max(delays) if delays else timedelta(hours=self.settings.wait_offset_hours)
+        return self._format_date(self.generation_time + delay)
 
     def _email_value(self, table: Table, field: Field, row: _Row) -> str:
         """Spec, "Email": the contact's address (see ``_build_contacts``)."""
         if row.contact_key is not None:
             return self._contact_email[row.contact_key]
         self._warn(
-            f"{table.name}.{field.name} is an email field in a table with one row per scenario, so it gets the "
-            f"undeliverable address <scenario key>@{UNDELIVERABLE_DOMAIN}."
+            f"{table.name}.{field.name} è un campo email in una tabella con una riga per scenario, quindi riceve "
+            f"l'indirizzo non recapitabile <chiave dello scenario>@{UNDELIVERABLE_DOMAIN}."
         )
         return f"{row.scenario.key}@{UNDELIVERABLE_DOMAIN}"
 
@@ -908,11 +976,11 @@ class _Generator:
         if field_type == "date":
             return self._format_date(self.generation_time)
         if field_type not in ("text", "emailaddress", "phone"):
-            self._warn(f"{table.name}.{field.name} has the unknown type {field.type!r}, so it gets a text placeholder.")
+            self._warn(f"{table.name}.{field.name} ha il tipo sconosciuto {field.type!r}, quindi riceve un placeholder di testo.")
         if field_type == "text" and field.name.lower().startswith("email"):
             self._warn(
-                f"{table.name}.{field.name} is a Text field named like an email address. Only EmailAddress fields get "
-                "addresses, so it gets a text placeholder."
+                f"{table.name}.{field.name} è un campo Text con il nome di un indirizzo email. Solo i campi EmailAddress "
+                "ricevono indirizzi, quindi riceve un placeholder di testo."
             )
         if field.is_primary_key:
             # Spec, "Keys": primary keys are unique within each table and carry the run identifier.
@@ -923,12 +991,12 @@ class _Generator:
             for text, example in forms:
                 if not field.length or len(text) <= field.length:
                     if not text.startswith("TST_"):
-                        self._warn(f"{table.name}.{field.name} is a primary key of "
-                                   f"{_count(field.length, 'character')}, which is too short for TST_{run}_P keys. "
-                                   f"Shorter unique values are written, such as {example!r}.")
+                        self._warn(f"{table.name}.{field.name} è una chiave primaria di "
+                                   f"{_count(field.length, 'carattere', 'caratteri')}, troppo corta per le chiavi "
+                                   f"TST_{run}_P. Vengono scritti valori univoci più corti, come {example!r}.")
                     return text
-            self._warn(f"{table.name}.{field.name} is a primary key of {_count(field.length, 'character')}, "
-                       "which is too short for unique generated keys. Its values are cut and may repeat.")
+            self._warn(f"{table.name}.{field.name} è una chiave primaria di {_count(field.length, 'carattere', 'caratteri')}, "
+                       "troppo corta per chiavi generate univoche. I suoi valori vengono tagliati e possono ripetersi.")
             return str(number)[:field.length]
         text = f"TST_{field.name}_{number}"
         return text[:field.length] if field.length else text
@@ -939,7 +1007,7 @@ class _Generator:
             return value
         boolean = boolean_text(value)
         if boolean is None:
-            self._warn(f"{table.name}.{field.name} is Boolean but gets the value {value!r}, written as given.")
+            self._warn(f"{table.name}.{field.name} è Boolean ma riceve il valore {value!r}, che viene scritto così com'è.")
             return value
         return boolean
 
@@ -954,7 +1022,7 @@ class _Generator:
             scenario.key = self.settings.scenario_key(scenario.run_order)
             for case in scenario.cases:
                 if case.contact_count <= 0:
-                    self._warn(f"Case {case.id} asks for {case.contact_count} contacts, so it gets none.")
+                    self._warn(f"Il caso {case.id} chiede {case.contact_count} contatti, quindi non ne riceve nessuno.")
                 keys = []
                 real = bool(case.manual_actions) and inbox is not None and not case.inbox_blocked_reason
                 for _ in range(max(case.contact_count, 0)):
@@ -968,7 +1036,7 @@ class _Generator:
                 case.contact_keys = keys
         scenario_keys = [scenario.key for scenario in scenarios]
         if len(set(scenario_keys)) != len(scenario_keys):
-            self._warn("Two scenarios have the same run order, so they share a scenario key.")
+            self._warn("Due scenari hanno lo stesso ordine di esecuzione, quindi condividono la chiave dello scenario.")
         self._allocate_other_keys(scenarios)
 
     def _allocate_other_keys(self, scenarios: list[Scenario]) -> None:
@@ -994,8 +1062,8 @@ class _Generator:
         local, at, domain = inbox.rpartition("@")
         if not at or not local or not domain or " " in inbox:
             self._warn(
-                f"The real inbox {inbox!r} is not an address of the form name@domain. It is not used, so "
-                "every contact gets an undeliverable address."
+                f"L'inbox reale {inbox!r} non è un indirizzo nella forma nome@dominio. Non viene usata, quindi "
+                "ogni contatto riceve un indirizzo non recapitabile."
             )
             return None
         return local, domain
@@ -1020,8 +1088,8 @@ class _Generator:
                 if case.manual_actions and inbox is None:
                     manual_without_inbox += 1
                 if case.manual_actions and case.inbox_blocked_reason:
-                    self._warn(f"Case {case.id} needs an open or click that cannot be done: "
-                               f"{case.inbox_blocked_reason}. Its contacts keep the address the path requires.")
+                    self._warn(f"Il caso {case.id} richiede un open o un click che non si può fare: "
+                               f"{case.inbox_blocked_reason}. I suoi contatti mantengono l'indirizzo richiesto dal percorso.")
                 for key in case.contact_keys:
                     if self._email_keys:
                         email = key
@@ -1033,8 +1101,8 @@ class _Generator:
                                             email=email))
         if manual_without_inbox:
             self._warn(
-                f"No real inbox is set. The contacts of {_count(manual_without_inbox, 'case')} with a manual "
-                f"open or click get undeliverable addresses ending in @{UNDELIVERABLE_DOMAIN}."
+                f"Nessuna inbox reale impostata. I contatti di {_count(manual_without_inbox, 'caso', 'casi')} "
+                f"con un open o un click manuale ricevono indirizzi non recapitabili che terminano con @{UNDELIVERABLE_DOMAIN}."
             )
         return contacts
 
@@ -1047,10 +1115,145 @@ class _Generator:
                 for action in case.manual_actions:
                     if not self._has_wait_before(case, action, activities):
                         self._warn(
-                            f"Case {case.id} has no wait between the email {action.email_name!r} "
-                            f"and the engagement split {action.activity_key}. The tester may not have time to "
-                            f"{action.kind} the email before the split is evaluated."
+                            f"Il caso {case.id} non ha un wait tra l'email {action.email_name!r} "
+                            f"e l'engagement split {action.activity_key}. Il tester potrebbe non avere il tempo di "
+                            f"{_ACTION_VERBS.get(action.kind, 'aprire o cliccare')} l'email prima che lo split venga valutato."
                         )
+
+    def _fill_timing(self, scenarios: list[Scenario]) -> None:
+        """Spec, "Honest outcomes": "The deadline of a manual open or click is computed from the waits between
+        the email and the engagement split, with a warning when the window is under one hour. The testbook gives
+        each case's minimum duration."
+
+        The window of a manual action opens when the email can arrive: the generation time, delayed by the
+        waits before the email on the case's path (``ActionWindow.wait_keys_before``; ``email_not_before`` when
+        they delay it). With a wait by attribute between the email and the split, the deadline is the earliest
+        time the contacts reach the split (``_leave_waits``): each wait by attribute holds them until the date
+        written for it, or lets them go at once when that date has already passed. Without a wait by attribute
+        the window is relative to the email (``minutes``). A window is short when it is under one hour: its
+        deadline is less than an hour after the email can arrive, or its fixed waits last less than an hour. A
+        short window with no wait at all is already reported by ``_check_engagement_waits``.
+        ``Case.not_before`` is the same date for the whole path of the case."""
+        activities = self.package.journey.activities
+        short = timedelta(minutes=SHORT_WINDOW_MINUTES)
+        for scenario in scenarios:
+            for case in scenario.cases:
+                for window in case.action_windows:
+                    email_at = self._leave_waits(window.wait_keys_before, self.generation_time, scenario, case)
+                    if email_at is not None and email_at > self.generation_time:
+                        window.email_not_before = self._format_date(email_at)
+                    start = email_at if email_at is not None else self.generation_time
+                    if window.attribute_wait_key is not None:
+                        moment = self._leave_waits(window.wait_keys, start, scenario, case)
+                        window.deadline = self._format_date(moment) if moment is not None else None
+                        window.short = moment is not None and moment - start < short
+                    else:
+                        window.short = window.minutes is not None and window.minutes < SHORT_WINDOW_MINUTES
+                    if window.short and window.wait_keys:
+                        self._warn_short_window(window, case, activities)
+                latest: Optional[datetime] = None
+                for keys in case_paths(case):
+                    waits = [key for key in keys if key in activities and activities[key].kind in _WAIT_KINDS]
+                    attribute = [key for key in waits if activities[key].kind == KIND_WAIT_ATTRIBUTE]
+                    if not attribute:
+                        continue
+                    after = _fixed_minutes(waits[waits.index(attribute[-1]) + 1:], activities)
+                    moment = self._wait_moment(attribute[-1], after, scenario, case)
+                    if moment is not None and (latest is None or moment > latest):
+                        latest = moment
+                case.not_before = self._format_date(latest) if latest is not None else None
+
+    def _leave_waits(self, wait_keys: list[str], start: datetime, scenario: Scenario,
+                     case: Case) -> Optional[datetime]:
+        """The earliest time a contact that reaches the first of ``wait_keys`` at ``start`` is past all of them,
+        in path order: a wait by duration adds its amount, a send-time wait nothing (it may send at once), a
+        wait by attribute holds the contact until the date written for it, or not at all once that date has
+        passed. None when a duration or a date is not known."""
+        activities = self.package.journey.activities
+        moment = start
+        for key in wait_keys:
+            activity = activities.get(key)
+            if activity is None:
+                continue
+            if activity.kind == KIND_WAIT_ATTRIBUTE:
+                until = self._wait_moment(key, 0, scenario, case)
+                if until is None:
+                    return None
+                moment = max(moment, until)
+            else:
+                minutes = fixed_wait_minutes(activity)
+                if minutes is None:
+                    return None
+                moment += timedelta(minutes=minutes)
+        return moment
+
+    def _wait_moment(self, wait_key: str, minutes_after: Optional[int], scenario: Scenario,
+                     case: Case) -> Optional[datetime]:
+        """The date written for a wait by attribute in this case's rows, plus ``minutes_after``; None when the
+        date or the minutes are not known."""
+        activity = self.package.journey.activities.get(wait_key)
+        if activity is None or activity.wait_field is None or minutes_after is None:
+            return None
+        table = self._table(activity.wait_field[0])
+        field = table.field(activity.wait_field[1]) if table is not None else None
+        if field is None:
+            return None
+        level = self._levels.get(table.name.lower())
+        owner = scenario.key if level == LEVEL_SCENARIO else (case.contact_keys[0] if case.contact_keys else None)
+        row = self._row_index.get(table.name.lower(), {}).get(owner) if owner is not None else None
+        value = row.get(field.name) if row is not None else None
+        if value is None:
+            return None
+        try:
+            moment = datetime.strptime(value, self.settings.date_format)
+        except ValueError:
+            return None
+        return moment + timedelta(minutes=minutes_after)
+
+    def _warn_short_window(self, window: ActionWindow, case: Case, activities: dict) -> None:
+        """One warning per email and engagement split whose window is under one hour."""
+        email = activities.get(window.email_activity_key)
+        split = activities.get(window.activity_key)
+        email_name = email.email_name if email is not None and email.email_name else window.email_activity_key
+        split_name = f"'{split.name}' ({window.activity_key})" if split is not None and split.name else window.activity_key
+        action = next((a for a in case.manual_actions if a.activity_key == window.activity_key), None)
+        verb = _ACTION_VERBS.get(action.kind if action is not None else "", "aprire o cliccare")
+        if len(window.wait_keys) == 1:
+            waits, last = f"il wait {window.wait_keys[0]}", ("può terminare", "dura")
+        else:
+            waits, last = f"i wait {', '.join(window.wait_keys)}", ("possono terminare", "durano in tutto")
+        if window.attribute_wait_key is not None and window.email_not_before is not None:
+            # The waits before the email delay its arrival: the window is measured from there.
+            delay = (f"i wait {', '.join(window.wait_keys_before)} che la precedono"
+                     if len(window.wait_keys_before) > 1 else f"il wait {window.wait_keys_before[0]} che la precede")
+            if window.deadline == window.email_not_before:
+                time_left = (f"lo split viene valutato appena arriva l'email, perché a quell'ora la data del wait "
+                             f"{window.attribute_wait_key} è già passata: il tester non ha il tempo di {verb} l'email")
+            else:
+                time_left = f"il tester ha meno di un'ora per {verb} l'email dopo il suo arrivo"
+            self._warn(
+                f"L'email {email_name!r} arriva non prima del {window.email_not_before}, per {delay}, e la scadenza "
+                f"per {verb} l'email prima dell'engagement split {split_name} è il {window.deadline}: {time_left}. "
+                "L'offset della data di wait prima di un engagement split si cambia nelle impostazioni: per dare "
+                "tempo al tester va alzato."
+            )
+        elif window.attribute_wait_key is not None:
+            self._warn(
+                f"La scadenza per {verb} l'email {email_name!r} prima dell'engagement split {split_name} è il "
+                f"{window.deadline}, meno di un'ora dopo l'ora di generazione: il tester ha meno di un'ora. "
+                "L'offset della data di wait prima di un engagement split si cambia nelle impostazioni."
+            )
+        elif window.minutes == 0:
+            self._warn(
+                f"Tra l'email {email_name!r} e l'engagement split {split_name} {waits} {last[0]} subito: il tester "
+                f"potrebbe non avere il tempo di {verb} l'email prima che lo split venga valutato."
+            )
+        else:
+            self._warn(
+                f"Tra l'email {email_name!r} e l'engagement split {split_name} {waits} {last[1]} "
+                f"{_minutes_text(window.minutes)}: il tester ha meno di un'ora per {verb} l'email prima che lo split "
+                "venga valutato."
+            )
 
     @staticmethod
     def _has_wait_before(case: Case, action: ManualAction, activities: dict) -> bool:
@@ -1079,12 +1282,14 @@ class _Generator:
         for table, level in self._tables_plan:
             if table is self._entry:
                 continue
-            contexts = scenario_rows if level == LEVEL_SCENARIO else contact_rows
+            contexts = scenario_rows if level == LEVEL_SCENARIO else self._present_rows(table, contact_rows)
             rows = [self._generic_row(table, context) for context in contexts]
             rows_by_table[table.name] = rows
             self._index_rows(table, level, contexts, rows)
         if self._entry is not None and any(table is self._entry for table, _ in self._tables_plan):
             rows_by_table[self._entry.name] = self._entry_rows(contact_rows)
+            self._index_rows(self._entry, LEVEL_CONTACT, contact_rows, rows_by_table[self._entry.name])
+        self._fill_timing(scenarios)
 
         tables = {
             table.name: TableData(table=table.name, columns=[f.name for f in _schema_fields(table)],
@@ -1103,6 +1308,20 @@ class _Generator:
                 for key in case.contact_keys:
                     contexts.append(_Row(len(contexts) + 1, scenario, case, key))
         return contexts
+
+    def _present_rows(self, table: Table, contexts: list[_Row]) -> list[_Row]:
+        """Spec, "Row present or absent": "A contact whose row is absent has no row in that table's CSV."
+        The rows left are numbered again, so ``n`` stays the row number in the table."""
+        linked = next((ref for name, ref in self.coverage.row_fields.items() if name.lower() == table.name.lower()),
+                      None)
+        if linked is None:
+            return contexts
+        present = [context for context in contexts
+                   if context.case is None or _lookup(context.case.contact_values, linked) != (True, None)]
+        if len(present) == len(contexts):
+            return contexts
+        return [_Row(number, context.scenario, context.case, context.contact_key)
+                for number, context in enumerate(present, 1)]
 
     def _generic_row(self, table: Table, row: _Row) -> dict[str, Value]:
         return {field.name: self._field_value(table, field, row) for field in _schema_fields(table)}
@@ -1131,10 +1350,14 @@ class _Generator:
         filled by the general rules like any contact-level table."""
         entry = self._entry
         if self.model.entry_query is None:
-            self._warn(
-                f"No entry query fills {entry.name}, so its rows are generated by the general rules, like any "
-                "contact-level table, and nothing guarantees that they match the source tables."
-            )
+            event = self.package.entry_event
+            if event is None or event.kind == ENTRY_AUTOMATION:
+                # An entry that no automation feeds has no entry query by design: nothing to warn about.
+                self._warn(
+                    f"Nessuna entry query riempie {entry.name}, quindi le sue righe vengono generate dalle regole "
+                    "generali, come per ogni tabella a livello di contatto, e niente garantisce che corrispondano alle "
+                    "tabelle sorgente."
+                )
             return [self._generic_row(entry, context) for context in contexts]
         rows: list[dict[str, Value]] = []
         for context in contexts:
@@ -1154,8 +1377,8 @@ class _Generator:
                 key = self._rule_value(rules[0], entry, field, row)
                 if key is not _SKIP:
                     self._warn(
-                        f"{entry.name}.{field.name} is a key field, but {problem}. "
-                        "The generated key is written so that the tables join."
+                        f"{entry.name}.{field.name} è un campo chiave, ma {problem}. "
+                        "Viene scritta la chiave generata, così le tabelle restano collegate dal join."
                     )
                     return _as_text(key)
             self._note_placeholder(entry, field, problem)
@@ -1183,20 +1406,20 @@ class _Generator:
                 parts.append(value or "")   # T-SQL CONCAT turns NULL into an empty string
             return "".join(parts), None
         if isinstance(expr, SelectUnsupported):
-            return None, f"the entry query fills it with the unsupported expression {expr.text!r}"
-        return None, f"the entry query fills it with an expression the generator does not know: {expr!r}"
+            return None, f"la entry query lo riempie con l'espressione non supportata {expr.text!r}"
+        return None, f"la entry query lo riempie con un'espressione che il generatore non conosce: {expr!r}"
 
     def _column_value(self, column: ColumnRef, sources: dict[str, dict[str, Value]]) -> tuple[Value, Optional[str]]:
         resolved = self._resolve_column(column)
         if resolved is None:
-            return None, (f"the entry query copies {column.table or '?'}.{column.column}, which matches no field "
-                          "of a source table")
+            return None, (f"la entry query copia {column.table or '?'}.{column.column}, che non corrisponde a nessun "
+                          "campo di una tabella sorgente")
         table, field = resolved
         if table is self._entry:
-            return None, f"the entry query reads the entry table itself, through {table.name}.{field.name}"
+            return None, f"la entry query legge la tabella di ingresso stessa, attraverso {table.name}.{field.name}"
         source_row = sources.get(table.name.lower())
         if source_row is None:
-            return None, f"the entry query copies {table.name}.{field.name}, but {table.name} has no generated row"
+            return None, f"la entry query copia {table.name}.{field.name}, ma {table.name} non ha righe generate"
         return source_row.get(field.name), None
 
     def _current_date(self, dotnet_format: Optional[str]) -> tuple[Value, Optional[str]]:
@@ -1207,7 +1430,7 @@ class _Generator:
         try:
             pattern = _dotnet_to_strftime(dotnet_format)
         except (ValueError, KeyError) as error:
-            return None, f"the date format {dotnet_format!r} of the entry query cannot be converted: {error}"
+            return None, f"il formato data {dotnet_format!r} della entry query non si può convertire: {error}"
         return self.generation_time.strftime(pattern), None
 
     def _entry_absent_value(self, entry: Table, field: Field, row: _Row) -> Value:
@@ -1219,26 +1442,29 @@ class _Generator:
             value = self._rule_value(rules[0], entry, field, row)
             if value is not _SKIP:
                 self._warn(
-                    f"{entry.name}.{field.name} is a key field, but the entry query does not fill it. The generated "
-                    "key is written so that the tables join."
+                    f"{entry.name}.{field.name} è un campo chiave, ma la entry query non lo riempie. Viene scritta "
+                    "la chiave generata, così le tabelle restano collegate dal join."
                 )
                 return _as_text(value)
         if any(rule.kind == "split" for rule in rules):
             self._warn(
-                f"{entry.name}.{field.name} is read by a split, but the entry query does not fill it. The entry "
-                "row gets what the query would produce, which is its default or an empty cell, not the case's value."
+                f"{entry.name}.{field.name} è letto da uno split, ma la entry query non lo riempie. La riga di "
+                "ingresso riceve quello che produrrebbe la query, cioè il valore di default o una cella vuota, non il "
+                "valore del caso."
             )
         for rule in rules:
             if rule.kind == "email" and self._is_default_email_field(entry, field):
                 self._warn(
-                    f"{entry.name}.{field.name} is the address the journey sends to, but the entry query does not "
-                    "fill it. The address is written so that the emails can be sent. The entry check allows this."
+                    f"{entry.name}.{field.name} è l'indirizzo di invio del journey, ma la entry query non lo "
+                    "riempie. L'indirizzo viene scritto perché le email possano partire. Il controllo sulla tabella "
+                    "di ingresso lo consente."
                 )
                 return self._normalise(_as_text(self._rule_value(rule, entry, field, row)), entry, field)
             if rule.kind == "wait":
                 self._warn(
-                    f"{entry.name}.{field.name} is the date of a wait by attribute, but the entry query does not fill "
-                    "it. The wait date is written so that the contacts can pass the wait. The entry check allows this."
+                    f"{entry.name}.{field.name} è la data di un wait by attribute, ma la entry query non la "
+                    "riempie. La data del wait viene scritta perché i contatti possano superare il wait. Il controllo "
+                    "sulla tabella di ingresso lo consente."
                 )
                 return self._normalise(_as_text(self._rule_value(rule, entry, field, row)), entry, field)
         default = self._default_value(entry, field)
@@ -1247,7 +1473,7 @@ class _Generator:
         if field.is_nullable:
             return None
         self._note_placeholder(
-            entry, field, "the entry query does not fill it, and it is not nullable and has no default")
+            entry, field, "la entry query non lo riempie, non ammette null e non ha un valore di default")
         return self._fallback_value(entry, field, row)
 
     def _default_value(self, table: Table, field: Field) -> Value:
@@ -1270,8 +1496,8 @@ class _Generator:
             required = self._normalise(_as_text(required), entry, field)
             if required != value:
                 self._warn(
-                    f"The entry query fills {entry.name}.{field.name} with another value than the "
-                    f"{rule.describe()}, which would be {required!r}. The entry row keeps what the query produces."
+                    f"La entry query riempie {entry.name}.{field.name} con un valore diverso da {required!r}, che "
+                    f"sarebbe {rule.describe()}. La riga di ingresso mantiene quello che produce la query."
                 )
             return   # only the highest requirement counts
 

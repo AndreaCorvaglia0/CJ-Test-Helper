@@ -327,3 +327,55 @@ The PoC is done when uploading `CJ template complesso-v1.json` produces a zip th
 - [ ] Running twice with the same settings gives the same scenarios, cases and keys.
 
 For reference, the earlier hand-built tool reported 40 path scenarios plus 1 statistical, 148 cases and 494 contacts on this journey; the PoC should land in the same range.
+
+## Extensions beyond the pilot (agreed 12 October 2026)
+
+Four further exports, kept outside the repository because they belong to clients, use constructs the pilot does not. They may be test journeys that are not fully working: they are sources of structures and cases, not numeric targets. The rules below extend the spec; where they differ from an earlier section, they win. Facts marked "confirmed" were confirmed by the team from Salesforce practice.
+
+### Data sources of a condition
+
+- **Journey Data.** A condition key `Event.<eventDefinitionKey>.<Field>` (marked `IsEphemeralAttribute="true"`) reads column `Field` of the data extension of the trigger's entry event. Its value is the snapshot taken at entry: later Update contact writes do not change it. A key naming an event definition other than the trigger's is unsupported.
+- **Contact Data.** `<AttributeSet>.<Field>` as before, read live when the contact reaches the activity. The rule "a later split that reads the same field sees the updated value" applies to Contact Data only.
+- **Attribute compared with an attribute.** A condition whose value is another attribute (`ValueParameterName`, or `ValueIsReference`) is supported only in the form "key field of a contact-level linked table `Equal` the contact key", read as "the contact has a row in that table". Any other form is unsupported and reported; it is never read as a comparison with an empty value.
+- **Missing relationship.** An attribute set read by a split with no relationship in the export: its conditions are unsupported, with the reason "relationship missing in the export". Package Manager `issues` of level warning or error are listed in the report.
+- Table levels keep the rule of "Classify fields by level" (join field), not the cardinality declared in Contact Builder.
+
+### Row present or absent
+
+- A contact-level table other than the entry table, whose existence a split tests (`IsNull` or `IsNotNull` on its field linked to the contact key, or the attribute comparison above), gets a contact-level variable "row present / row absent". No such variable for tables the entry query joins, or that no split tests for existence.
+- A contact whose row is absent has no row in that table's CSV. This is the only exception to "each contact row finds its rows in the linked tables".
+- On an absent row, `IsNull` on any of its fields is true and every other operator is false (confirmed: a contact with no row reads its key as null).
+- An Update contact on that table inserts the row: later reads see it present.
+
+### Operators, types and values
+
+- Supported operators: `Equal`, `Is`, `NotEqual`, `IsNull`, `IsNotNull`, `GreaterThan`, `GreaterThanOrEqual`, `LessThan`, `LessThanOrEqual`, `Between`, `Contains`, `BeginsWith`, `EndsWith`. `Between` takes the value `low|high` and includes both bounds (confirmed). Field types add Number and Decimal.
+- Coverage values are chosen strictly inside the ranges the conditions define, never on a bound. Among values that cover the same branches, the generator prefers those whose path rests on no unverified assumption: not null, row present.
+- A null value is an empty CSV cell, which Salesforce imports as null (confirmed). A cell holding a space would be a value, so the generator never writes one.
+
+### Entry source and procedure
+
+The CSVs are still imported by hand. The procedure depends on the entry source, read from the event definition (type and `metaData.scheduleFlowMode`):
+
+| Entry source | Procedure in report.md and the testbook |
+| --- | --- |
+| Automation (the pilot) | As before |
+| Data extension, Run Once | Import every CSV, then activate the journey. Only rows present at activation enter; rows imported later never do (confirmed). A new attempt needs a new journey version and a new run identifier. All scenarios enter together, so "one active scenario at a time" is not offered. |
+| Data extension, recurring schedule | Reported as a procedure to verify: contacts enter at the next evaluation |
+| CloudPages form, API event or any other | Not driven by a CSV import. The team tests a copy of the journey whose entry source is a data extension with the same columns (confirmed); the report says so, and the entry CSV is for that data extension |
+
+- Entry modes `OnceAndDone` (no re-entry) and `SingleEntryAcrossAllVersions`: the testbook says every attempt needs a new run identifier.
+- Entry filters, goals and exit criteria are not modelled; when present they are reported, because contacts may not enter or may leave early.
+- The entry data extension must hold only test rows when the journey is activated; report.md says so for Run Once entries.
+
+### Honest outcomes
+
+- Past an unsupported element the expected result says the path is unknown from that activity on; it never names the unsupported activity as the last one reached.
+- report.md and the page open with a warning when unsupported elements leave branches not covered.
+- The deadline of a manual open or click is computed from the waits between the email and the engagement split, with a warning when the window is under one hour. The testbook gives each case's minimum duration.
+- report.md lists only the assumptions the export triggers. Warnings about assets the journey does not use are dropped. A journey default (email, mobile number) that names a column the entry data extension lacks is reported.
+
+### Acceptance beyond the pilot
+
+- On the pilot, every CSV and `scenarios.csv` stay byte-identical to the outputs before these extensions (same time, run identifier and seed); differences in report.md and the testbook are listed for the team.
+- The four further exports run without errors, and each construct above has a synthetic example in `examples/` with hand-derived expected answers.

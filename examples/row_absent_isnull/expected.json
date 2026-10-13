@@ -1,0 +1,70 @@
+{
+  "journey_name": "EX_RowAbsentIsNull",
+  "activity_count": 5,
+  "csv_tables": [
+    "DE_RA_Entry",
+    "DE_RA_Form"
+  ],
+  "table_levels": {
+    "DE_RA_Entry": "contact",
+    "DE_RA_Form": "contact"
+  },
+  "branches": {
+    "SPLIT-1/path_a": {
+      "status": "covered"
+    },
+    "SPLIT-1/remainder_path": {
+      "status": "covered"
+    },
+    "SPLIT-2/path_a": {
+      "status": "covered"
+    },
+    "SPLIT-2/remainder_path": {
+      "status": "covered"
+    }
+  },
+  "scenario_count": {
+    "min": 1,
+    "max": 1
+  },
+  "case_count": {
+    "min": 3,
+    "max": 3
+  },
+  "contact_count": 9,
+  "cases": [
+    {
+      "has_row": {
+        "DE_RA_Form": false
+      },
+      "end_activity": "UPDATE-1",
+      "manual_actions": [],
+      "contact_count": 3
+    },
+    {
+      "has_row": {
+        "DE_RA_Form": true
+      },
+      "contact_values": {
+        "DE_RA_Form.Consent": "True"
+      },
+      "end_activity": "UPDATE-2",
+      "manual_actions": [],
+      "contact_count": 3
+    },
+    {
+      "has_row": {
+        "DE_RA_Form": true
+      },
+      "contact_values": {
+        "DE_RA_Form.Consent": "False"
+      },
+      "end_activity": "UPDATE-3",
+      "manual_actions": [],
+      "contact_count": 3
+    }
+  ],
+  "unsupported": [],
+  "checks_pass": true,
+  "csv_no_space_cells": true
+}

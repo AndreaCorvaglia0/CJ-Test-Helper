@@ -91,4 +91,55 @@ Il giallo `#E5D352` non si usa mai come colore del testo su bianco: il contrasto
 - I nomi dei tipi di attività sono quelli dell'interfaccia di Salesforce (Decision split, Wait by duration, Update contact).
 - Maiuscola solo a inizio frase o etichetta, anche nei titoli.
 - Pulsanti con un verbo all'imperativo: "Genera", "Scarica lo zip".
-- I messaggi prodotti dal generatore (warning, nomi dei trust check, errori del loader) e i file scaricati sono ancora in inglese; verranno tradotti in un passo successivo.
+- Anche i messaggi prodotti dal generatore (warning, nomi e dettagli dei trust check, errori del loader, messaggi della riga di comando) e i testi dei file scaricati (report.md, testbook.xlsx) sono in italiano e seguono le stesse regole e il glossario qui sotto. Restano in inglese i nomi dei file, le intestazioni di colonna di `scenarios.csv` e del testbook (il layout del team, con `Owner system` = `SFMC` e `Status` = `TO START`), i nomi di campi, tabelle, attività e query così come sono nell'export, e i valori generati (`OTHER`, `<generated key>`).
+
+### Glossario
+
+Stessa parola per lo stesso concetto, in tutta l'app e in tutti i file prodotti. Il plurale dei termini inglesi è invariato (i branch, gli split, i warning).
+
+| Inglese | Nell'interfaccia e nei file |
+| --- | --- |
+| journey, activity type names (Decision split, Engagement split, Random split, Wait by duration, Wait by attribute, Send-time wait, Update contact, Email) | invariati, come nell'interfaccia di Salesforce |
+| branch, split, path (of a split) | branch; "remainder" per l'ultimo path di un decision split, come in Salesforce |
+| path (of a contact through the journey) | percorso |
+| entry query, entry source, entry event | invariati |
+| entry table | tabella di ingresso |
+| data extension, automation, query, join, lookup, attribute set, relationship | data extension, automation, query, join, lookup, attribute set, relazione |
+| field, table, value, key, primary key, contact key, scenario key | campo, tabella, valore, chiave, chiave primaria, chiave del contatto, chiave dello scenario |
+| scenario-level, contact-level | a livello di scenario, a livello di contatto |
+| scenario, case, contact, statistical case | scenario, caso, contatto, caso statistico |
+| covered, not covered, covered with manual action | coperto, non coperto, coperto con azione manuale |
+| reachable, unreachable, structurally unreachable | raggiungibile, non raggiungibile, non raggiungibile per struttura |
+| behind (an uncovered branch) | a valle di |
+| manual action, open, click, inbox, plus-addressing | azione manuale, open, click, inbox, plus-addressing |
+| deadline, accepted range, expected delay | scadenza, intervallo accettato, attesa prevista |
+| unsupported (element, operator, condition) | non supportato |
+| suspicious pattern, warning, error | pattern sospetto, warning, errore |
+| trust check, passed, failed | trust check, superato, non superato |
+| coverage, report, testbook, run, run identifier, settings | coverage, report, testbook, run, run identifier, impostazioni |
+| letter case, case-sensitive, case-insensitive | maiuscole e minuscole; distingue / non distingue maiuscole e minuscole |
+| nullable, null, length, type, Boolean, Date, Text, Number | ammette null, null, lunghezza, tipo, Boolean, Date, Text, Number |
+| generation time, wait date, written value | ora di generazione, data del wait, valore scritto |
+| placeholder, export, package, zip, CSV, JSON, SQL | invariati |
+| sendable field, subscriber key, send address | campo sendable, subscriber key, indirizzo di invio |
+| evidence (collected during the test) | evidenze |
+| re-simulation from the files | simulazione dai file |
+| determinism (two runs give the same files) | determinismo |
+| undeliverable address | indirizzo non recapitabile |
+| activation field, activation filter | campo di attivazione, filtro di attivazione |
+| key group | gruppo di chiavi |
+| source table, entry column, entry rows, entry procedure | tabella sorgente, colonna di ingresso, righe di ingresso, procedura di ingresso |
+| contact class | classe di contatti |
+| run order | ordine di esecuzione |
+| root causes (of not-covered branches) | cause a monte |
+| status (of a branch) | stato |
+| a query fills a table; fed by an automation | popola; alimentata da |
+| assumption, assumption to verify | assunzione, assunzione da verificare |
+| entry trigger, entry automation | trigger di ingresso, automation di ingresso |
+| start activity, incoming link | attività iniziale, collegamento in entrata |
+| SQL statement, select item, column, not understood | istruzione SQL, elemento della SELECT, colonna, non compreso |
+| statistics type (of an engagement split) | tipo di statistica |
+| default (value) | valore di default |
+| direct import, real inbox, time zone | import diretto, inbox reale, fuso orario |
+| How to run (report section) | Come eseguire i test |
+| tester, row (of a CSV) | tester, riga |

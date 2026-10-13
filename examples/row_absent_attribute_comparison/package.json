@@ -1,0 +1,622 @@
+{
+ "appVersion": "260.0.26",
+ "id": "20668aaa-0",
+ "name": "EX row absent attribute comparison",
+ "version": 1,
+ "modelVersion": "9",
+ "references": {},
+ "input": [],
+ "config": {
+  "preserveCategories": true,
+  "storeImagesAsReferences": false
+ },
+ "entities": {
+  "assets": {},
+  "attributeGroups": {
+   "018b68cf-3a78-59fd-84a4-fcb3c870ab4d": {
+    "issues": [],
+    "originID": "018b68cf-3a78-59fd-84a4-fcb3c870ab4d",
+    "originEID": "cjexample-2cfd81ed5b8c51abac69",
+    "data": {
+     "attributeGroupIconKey": "et-icon-databas",
+     "attributeGroupType": "Standard",
+     "definitionName": {
+      "value": "CJ_EXAMPLES"
+     },
+     "name": "CJ_EXAMPLES",
+     "isSystemDefined": false
+    }
+   }
+  },
+  "attributeRelationships": {
+   "eb3008cb-a1b2-5688-b343-f454766a0dfb": {
+    "issues": [],
+    "originID": "eb3008cb-a1b2-5688-b343-f454766a0dfb",
+    "originEID": "cjexample-6e3732374318599daff6",
+    "data": {
+     "relationshipAttributes": [
+      {
+       "rightAttributeName": "SubscriberKey",
+       "rightDataExtensionID": "{{mcpm#/entities/dataExtensions/c12a30f0-3f5e-5eb6-8513-fa119b336b79/data/id}}",
+       "rightAttributeID": "{{mcpm#/entities/dataExtensions/c12a30f0-3f5e-5eb6-8513-fa119b336b79/data/fields/name:SubscriberKey/id}}"
+      }
+     ],
+     "leftRelationshipIDs": [
+      {
+       "type": "int16",
+       "value": "3"
+      }
+     ],
+     "leftRelationshipReferenceType": "CustomerData",
+     "isGroupToSetRelationship": true,
+     "leftItem": {
+      "relationshipType": "AttributeGroup",
+      "cardinality": "One",
+      "name": "{{mcpm#/entities/attributeGroups/018b68cf-3a78-59fd-84a4-fcb3c870ab4d/data/name}}",
+      "identifier": "{{mcpm#/entities/attributeGroups/018b68cf-3a78-59fd-84a4-fcb3c870ab4d/data/id}}",
+      "connectingID": {
+       "identifierType": "FullyQualifiedName"
+      }
+     },
+     "rightItem": {
+      "relationshipType": "AttributeSet",
+      "cardinality": "One",
+      "name": "{{mcpm#/entities/attributeSets/a828be4c-c980-5c42-a372-060d564e7d51/data/name}}"
+     },
+     "name": "CJ_EXAMPLES <- DE_AC_Optin"
+    }
+   }
+  },
+  "attributeSets": {
+   "a828be4c-c980-5c42-a372-060d564e7d51": {
+    "issues": [],
+    "originID": "a828be4c-c980-5c42-a372-060d564e7d51",
+    "originEID": "cjexample-445f2d122b6d521397e7",
+    "data": {
+     "storageLogicalType": "DataExtension",
+     "isRoot": false,
+     "storageName": "{{mcpm#/entities/dataExtensions/c12a30f0-3f5e-5eb6-8513-fa119b336b79/data/name}}",
+     "storageReferenceID": {
+      "type": "guid",
+      "value": "{{mcpm#/entities/dataExtensions/c12a30f0-3f5e-5eb6-8513-fa119b336b79/data/id}}"
+     },
+     "groupId": "{{mcpm#/entities/attributeGroups/018b68cf-3a78-59fd-84a4-fcb3c870ab4d/data/id}}",
+     "name": "DE_AC_Optin",
+     "leftRelationships": [
+      "#/entities/attributeRelationships/eb3008cb-a1b2-5688-b343-f454766a0dfb/data"
+     ],
+     "isSystemDefined": false
+    }
+   }
+  },
+  "automations": {},
+  "categories": {},
+  "cloudPageCollections": {},
+  "codeResources": {},
+  "dataExtensions": {
+   "1b13b840-5def-5c9a-bef6-15cc281e1b4c": {
+    "issues": [],
+    "originID": "1b13b840-5def-5c9a-bef6-15cc281e1b4c",
+    "originEID": "cjexample-16d219a83ddf5464ba7f",
+    "data": {
+     "dataRetentionProperties": {
+      "dataRetentionPeriodUnitOfMeasure": 3,
+      "dataRetentionPeriodLength": 1,
+      "isDeleteAtEndOfRetentionPeriod": true,
+      "isResetRetentionPeriodOnImport": false,
+      "isRowBasedRetention": false,
+      "rowBasedThreshold": 1000000000
+     },
+     "description": "",
+     "isFieldAdditionAllowed": true,
+     "isFieldModificationAllowed": true,
+     "isObjectDeletable": true,
+     "isSendable": true,
+     "isTestable": true,
+     "name": "DE_AC_Entry",
+     "sendableCustomObjectField": "SubscriberKey",
+     "sendableSubscriberField": "_SubscriberKey",
+     "customerKey": "766FEF16-3703-5075-AAF4-509CAC2BF248",
+     "fields": [
+      {
+       "description": "",
+       "isHidden": false,
+       "isInheritable": false,
+       "isOverridable": false,
+       "isNullable": false,
+       "isPrimaryKey": true,
+       "isReadOnly": false,
+       "isTemplateField": false,
+       "length": 50,
+       "masktype": "None",
+       "mustOverride": false,
+       "name": "SubscriberKey",
+       "ordinal": 0,
+       "type": "Text"
+      },
+      {
+       "description": "",
+       "isHidden": false,
+       "isInheritable": false,
+       "isOverridable": false,
+       "isNullable": true,
+       "isPrimaryKey": false,
+       "isReadOnly": false,
+       "isTemplateField": false,
+       "length": 254,
+       "masktype": "None",
+       "mustOverride": false,
+       "name": "EmailAddress",
+       "ordinal": 1,
+       "type": "EmailAddress"
+      }
+     ]
+    }
+   },
+   "c12a30f0-3f5e-5eb6-8513-fa119b336b79": {
+    "issues": [],
+    "originID": "c12a30f0-3f5e-5eb6-8513-fa119b336b79",
+    "originEID": "cjexample-2e0a82220b0c5bbfa66e",
+    "data": {
+     "dataRetentionProperties": {
+      "dataRetentionPeriodUnitOfMeasure": 3,
+      "dataRetentionPeriodLength": 1,
+      "isDeleteAtEndOfRetentionPeriod": true,
+      "isResetRetentionPeriodOnImport": false,
+      "isRowBasedRetention": false,
+      "rowBasedThreshold": 1000000000
+     },
+     "description": "",
+     "isFieldAdditionAllowed": true,
+     "isFieldModificationAllowed": true,
+     "isObjectDeletable": true,
+     "isSendable": true,
+     "isTestable": true,
+     "name": "DE_AC_Optin",
+     "sendableCustomObjectField": "SubscriberKey",
+     "sendableSubscriberField": "_SubscriberKey",
+     "customerKey": "4830ABBC-E7DA-54A9-9D4D-C6F302A9C4BE",
+     "fields": [
+      {
+       "description": "",
+       "isHidden": false,
+       "isInheritable": false,
+       "isOverridable": false,
+       "isNullable": false,
+       "isPrimaryKey": true,
+       "isReadOnly": false,
+       "isTemplateField": false,
+       "length": 50,
+       "masktype": "None",
+       "mustOverride": false,
+       "name": "SubscriberKey",
+       "ordinal": 0,
+       "type": "Text"
+      },
+      {
+       "description": "",
+       "isHidden": false,
+       "isInheritable": false,
+       "isOverridable": false,
+       "isNullable": true,
+       "isPrimaryKey": false,
+       "isReadOnly": false,
+       "isTemplateField": false,
+       "length": 20,
+       "masktype": "None",
+       "mustOverride": false,
+       "name": "Channel",
+       "ordinal": 1,
+       "type": "Text"
+      }
+     ]
+    }
+   },
+   "c4d4e4cd-da5b-5a8d-9521-a7448a9da9ea": {
+    "issues": [],
+    "originID": "c4d4e4cd-da5b-5a8d-9521-a7448a9da9ea",
+    "originEID": "cjexample-ddf8fefd73fc59119c1b",
+    "data": {
+     "dataRetentionProperties": {
+      "dataRetentionPeriodUnitOfMeasure": 3,
+      "dataRetentionPeriodLength": 1,
+      "isDeleteAtEndOfRetentionPeriod": true,
+      "isResetRetentionPeriodOnImport": false,
+      "isRowBasedRetention": false,
+      "rowBasedThreshold": 1000000000
+     },
+     "description": "",
+     "isFieldAdditionAllowed": true,
+     "isFieldModificationAllowed": true,
+     "isObjectDeletable": true,
+     "isSendable": true,
+     "isTestable": true,
+     "name": "DE_AC_Log",
+     "sendableCustomObjectField": "SubscriberKey",
+     "sendableSubscriberField": "_SubscriberKey",
+     "customerKey": "F5A2BEA0-8502-5ECE-A4E3-63917EE3B3A0",
+     "fields": [
+      {
+       "description": "",
+       "isHidden": false,
+       "isInheritable": false,
+       "isOverridable": false,
+       "isNullable": false,
+       "isPrimaryKey": true,
+       "isReadOnly": false,
+       "isTemplateField": false,
+       "length": 50,
+       "masktype": "None",
+       "mustOverride": false,
+       "name": "SubscriberKey",
+       "ordinal": 0,
+       "type": "Text"
+      },
+      {
+       "description": "",
+       "isHidden": false,
+       "isInheritable": false,
+       "isOverridable": false,
+       "isNullable": true,
+       "isPrimaryKey": false,
+       "isReadOnly": false,
+       "isTemplateField": false,
+       "length": 50,
+       "masktype": "None",
+       "mustOverride": false,
+       "name": "LastAction",
+       "ordinal": 1,
+       "type": "Text"
+      }
+     ]
+    }
+   }
+  },
+  "dataExtractActivities": {},
+  "dataFilterDefinitions": {},
+  "dataFilters": {},
+  "eventDefinitions": {
+   "fa6c49a2-5b2c-52a6-be55-e8a6ce7a495a": {
+    "issues": [],
+    "originID": "fa6c49a2-5b2c-52a6-be55-e8a6ce7a495a",
+    "originEID": "cjexample-dee1445fe4c756fc89dd",
+    "data": {
+     "name": "EX_RowAbsentAttributeComparison",
+     "type": "EmailAudience",
+     "dataExtensionId": "{{mcpm#/entities/dataExtensions/1b13b840-5def-5c9a-bef6-15cc281e1b4c/data/id}}",
+     "description": "",
+     "eventDefinitionKey": "DEAudience-6609e717-03e0-5c1d-8eaa-2039269ad77e",
+     "mode": "Production",
+     "iconUrl": "/images/icon-data-extension.svg",
+     "isVisibleInPicker": false,
+     "category": "Audience",
+     "disableDEDataLogging": false,
+     "isPlatformObject": false,
+     "metaData": {
+      "scheduleState": "No Schedule",
+      "criteriaDescription": null,
+      "scheduleFlowMode": "runOnce",
+      "runOnceScheduleMode": "onPublish"
+     },
+     "configurationArguments": {
+      "unconfigured": false
+     },
+     "arguments": {
+      "serializedObjectType": 3,
+      "eventDefinitionId": "fa6c49a2-5b2c-52a6-be55-e8a6ce7a495a",
+      "eventDefinitionKey": "DEAudience-6609e717-03e0-5c1d-8eaa-2039269ad77e",
+      "dataExtensionId": "1b13b840-5def-5c9a-bef6-15cc281e1b4c",
+      "automationId": "334024a5-6af4-51b0-b39c-92351ec56ac2",
+      "criteria": "",
+      "useHighWatermark": false
+     },
+     "sourceApplicationExtensionId": "97e942ee-6914-4d3d-9e52-37ecb71f79ed"
+    }
+   }
+  },
+  "fileTransferActivities": {},
+  "importActivities": {},
+  "journeys": {
+   "49c09e2c-e928-5df2-b470-6900af5ac134": {
+    "issues": [],
+    "originID": "49c09e2c-e928-5df2-b470-6900af5ac134",
+    "originEID": "cjexample-aa0af94ba68a5e719077",
+    "data": {
+     "name": "EX_RowAbsentAttributeComparison",
+     "key": "e88fd396-442c-5457-9a53-36f367c71cf0",
+     "workflowApiVersion": 1,
+     "description": "",
+     "channel": "",
+     "defaults": {
+      "email": [
+       "{{Event.{{mcpm#/entities/eventDefinitions/fa6c49a2-5b2c-52a6-be55-e8a6ce7a495a/data/eventDefinitionKey}}.\"EmailAddress\"}}"
+      ],
+      "properties": {
+       "analyticsTracking": {
+        "enabled": false,
+        "analyticsType": "google",
+        "urlDomainsToTrack": []
+       }
+      }
+     },
+     "definitionType": "Multistep",
+     "entryMode": "MultipleEntries",
+     "executionMode": "Production",
+     "exits": [],
+     "goals": [],
+     "metaData": {
+      "highThroughputSending": {
+       "email": false
+      }
+     },
+     "triggers": [
+      {
+       "arguments": {
+        "startActivityKey": "{{Context.StartActivityKey}}",
+        "dequeueReason": "{{Context.DequeueReason}}",
+        "lastExecutedActivityKey": "{{Context.LastExecutedActivityKey}}",
+        "filterResult": "true"
+       },
+       "configurationArguments": {
+        "filterDefinitionId": "00000000-0000-0000-0000-000000000000",
+        "criteria": "",
+        "schemaVersionId": 0
+       },
+       "description": "",
+       "id": "cfdb6ad3-37f6-5102-9ead-99165af069d4",
+       "key": "TRIGGER",
+       "metaData": {
+        "category": "Audience",
+        "chainType": "None",
+        "configurationRequired": false,
+        "entrySourceGroupConfigUrl": "jb:///data/entry/audience/entrysourcegroupconfig.json",
+        "eventDefinitionId": "{{mcpm#/entities/eventDefinitions/fa6c49a2-5b2c-52a6-be55-e8a6ce7a495a/data/id}}",
+        "eventDefinitionKey": "{{mcpm#/entities/eventDefinitions/fa6c49a2-5b2c-52a6-be55-e8a6ce7a495a/data/eventDefinitionKey}}",
+        "iconUrl": "/images/icon-data-extension.svg",
+        "title": "Data Extension"
+       },
+       "name": "EX_RowAbsentAttributeComparison",
+       "outcomes": [],
+       "type": "EmailAudience"
+      }
+     ],
+     "activities": [
+      {
+       "type": "MULTICRITERIADECISION",
+       "arguments": {
+        "filterResult": "path_a={{Contact.FilterId.e1e40106-bb92-59df-894b-96750ed42607}},remainder_path=False"
+       },
+       "description": "",
+       "id": "a19df7d1-3d38-5644-b7c4-7cd1632cc8fb",
+       "key": "SPLIT-1",
+       "metaData": {
+        "isConfigured": true
+       },
+       "configurationArguments": {
+        "schemaVersionId": 252,
+        "criteria": {
+         "path_a": "<FilterDefinition><ConditionSet Operator=\"AND\" ConditionSetName=\"Individual Filter Grouping\"><Condition Key=\"{{mcpm#/entities/attributeSets/a828be4c-c980-5c42-a372-060d564e7d51/data/name}}.SubscriberKey\" Operator=\"Equal\" UiMetaData=\"{&quot;groupToSetRelationshipId&quot;:&quot;{{mcpm#/entities/attributeRelationships/eb3008cb-a1b2-5688-b343-f454766a0dfb/data/id}}&quot;}\" ValueParameterName=\"Event.DEAudience-6609e717-03e0-5c1d-8eaa-2039269ad77e.SubscriberKey\"><Value><![CDATA[]]></Value></Condition></ConditionSet></FilterDefinition>"
+        }
+       },
+       "name": "Opt-in on file?",
+       "outcomes": [
+        {
+         "arguments": {},
+         "key": "path_a",
+         "metaData": {
+          "label": "on file",
+          "skipI18n": true,
+          "isLabelFromConversion": false,
+          "criteriaDescription": "SubscriberKey equal SubscriberKey",
+          "invalid": false
+         },
+         "next": "SPLIT-2"
+        },
+        {
+         "arguments": {},
+         "key": "remainder_path",
+         "metaData": {
+          "label": "not on file",
+          "isLabelFromConversion": false,
+          "invalid": false
+         },
+         "next": "UPDATE-3"
+        }
+       ],
+       "schema": {
+        "arguments": {}
+       }
+      },
+      {
+       "type": "MULTICRITERIADECISION",
+       "arguments": {
+        "filterResult": "path_a={{Contact.FilterId.0bc62b4a-f761-5e21-b08c-21a24f62bd8d}},remainder_path=False"
+       },
+       "description": "",
+       "id": "691f11a3-2633-538c-8828-0c43e9f77167",
+       "key": "SPLIT-2",
+       "metaData": {
+        "isConfigured": true
+       },
+       "configurationArguments": {
+        "schemaVersionId": 252,
+        "criteria": {
+         "path_a": "<FilterDefinition><ConditionSet Operator=\"AND\" ConditionSetName=\"Individual Filter Grouping\"><Condition Key=\"{{mcpm#/entities/attributeSets/a828be4c-c980-5c42-a372-060d564e7d51/data/name}}.Channel\" Operator=\"Equal\" UiMetaData=\"{&quot;groupToSetRelationshipId&quot;:&quot;{{mcpm#/entities/attributeRelationships/eb3008cb-a1b2-5688-b343-f454766a0dfb/data/id}}&quot;}\"><Value><![CDATA[SMS]]></Value></Condition></ConditionSet></FilterDefinition>"
+        }
+       },
+       "name": "Channel",
+       "outcomes": [
+        {
+         "arguments": {},
+         "key": "path_a",
+         "metaData": {
+          "label": "SMS",
+          "skipI18n": true,
+          "isLabelFromConversion": false,
+          "criteriaDescription": "Channel equal SMS",
+          "invalid": false
+         },
+         "next": "UPDATE-1"
+        },
+        {
+         "arguments": {},
+         "key": "remainder_path",
+         "metaData": {
+          "label": "Remainder",
+          "isLabelFromConversion": false,
+          "invalid": false
+         },
+         "next": "UPDATE-2"
+        }
+       ],
+       "schema": {
+        "arguments": {}
+       }
+      },
+      {
+       "type": "UPDATECONTACTDATA",
+       "arguments": {
+        "activityData": {
+         "updateContactFields": [
+          {
+           "dataExtensionId": "{{mcpm#/entities/dataExtensions/c4d4e4cd-da5b-5a8d-9521-a7448a9da9ea/data/id}}",
+           "field": "{{mcpm#/entities/dataExtensions/c4d4e4cd-da5b-5a8d-9521-a7448a9da9ea/data/fields/name:LastAction/id}}",
+           "value": "Sms"
+          }
+         ]
+        }
+       },
+       "description": "",
+       "id": "ca7eb7fd-021d-5b70-bb28-1a2732877d0f",
+       "key": "UPDATE-1",
+       "metaData": {
+        "isConfigured": true
+       },
+       "configurationArguments": {
+        "isActivityBatchValidated": true
+       },
+       "name": "SMS opt-in",
+       "outcomes": [
+        {
+         "arguments": {},
+         "key": "1f367e63-f6fc-5f2a-907b-05446e9476ae",
+         "metaData": {
+          "invalid": false,
+          "joinLabel": ""
+         }
+        }
+       ],
+       "schema": {
+        "arguments": {}
+       }
+      },
+      {
+       "type": "UPDATECONTACTDATA",
+       "arguments": {
+        "activityData": {
+         "updateContactFields": [
+          {
+           "dataExtensionId": "{{mcpm#/entities/dataExtensions/c4d4e4cd-da5b-5a8d-9521-a7448a9da9ea/data/id}}",
+           "field": "{{mcpm#/entities/dataExtensions/c4d4e4cd-da5b-5a8d-9521-a7448a9da9ea/data/fields/name:LastAction/id}}",
+           "value": "OtherChannel"
+          }
+         ]
+        }
+       },
+       "description": "",
+       "id": "b9aca8c2-f0eb-5631-911b-75373f94e725",
+       "key": "UPDATE-2",
+       "metaData": {
+        "isConfigured": true
+       },
+       "configurationArguments": {
+        "isActivityBatchValidated": true
+       },
+       "name": "Other opt-in",
+       "outcomes": [
+        {
+         "arguments": {},
+         "key": "2d54bedb-56db-5b6c-adc3-2a909b601fcc",
+         "metaData": {
+          "invalid": false,
+          "joinLabel": ""
+         }
+        }
+       ],
+       "schema": {
+        "arguments": {}
+       }
+      },
+      {
+       "type": "UPDATECONTACTDATA",
+       "arguments": {
+        "activityData": {
+         "updateContactFields": [
+          {
+           "dataExtensionId": "{{mcpm#/entities/dataExtensions/c4d4e4cd-da5b-5a8d-9521-a7448a9da9ea/data/id}}",
+           "field": "{{mcpm#/entities/dataExtensions/c4d4e4cd-da5b-5a8d-9521-a7448a9da9ea/data/fields/name:LastAction/id}}",
+           "value": "NoOptin"
+          }
+         ]
+        }
+       },
+       "description": "",
+       "id": "f0b23435-e90e-50db-932d-ae53fca579e0",
+       "key": "UPDATE-3",
+       "metaData": {
+        "isConfigured": true
+       },
+       "configurationArguments": {
+        "isActivityBatchValidated": true
+       },
+       "name": "No opt-in",
+       "outcomes": [
+        {
+         "arguments": {},
+         "key": "9c71ae08-349f-5326-b708-3d52ec576e31",
+         "metaData": {
+          "invalid": false,
+          "joinLabel": ""
+         }
+        }
+       ],
+       "schema": {
+        "arguments": {}
+       }
+      }
+     ],
+     "version": 1
+    }
+   }
+  },
+  "journeyTemplates": {},
+  "landingPages": {},
+  "microsites": {},
+  "micrositePages": {},
+  "micrositePageVersions": {},
+  "primaryLandingPages": {},
+  "queryActivities": {},
+  "registeredCustomActivities": {},
+  "scriptActivities": {},
+  "sendDefinitions": {},
+  "sharedDataExtensions": {},
+  "siteMapVersions": {},
+  "subscriberLists": {},
+  "triggeredSendDefinitions": {},
+  "verificationActivities": {}
+ },
+ "selectedEntities": {
+  "assets": [],
+  "attributeGroups": [],
+  "automations": [],
+  "cloudPageCollections": [],
+  "dataExtensions": [],
+  "journeys": [
+   "49c09e2c-e928-5df2-b470-6900af5ac134"
+  ],
+  "journeyTemplates": [],
+  "sendDefinitions": [],
+  "sharedDataExtensions": [],
+  "triggeredSendDefinitions": []
+ }
+}

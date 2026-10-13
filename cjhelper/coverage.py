@@ -18,6 +18,23 @@ when the referenced email was sent earlier on the path and (for a click) the ema
 link; random splits cannot be forced, the cover prefers paths avoiding them, and branches
 reachable only through them get one statistical case of 50 contacts.
 
+Spec, "Extensions beyond the pilot":
+
+- Row present or absent. Each table of ``TableModel.existence_tested`` gets a contact-level
+  variable: its field linked to the contact key takes GENERATED_KEY (row present) or None
+  (row absent), and every other field of an absent row reads null (graph.py).
+- Values strictly inside the ranges. Number, Decimal and Date fields compared with an
+  ordering operator or ``Between`` take one value inside each range the condition values cut,
+  never a bound, plus the values named by the other operators (``build_domain``).
+- Preference. Among values that cover the same branches, the generator prefers those whose
+  path rests on no unverified assumption: not null, row present, then values inside the
+  ranges rather than on a named value (``_preference``). It decides the representative of
+  each contact class, the scenario kept for each signature and, among different scenarios
+  crossing the same branches, the one the cover can choose (``_preferred_per_mask``).
+- Honest outcomes. A path that stops at an element the PoC cannot evaluate is marked
+  ``Case.unknown_from``; each manual action gets its window (``Case.action_windows``) and
+  each case its minimum duration, from the waits on its path.
+
 The simulation itself lives in graph.py so that checks.py re-simulates with the same code.
 """
 
@@ -26,12 +43,18 @@ from __future__ import annotations
 import itertools
 import math
 import random
+import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation
 from typing import Optional
 
-from . import graph
+from . import criteria, graph
 from .model import (
+    GENERATED_KEY,
+    KIND_WAIT_ATTRIBUTE,
+    SOURCE_JOURNEY,
+    ActionWindow,
     EqualityFilter,
     KIND_EMAIL,
     IsNullFilter,
@@ -42,7 +65,7 @@ from .model import (
     KIND_ENGAGEMENT,
     KIND_RANDOM,
     KIND_UNSUPPORTED,
-    KIND_WAIT_ATTRIBUTE,
+    KIND_UPDATE,
     LEVEL_CONTACT,
     LEVEL_SCENARIO,
     STATUS_COVERED,
@@ -80,10 +103,12 @@ MAX_PATHS = 400_000
 OTHER_TEXT_CANDIDATES = ("OTHER", "OTHER_2", "OTHER_3", "OTHER_4", "X", "Y", "Z", "W", "XX", "YY", "ZZ", "XY", "XZ", "YZ")
 OTHER_EMAIL = "other@example.invalid"
 OTHER_PHONE = "000000000000"
-KEY_MARKER = "<generated key>"     # stands for the generated key in the domain of a key field
+KEY_MARKER = GENERATED_KEY         # stands for the generated key in the domain of a key field
 TEXT_TYPES = ("Text", "EmailAddress", "Phone", "Locale")
 ORDER_OPERATORS_UP = ("GreaterThan", "GreaterThanOrEqual")
 ORDER_OPERATORS_DOWN = ("LessThan", "LessThanOrEqual")
+RANGE_OPERATORS = ORDER_OPERATORS_UP + ORDER_OPERATORS_DOWN + ("Between",)
+RANGE_TYPES = ("Number", "Decimal", "Date")    # the field types whose ranges build_domain fills
 
 
 # ---------------------------------------------------------------------------
@@ -155,15 +180,22 @@ def _shift_number(value: str, delta: int) -> Optional[str]:
 
 
 def build_domain(field_type: str, conditions: list[Condition], nullable: bool, case_insensitive: bool,
-                 date_format: str, length: Optional[int] = None) -> tuple[list[Value], Optional[Value], list[str]]:
+                 date_format: str, length: Optional[int] = None,
+                 scale: Optional[int] = None) -> tuple[list[Value], Optional[Value], list[str]]:
     """Spec step 4: the values named in conditions, one extra 'other' value, null when allowed.
 
     Returns (domain, the 'other' value, warnings). Booleans always take both True and False.
     Text values keep the letter case written in the condition (data rule 2); when text
     comparisons ignore case, spellings that differ only by case are one value. A condition
     value longer than the field can never be stored, so it is left out with a warning.
-    Ordering conditions (GreaterThan, LessThan, ...) add a value just above or below the bound,
-    so that both sides of the comparison exist.
+
+    Spec, "Extensions beyond the pilot": "Coverage values are chosen strictly inside the ranges
+    the conditions define, never on a bound." On a Number, Decimal or Date field compared with an
+    ordering operator or Between, the bounds and the values named by the other operators cut the
+    values into ranges, and the domain takes one value inside each range (``_range_values``), then
+    the named values; a bound itself is never tried. Without such a condition the domain is the
+    named values plus one 'other' value above them. A text field gets no value from an ordering
+    operator or Between: no value inside a text range is chosen, and a warning says so.
     """
     warnings: list[str] = []
     values: list[Value] = []
@@ -178,41 +210,53 @@ def build_domain(field_type: str, conditions: list[Condition], nullable: bool, c
                 values.append(v)
     elif field_type in ("Number", "Decimal", "Date"):
         is_date = field_type == "Date"
+        named: list[str] = []
+        bounds: list[str] = []
         for cond in conditions:
             if cond.value is None:
                 continue
-            extra: list[Optional[str]] = [cond.value]
-            if cond.operator in ORDER_OPERATORS_UP:
-                extra.append(_shift_date(cond.value, 1, date_format) if is_date else _shift_number(cond.value, 1))
-            elif cond.operator in ORDER_OPERATORS_DOWN:
-                extra.append(_shift_date(cond.value, -1, date_format) if is_date else _shift_number(cond.value, -1))
-            for v in extra:
-                if v is not None and v not in values:
-                    values.append(v)
-        named = [v for v in values if v is not None]
-        if is_date:
-            other = _shift_date(named[0], 1, date_format) if named else datetime(2000, 1, 1).strftime(date_format)
-            while other in values:
-                other = _shift_date(other, 1, date_format)
+            if cond.operator in RANGE_OPERATORS:
+                bounds.extend(_range_bounds(cond))
+            elif cond.value not in named:
+                named.append(cond.value)
+        if bounds:
+            values = _range_values(named + bounds, is_date, date_format, scale if field_type == "Decimal" else 0)
+            other = values[-1] if values else None
+            values.extend(v for v in named if v not in values)
         else:
-            nums = [float(v) for v in named if _shift_number(v, 0) is not None]
-            top = max(nums) + 1 if nums else 0
-            other = str(int(top)) if top == int(top) else str(top)
-        values.append(other)
+            values = list(named)
+            if is_date:
+                other = _shift_date(named[0], 1, date_format) if named else datetime(2000, 1, 1).strftime(date_format)
+                while other in values:
+                    other = _shift_date(other, 1, date_format)
+            else:
+                nums = [float(v) for v in named if _shift_number(v, 0) is not None]
+                top = max(nums) + 1 if nums else 0
+                other = str(int(top)) if top == int(top) else str(top)
+            values.append(other)
     else:
         seen: set[str] = set()
+        ranges: list[str] = []
         for cond in conditions:
             v = cond.value
             if v is None:
                 continue
+            if cond.operator in RANGE_OPERATORS:
+                if cond.operator not in ranges:
+                    ranges.append(cond.operator)
+                continue
             if length is not None and len(v) > length:
-                warnings.append(f"the condition value {v!r} is longer than the field ({length} characters), "
-                                "so that condition can never be true")
+                warnings.append(f"il valore {v!r} della condizione è più lungo del campo ({length} caratteri), "
+                                "quindi quella condizione non può mai essere vera")
                 continue
             key = v.lower() if case_insensitive else v
             if key not in seen:
                 seen.add(key)
                 values.append(v)
+        if ranges:
+            warnings.append(f"è confrontato con {', '.join(ranges)} su un campo di tipo {field_type}: il generatore non "
+                            "sceglie valori dentro gli intervalli di testo, quindi i branch che li richiedono possono "
+                            "risultare non coperti")
         named = [v for v in values if v is not None]
         if field_type == "EmailAddress":
             other = OTHER_EMAIL if not _clashes(OTHER_EMAIL, named) else _other_text(named, length)
@@ -221,12 +265,97 @@ def build_domain(field_type: str, conditions: list[Condition], nullable: bool, c
         else:
             other = _other_text(named, length)
         if other is None:
-            warnings.append(f"no 'other' value fits the field ({length} characters) beside the condition values")
+            warnings.append(f"nel campo ({length} caratteri) non entra nessun valore diverso da quelli delle condizioni")
         else:
             values.append(other)
     if nullable:
         values.append(None)
     return values, other, warnings
+
+
+def _range_bounds(cond: Condition) -> list[str]:
+    """The bounds, as written, at which an ordering or Between condition cuts the values."""
+    if cond.value is None or cond.value_attribute is not None:
+        return []
+    if cond.operator == "Between":
+        bounds = criteria.between_bounds(cond.value)
+        return list(bounds) if bounds is not None else []
+    return [cond.value] if cond.operator in RANGE_OPERATORS else []
+
+
+_DATE_ONLY = re.compile(r"\d{4}-?\d{2}-?\d{2}")
+
+
+def _range_values(points: list[str], is_date: bool, date_format: str, scale: Optional[int]) -> list[str]:
+    """One value strictly inside each range the points cut: below the lowest, between two neighbours, above
+    the highest, in ascending order. A range with no storable value inside (two neighbouring integers, two
+    dates a day apart compared on the date) gets none. Points that cannot be read are ignored."""
+    if is_date:
+        cuts = sorted({d for d in (_parse_date(p.strip(), date_format) for p in points) if d is not None})
+        if not cuts:
+            return []
+        # A condition date written without a time is compared on the date part (criteria.py), so the
+        # values must then fall on other days.
+        whole_days = any(_DATE_ONLY.fullmatch(p.strip()) for p in points)
+        candidates = [cuts[0] - timedelta(days=1)]
+        for a, b in zip(cuts, cuts[1:]):
+            if whole_days:
+                days = (b.date() - a.date()).days
+                if days >= 2:
+                    candidates.append(datetime.combine(a.date() + timedelta(days=days // 2), time()))
+            else:
+                candidates.append((a + (b - a) / 2).replace(second=0, microsecond=0))
+        candidates.append(cuts[-1] + timedelta(days=1))
+        out: list[str] = []
+        for c in candidates:
+            text = c.strftime(date_format)
+            back = _parse_date(text, date_format)
+            if back is None or text in out:
+                continue
+            key = back.date() if whole_days else back
+            if all((key < (k.date() if whole_days else k)) or (key > (k.date() if whole_days else k)) for k in cuts):
+                out.append(text)
+        return out
+    cuts = sorted({n for n in (_decimal(p) for p in points) if n is not None})
+    if not cuts:
+        return []
+    numbers: list[Decimal] = []
+    below = cuts[0].to_integral_value(rounding=ROUND_FLOOR)
+    numbers.append(below if below < cuts[0] else cuts[0] - 1)
+    for a, b in zip(cuts, cuts[1:]):
+        middle = (a + b) / 2
+        for candidate in (middle.to_integral_value(rounding=ROUND_FLOOR),
+                          middle.to_integral_value(rounding=ROUND_CEILING), _at_scale(middle, scale)):
+            if candidate is not None and a < candidate < b:
+                numbers.append(candidate)
+                break
+    above = cuts[-1].to_integral_value(rounding=ROUND_CEILING)
+    numbers.append(above if above > cuts[-1] else cuts[-1] + 1)
+    return [_number_text(n) for n in numbers]
+
+
+def _decimal(text: str) -> Optional[Decimal]:
+    try:
+        number = Decimal(text.strip())
+    except (InvalidOperation, ValueError):
+        return None
+    return number if number.is_finite() else None
+
+
+def _at_scale(number: Decimal, scale: Optional[int]) -> Optional[Decimal]:
+    """A number cut to the digits a Decimal field keeps; None for a Number field (no decimals)."""
+    if scale is None:
+        return number
+    if scale <= 0:
+        return None
+    return number.quantize(Decimal(1).scaleb(-scale), rounding=ROUND_FLOOR)
+
+
+def _number_text(number: Decimal) -> str:
+    """CSV form of a number: no exponent, no trailing zeros, no decimal point for a whole number."""
+    if number == number.to_integral_value():
+        return str(int(number))
+    return format(number.normalize(), "f")
 
 # ---------------------------------------------------------------------------
 # Exploration results
@@ -247,6 +376,7 @@ class Leaf:
     stop: str
     stop_detail: str
     mask: int = 0                              # bitmask over split branches crossed
+    unknown_from: Optional[str] = None         # the walk stopped here without reaching an exit
 
     @property
     def deterministic(self) -> bool:
@@ -307,8 +437,14 @@ class CoverageEngine:
         self.now = generation_time or settings.generation_time or datetime.now()
         self.schema = graph.Schema(package.tables)
         self.warnings: list[str] = []
+        # Spec, "Row present or absent": lower-case table -> its field linked to the contact key (canonical).
+        self.row_fields: dict[str, FieldRef] = {}
+        for ref in table_model.existence_tested.values():
+            linked = self.schema.canonical(ref)
+            self.row_fields[linked[0].lower()] = linked
         self.walker = graph.Walker(self.journey, self.schema, package.emails,
-                                   settings.case_insensitive_text, self.now, settings.date_format)
+                                   settings.case_insensitive_text, self.now, settings.date_format,
+                                   row_fields=self.row_fields)
         self.walker.on_decision = self._observe_decision
         # filled by run()
         self.fields: list[FieldRef] = []
@@ -316,6 +452,7 @@ class CoverageEngine:
         self.levels: dict[FieldRef, str] = {}
         self.domains: dict[FieldRef, list[Value]] = {}
         self.other_values: dict[FieldRef, Value] = {}
+        self.named_points: dict[FieldRef, set[Value]] = {}   # range fields: domain values that are condition values
         self.contact_fields: list[FieldRef] = []
         self.scenario_fields: list[FieldRef] = []
         self.classes: list[ContactClass] = []
@@ -328,6 +465,10 @@ class CoverageEngine:
         self.reached_activities: set[str] = set()
         self.exploration_truncated = False
         self.classes_incomplete = False
+        # Elements of a supported type the generator cannot handle for some contacts: an activity where some paths
+        # stop (an Update contact whose insert may fail), or a branch "<split>/<outcome>" whose range on a text
+        # field gets no value (CoverageResult.unsupported_reasons): key -> why.
+        self.stopped_at: dict[str, str] = {}
 
     # -- step 3 and 4: fields, levels, domains ------------------------------------------
 
@@ -345,16 +486,21 @@ class CoverageEngine:
                         self.fields.append(ref)
                         self.conditions_by_field[ref] = []
                     self.conditions_by_field[ref].append(cond)
+        journey_data = {self.schema.canonical((c.table, c.field)) for conds in self.conditions_by_field.values()
+                        for c in conds if c.source == SOURCE_JOURNEY}
         for ref in self.fields:
             level = self.table_model.field_levels.get(ref)
-            if level is None:
+            if level is None and ref in journey_data:
+                # Spec, "Data sources of a condition": Journey Data is a column of the entry row, one per contact.
+                level = LEVEL_CONTACT
+            elif level is None:
                 level = LEVEL_CONTACT
                 self.warnings.append(
-                    f"field {ref[0]}.{ref[1]} is read by a split but its table is not linked to the entry; "
-                    "treated as a contact-level field (assumption)")
+                    f"il campo {ref[0]}.{ref[1]} è letto da uno split, ma la sua tabella non è collegata alla tabella di ingresso: "
+                    "è trattato come campo a livello di contatto (assunzione)")
             self.levels[ref] = level
             if self.schema.table(ref[0]) is None or self.schema.table(ref[0]).field(ref[1]) is None:
-                self.warnings.append(f"field {ref[0]}.{ref[1]} is read by a split but is not in the export's schemas; treated as nullable text")
+                self.warnings.append(f"il campo {ref[0]}.{ref[1]} è letto da uno split, ma non è negli schemi dell'export: è trattato come testo che ammette null")
         self.contact_fields = [f for f in self.fields if self.levels[f] == LEVEL_CONTACT]
         self.scenario_fields = [f for f in self.fields if self.levels[f] == LEVEL_SCENARIO]
 
@@ -369,17 +515,28 @@ class CoverageEngine:
             field = table.field(ref[1]) if table is not None else None
             length = field.length if field is not None else None
             self._flag_case_variants(ref, ftype, values)
+            if ref in self.row_fields.values():
+                # Spec, "Row present or absent": the contact has a row (its linked field holds the generated
+                # key) or has none (the field reads null).
+                self.domains[ref] = [KEY_MARKER, None]
+                self.other_values[ref] = KEY_MARKER
+                continue
             if ref in key_fields:
                 # Data rule 1 wins over rule 2: a key field always holds the generated key, so a split
                 # comparing it with a value can never match; IsNotNull stays true.
                 self.domains[ref] = [KEY_MARKER]
                 self.other_values[ref] = KEY_MARKER
-                self.warnings.append(
-                    f"{ref[0]}.{ref[1]} is read by a split but it is a key field: it holds the generated key, "
-                    "so a condition comparing it with a value can never be true")
+                if values:
+                    self.warnings.append(
+                        f"{ref[0]}.{ref[1]} è letto da uno split, ma è un campo chiave: contiene la chiave generata, "
+                        "quindi una condizione che lo confronta con un valore non può mai essere vera")
                 continue
+            scale = field.scale if field is not None else None
             domain, other, warnings = build_domain(ftype, conds, self.schema.is_nullable(ref),
-                                                   self.settings.case_insensitive_text, self.settings.date_format, length)
+                                                   self.settings.case_insensitive_text, self.settings.date_format, length,
+                                                   scale)
+            if ftype in ("Number", "Decimal", "Date") and any(c.operator in RANGE_OPERATORS for c in conds):
+                self.named_points[ref] = {c.value for c in conds if c.operator not in RANGE_OPERATORS}
             for w in warnings:
                 self.warnings.append(f"{ref[0]}.{ref[1]}: {w}")
             self.other_values[ref] = other
@@ -390,12 +547,12 @@ class CoverageEngine:
                 domain = [value]
                 shown = "null" if value is None else repr(value)
                 self.warnings.append(
-                    f"{ref[0]}.{ref[1]} is read by a split and fixed by the entry query: contacts that enter "
-                    f"the journey always have {shown}, so only that value is tried")
+                    f"{ref[0]}.{ref[1]} è letto da uno split ed è fissato dalla entry query: i contatti che entrano "
+                    f"nel journey hanno sempre {shown}, quindi si prova solo quel valore")
             elif ref in not_null and None in domain:
                 domain = [v for v in domain if v is not None]
                 self.warnings.append(
-                    f"{ref[0]}.{ref[1]} is read by a split and filtered IS NOT NULL by the entry query, so null is not tried")
+                    f"{ref[0]}.{ref[1]} è letto da uno split e la entry query lo filtra con IS NOT NULL, quindi null non si prova")
             self.domains[ref] = domain
 
     def _flag_case_variants(self, ref: FieldRef, ftype: str, values: list[str]) -> None:
@@ -409,15 +566,15 @@ class CoverageEngine:
                 by_lower[v.lower()].append(v)
         for spellings in by_lower.values():
             if len(spellings) > 1:
-                shown = " and ".join(repr(s) for s in spellings)
+                shown = " e ".join(repr(s) for s in spellings)
                 if self.settings.case_insensitive_text:
                     self.warnings.append(
-                        f"suspicious pattern: {ref[0]}.{ref[1]} is compared with {shown}; "
-                        "treated as the same value because text comparisons ignore letter case")
+                        f"pattern sospetto: {ref[0]}.{ref[1]} è confrontato con {shown}; "
+                        "sono trattati come un solo valore perché i confronti di testo non distinguono maiuscole e minuscole")
                 else:
                     self.warnings.append(
-                        f"suspicious pattern: {ref[0]}.{ref[1]} is compared with {shown}; "
-                        "they are different values because text comparisons are case-sensitive (setting)")
+                        f"pattern sospetto: {ref[0]}.{ref[1]} è confrontato con {shown}; "
+                        "sono valori diversi perché i confronti di testo distinguono maiuscole e minuscole (impostazione)")
 
     def _entry_pins(self) -> tuple[dict[FieldRef, Value], set[FieldRef]]:
         """Fields pinned by the entry query: equality and IS NULL filters, literal and current-date
@@ -480,9 +637,16 @@ class CoverageEngine:
                 preds.append(f)
 
         # A field rewritten by an update-contact step can change the truth of a formula along the
-        # path, so such formulas are split into their conditions: classes then stay exact.
+        # path, so such formulas are split into their conditions: classes then stay exact. Journey Data
+        # never changes (the snapshot taken at entry); a write into a table with the row present / row
+        # absent variable can change every field of that table (it inserts the row).
         written = {self.schema.canonical((w.table, w.field))
                    for a in self.journey.activities.values() for w in a.writes}
+        inserting = {ref[0].lower() for ref in written if ref[0].lower() in self.row_fields}
+
+        def may_change(c: Condition, ref: FieldRef) -> bool:
+            return c.source != SOURCE_JOURNEY and (ref in written or ref[0].lower() in inserting)
+
         for activity in self.journey.activities.values():
             if activity.kind != KIND_DECISION:
                 continue
@@ -492,7 +656,7 @@ class CoverageEngine:
                 conds = formula_conditions(outcome.formula)
                 refs = [self.schema.canonical((c.table, c.field)) for c in conds]
                 levels = {self.levels[r] for r in refs}
-                if levels == {LEVEL_CONTACT} and not any(r in written for r in refs):
+                if levels == {LEVEL_CONTACT} and not any(may_change(c, r) for c, r in zip(conds, refs)):
                     add(outcome.formula)
                 elif LEVEL_CONTACT in levels:
                     for c in conds:
@@ -508,12 +672,13 @@ class CoverageEngine:
         if total > MAX_CONTACT_COMBINATIONS:
             self.classes_incomplete = True
             self.warnings.append(
-                f"{total} contact-level value combinations; only the first {MAX_CONTACT_COMBINATIONS} were examined, "
-                "so some contact classes are missing and reachable branches may be reported as not covered")
+                f"{total} combinazioni di valori a livello di contatto: sono state esaminate solo le prime {MAX_CONTACT_COMBINATIONS}, "
+                "quindi mancano alcune classi di contatti e alcuni branch raggiungibili possono risultare non coperti")
             combos = itertools.islice(combos, MAX_CONTACT_COMBINATIONS)
         by_truth: dict[tuple[bool, ...], ContactClass] = {}
+        best: dict[tuple[bool, ...], tuple[int, ...]] = {}
         for combo in combos:
-            values = dict(zip(self.contact_fields, combo))
+            values = self._mask_absent_rows(dict(zip(self.contact_fields, combo)))
 
             def lookup(ref: FieldRef, _values=values):
                 return _values.get(ref, graph.UNKNOWN)
@@ -521,11 +686,47 @@ class CoverageEngine:
             truth = tuple(bool(graph.evaluate(p, lookup, self.schema, self.settings.case_insensitive_text))
                           for p in preds)
             cls = by_truth.get(truth)
+            preference = self._preference(values)
             if cls is None:
                 by_truth[truth] = ContactClass(id=len(by_truth) + 1, values=values, predicate_truth=truth, member_count=1)
+                best[truth] = preference
             else:
                 cls.member_count += 1
+                if preference < best[truth]:
+                    # Spec: among values that cover the same branches, prefer those whose path rests on no
+                    # unverified assumption. Every member of a class takes the same paths.
+                    cls.values = values
+                    best[truth] = preference
         self.classes = list(by_truth.values())
+
+    def _mask_absent_rows(self, values: dict[FieldRef, Value]) -> dict[FieldRef, Value]:
+        """Spec, "Row present or absent": every field of an absent row reads null, so a contact without the
+        row has no other value in that table."""
+        if not self.row_fields:
+            return values
+        for table, linked in self.row_fields.items():
+            if linked in values and values[linked] is None:
+                for ref in values:
+                    if ref != linked and ref[0].lower() == table:
+                        values[ref] = None
+        return values
+
+    def _preference(self, values: dict[FieldRef, Value]) -> tuple[int, int, int]:
+        """Spec, "Operators, types and values": "Among values that cover the same branches, the generator
+        prefers those whose path rests on no unverified assumption: not null, row present." Lower is
+        better: the null values and absent rows, then the absent rows alone, then the values of a range
+        field that sit on a value named by a condition rather than strictly inside a range."""
+        absent = {table for table, linked in self.row_fields.items() if linked in values and values[linked] is None}
+        nulls = 0
+        on_points = 0
+        for ref, value in values.items():
+            if absent and ref[0].lower() in absent:
+                continue
+            if value is None:
+                nulls += 1
+            elif value in self.named_points.get(ref, ()):
+                on_points += 1
+        return (nulls + len(absent), len(absent), on_points)
 
     # -- symbolic exploration -----------------------------------------------------------
 
@@ -559,10 +760,10 @@ class CoverageEngine:
             if not self.exploration_truncated:
                 self.exploration_truncated = True
                 self.warnings.append(
-                    f"the journey has more than {MAX_PATHS} distinct paths; exploration stopped there, so some "
-                    "reachable branches may be reported as not covered")
+                    f"il journey ha più di {MAX_PATHS} percorsi distinti: l'esplorazione si è fermata a quel limite, quindi "
+                    "alcuni branch raggiungibili possono risultare non coperti")
             state.stop = graph.STOP_ERROR
-            state.stop_detail = "exploration limit reached"
+            state.stop_detail = "limite di esplorazione raggiunto"
             return LeafNode(self._leaf(cls, state, assigned, manual, randoms))
         state = self.walker.run(state, self._lookup(cls, assigned), choose=None)
         self.reached_activities.update(s.activity_key for s in state.steps)
@@ -572,9 +773,10 @@ class CoverageEngine:
         if state.stop == graph.STOP_UNDETERMINED:
             ref = state.pending_field
             if ref is None or ref not in self.domains:
-                self.warnings.append(f"split '{state.current}' reads a field the generator cannot enumerate; path stopped there")
+                self.warnings.append(f"lo split '{state.current}' legge un campo di cui il generatore non sa elencare i valori: "
+                                     "il percorso si ferma lì")
                 state.stop = graph.STOP_ERROR
-                state.stop_detail = f"split '{state.current}' reads a field the generator cannot enumerate"
+                state.stop_detail = f"lo split '{state.current}' legge un campo di cui il generatore non sa elencare i valori"
                 return LeafNode(self._leaf(cls, state, assigned, manual, randoms))
             children: dict[Value, Node] = {}
             for value in self.domains[ref]:
@@ -615,10 +817,16 @@ class CoverageEngine:
     def _leaf(self, cls: ContactClass, state: graph.WalkState, assigned: dict[FieldRef, Value],
               manual: tuple[ManualAction, ...], randoms: tuple[tuple[str, str], ...]) -> Leaf:
         if state.stop in (graph.STOP_LOOP, graph.STOP_DANGLING, graph.STOP_ERROR):
-            self.warnings.append(f"path stopped: {state.stop_detail}")
+            self.warnings.append(f"percorso interrotto: {state.stop_detail}")
+        stop = state.stop or graph.STOP_EXIT
+        # Spec, "Honest outcomes": past an element the walk cannot evaluate, the path is unknown from there on.
+        unknown_from = None if stop == graph.STOP_EXIT else (state.current or state.end_activity_key)
+        stopped = self.journey.activities.get(state.current or "")
+        if stop == graph.STOP_UNSUPPORTED and stopped is not None and stopped.kind == KIND_UPDATE:
+            self.stopped_at.setdefault(stopped.key, state.stop_detail)
         leaf = Leaf(id=len(self.leaves), class_id=cls.id, assigned=dict(assigned), manual=manual, randoms=randoms,
                     steps=list(state.steps), emails_sent=list(state.emails_sent), writes=list(state.writes),
-                    waits=list(state.waits), stop=state.stop or graph.STOP_EXIT, stop_detail=state.stop_detail)
+                    waits=list(state.waits), stop=stop, stop_detail=state.stop_detail, unknown_from=unknown_from)
         mask = 0
         for ref in state.branches():
             idx = self.branch_index.get(ref)
@@ -631,25 +839,29 @@ class CoverageEngine:
     # -- step 4 continued: every scenario-level combination ------------------------------
 
     def enumerate_scenarios(self) -> dict[tuple[int, ...], dict[FieldRef, Value]]:
-        """Signature (the leaves a full scenario produces across all classes) -> first scenario with it."""
+        """Signature (the leaves a full scenario produces across all classes) -> the preferred scenario with
+        it (``_preference``; the first one enumerated on a tie)."""
         domains = [self.domains[f] for f in self.scenario_fields]
         total = math.prod(len(d) for d in domains) if domains else 1
         signatures: dict[tuple[int, ...], dict[FieldRef, Value]] = {}
         if total > MAX_SCENARIO_COMBINATIONS:
             self.warnings.append(
-                f"{total} scenario-level value combinations is more than the generator enumerates "
-                f"({MAX_SCENARIO_COMBINATIONS}); scenarios were built from the paths' own values instead")
+                f"{total} combinazioni di valori a livello di scenario superano il limite del generatore "
+                f"({MAX_SCENARIO_COMBINATIONS}): gli scenari sono stati costruiti solo dai valori da cui dipendono i percorsi esplorati")
             for leaf in self.leaves:
                 assignment = {f: d[0] for f, d in zip(self.scenario_fields, domains)}
                 assignment.update(leaf.assigned)
                 sig = self._signature(assignment)
                 signatures.setdefault(sig, assignment)
             return signatures
+        preferences: dict[tuple[int, ...], tuple[int, int, int]] = {}
         for combo in itertools.product(*domains):
             assignment = dict(zip(self.scenario_fields, combo))
             sig = self._signature(assignment)
-            if sig not in signatures:
+            preference = self._preference(assignment)
+            if sig not in signatures or preference < preferences[sig]:
                 signatures[sig] = assignment
+                preferences[sig] = preference
         return signatures
 
     def _signature(self, assignment: dict[FieldRef, Value]) -> tuple[int, ...]:
@@ -680,6 +892,7 @@ class CoverageEngine:
             if mask:
                 candidates.append((sig, assignment, mask))
         rng.shuffle(candidates)
+        candidates = self._preferred_per_mask(candidates)
         covered = 0
         chosen: list[tuple[tuple[int, ...], dict[FieldRef, Value]]] = []
         while covered != universe:
@@ -733,6 +946,27 @@ class CoverageEngine:
                     break
         scenarios = [(chosen[i][1], leaves) for i, leaves in sorted(selected.items())]
         return scenarios, universe
+
+    def _preferred_per_mask(self, candidates: list) -> list:
+        """Spec: "Among values that cover the same branches, the generator prefers those whose path rests on
+        no unverified assumption". Scenarios crossing the same branches have the same mask; the greedy cover
+        can only ever choose the first of them in the shuffled order (the others never gain more), so that
+        place goes to the preferred one, and the others are dropped. Ties keep the shuffled order.
+
+        The full preference applies (not null, then values inside ranges; scenario-level fields have no row
+        present / row absent variable). The team accepted on 13 October 2026 the one pilot difference this
+        makes: S18 gets CHANNEL2 = OTHER instead of empty."""
+        best: dict[int, tuple] = {}
+        for cand in candidates:
+            held = best.get(cand[2])
+            if held is None or self._preference(cand[1]) < self._preference(held[1]):
+                best[cand[2]] = cand
+        out = []
+        for cand in candidates:
+            chosen = best.pop(cand[2], None)
+            if chosen is not None:
+                out.append(chosen)
+        return out
 
     # -- random splits: statistical cases -----------------------------------------------
 
@@ -811,7 +1045,8 @@ class CoverageEngine:
             branches.append(RandomBranch(
                 outcome_key=leaf.randoms[0][1], percentage=int(round(share * 100)),
                 steps=tuple(leaf.steps[idx + 1:]), emails_sent=tuple(leaf.emails_sent),
-                writes=tuple(leaf.writes), end_activity_key=leaf.end_activity_key))
+                writes=tuple(leaf.writes), end_activity_key=leaf.end_activity_key,
+                unknown_from=leaf.unknown_from, unknown_reason=leaf.stop_detail if leaf.unknown_from else ""))
         n = self.settings.contacts_per_random_case
         smallest = min((b.percentage for b in branches if b.percentage), default=0) / 100.0
         low, high = expected_range(n, smallest)
@@ -864,6 +1099,9 @@ class CoverageEngine:
                 case.summary = self._summary(case.steps)
                 if case.manual_actions:
                     case.inbox_blocked_reason = self._inbox_block_reason(cls.values, entry["values"])
+                if leaf.unknown_from is not None:
+                    case.unknown_from, case.unknown_reason = leaf.unknown_from, leaf.stop_detail
+                self._timing(case)
                 cases.append(case)
             for class_id, manual, leaves in sorted(entry["stat"], key=lambda g: (len(g[1]), g[0])):
                 prefix, info = self._random_info(leaves)
@@ -879,6 +1117,7 @@ class CoverageEngine:
                 case.summary = (prefix_summary + " > random split") if prefix_summary else "random split"
                 if case.manual_actions:
                     case.inbox_blocked_reason = self._inbox_block_reason(cls.values, entry["values"])
+                self._timing(case)
                 cases.append(case)
             scenarios.append(Scenario(id=sid, key="", values=dict(entry["values"]), cases=cases, run_order=order,
                                       has_manual_action=any(c.manual_actions for c in cases),
@@ -904,8 +1143,57 @@ class CoverageEngine:
             scenario_fields=list(self.scenario_fields), contact_fields=list(self.contact_fields),
             domains=dict(self.domains), other_values=dict(self.other_values),
             unsupported=list(self.package.unsupported_activities) + [
-                f"{a.key}/{o.key}" for a in self.journey.activities.values() for o in a.outcomes if o.unsupported_reason],
-            warnings=list(dict.fromkeys(self.warnings)), stats=stats)
+                f"{a.key}/{o.key}" for a in self.journey.activities.values() for o in a.outcomes if o.unsupported_reason]
+            + [key for key in self.stopped_at if key.partition("/")[0] in self.journey.activities],
+            warnings=list(dict.fromkeys(self.warnings)), stats=stats,
+            row_fields={linked[0]: linked for linked in self.row_fields.values()},
+            unsupported_reasons=dict(self.stopped_at))
+
+    # -- honest outcomes: windows of the manual actions and minimum durations -------------
+
+    def _timing(self, case: Case) -> None:
+        """Spec, "Honest outcomes": "The deadline of a manual open or click is computed from the waits
+        between the email and the engagement split ... The testbook gives each case's minimum duration."
+
+        Fills ``case.action_windows`` (one per manual action: the waits between its email and its split,
+        their fixed duration, the last wait by attribute among them, whose date datagen.py turns into
+        the deadline, and the waits before the email, which delay its arrival and so the start of the
+        window) and ``case.min_duration_minutes`` (the fixed waits of the longest path of the case)."""
+        activities = self.journey.activities
+        paths = graph.case_paths(case)
+        durations = [self._fixed_minutes(keys, need_dates=False) for keys in paths]
+        case.min_duration_minutes = None if any(d is None for d in durations) else max(durations, default=0)
+        windows: list[ActionWindow] = []
+        for action in case.manual_actions:
+            keys = next((p for p in paths if action.activity_key in p), [])
+            end = keys.index(action.activity_key) if keys else 0
+            start = keys.index(action.email_activity_key) if action.email_activity_key in keys[:end] else -1
+            waits = [k for k in keys[start + 1:end] if activities[k].kind in graph.WAIT_KINDS]
+            attribute = [k for k in waits if activities[k].kind == KIND_WAIT_ATTRIBUTE]
+            after = waits[waits.index(attribute[-1]) + 1:] if attribute else []
+            before = [k for k in keys[:max(start, 0)] if activities[k].kind in graph.WAIT_KINDS]
+            windows.append(ActionWindow(
+                activity_key=action.activity_key, email_activity_key=action.email_activity_key, wait_keys=waits,
+                minutes=self._fixed_minutes(waits), attribute_wait_key=attribute[-1] if attribute else None,
+                minutes_after_attribute_wait=self._fixed_minutes(after), wait_keys_before=before))
+        case.action_windows = windows
+
+    def _fixed_minutes(self, keys: list[str], need_dates: bool = True) -> Optional[int]:
+        """Fixed duration of the waits among ``keys``, in minutes (graph.fixed_wait_minutes); None when one
+        is unknown, or, with ``need_dates``, when a wait by attribute has no date field (a window that ends
+        at an unknown date is unknown)."""
+        total = 0
+        for key in keys:
+            activity = self.journey.activities.get(key)
+            if activity is None or activity.kind not in graph.WAIT_KINDS:
+                continue
+            if need_dates and activity.kind == KIND_WAIT_ATTRIBUTE and activity.wait_field is None:
+                return None
+            minutes = graph.fixed_wait_minutes(activity)
+            if minutes is None:
+                return None
+            total += minutes
+        return total
 
     def _inbox_block_reason(self, contact_values: dict[FieldRef, Value],
                             scenario_values: dict[FieldRef, Value]) -> Optional[str]:
@@ -913,17 +1201,21 @@ class CoverageEngine:
         the contacts of that case cannot use the tester's inbox, so their open or click cannot be done."""
         entry = self.table_model.entry_table
         default_email = (self.journey.default_email_field or "").lower()
+        absent = {table for table, linked in self.row_fields.items()
+                  if linked in contact_values and contact_values[linked] is None}
         for values in (contact_values, scenario_values):
             for ref, value in values.items():
+                if ref[0].lower() in absent:
+                    continue   # the contact has no row there: no address of that table is written
                 is_address = (self.schema.field_type(ref) == "EmailAddress"
                               or (ref[0].lower() == entry.lower() and ref[1].lower() == default_email))
                 if not is_address:
                     continue
                 if value is None:
-                    return f"the path requires {ref[0]}.{ref[1]} to be empty, so no email can be received"
+                    return f"il percorso richiede che {ref[0]}.{ref[1]} sia vuoto, quindi nessuna email può essere ricevuta"
                 if value != self.other_values.get(ref):
-                    return (f"the path requires {ref[0]}.{ref[1]} = {value!r}, an address the tester does not own, "
-                            "so the email cannot be opened or clicked")
+                    return (f"il percorso richiede {ref[0]}.{ref[1]} = {value!r}, un indirizzo che il tester non possiede, "
+                            "quindi l'email non può essere aperta né cliccata")
         return None
 
     def _summary(self, steps: list[Step]) -> str:
@@ -934,7 +1226,7 @@ class CoverageEngine:
                 continue
             if activity.kind in (KIND_DECISION, KIND_ENGAGEMENT):
                 outcome = activity.outcome(step.outcome_key)
-                label = outcome.label if outcome is not None and outcome.label else "match"
+                label = outcome.label if outcome is not None and outcome.label else "condizione vera"
                 parts.append(f"{activity.name or activity.key}: {label}")
         text = " > ".join(parts)
         return text if len(text) <= 160 else text[:157] + "..."
@@ -967,10 +1259,11 @@ class CoverageEngine:
             if others:
                 ref = self.journey.activities.get(activity.engagement_ref)
                 ref_name = ref.email_name if ref is not None and ref.email_name else activity.engagement_ref
-                shown = ", ".join(f"'{self.journey.activities[k].email_name or k}' ({k})" for k in others)
-                out.append(f"suspicious pattern: engagement split '{activity.name or activity.key}' ({activity.key}) "
-                           f"measures the email '{ref_name}' ({activity.engagement_ref}), but on some paths the last "
-                           f"email sent before it is {shown}")
+                names = [f"'{self.journey.activities[k].email_name or k}' ({k})" for k in others]
+                shown = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " oppure " + names[-1]
+                out.append(f"pattern sospetto: l'engagement split '{activity.name or activity.key}' ({activity.key}) "
+                           f"misura l'email '{ref_name}' ({activity.engagement_ref}), ma su alcuni percorsi l'ultima "
+                           f"email inviata prima dello split è {shown}")
         return out
 
     def _same_name_different_conditions(self) -> list[str]:
@@ -985,7 +1278,7 @@ class CoverageEngine:
         for name, variants in by_name.items():
             if len(variants) > 1:
                 keys = ", ".join(variants.values())
-                out.append(f"suspicious pattern: {len(variants)} different conditions share the split name '{name}' ({keys})")
+                out.append(f"pattern sospetto: {len(variants)} split con condizioni diverse hanno lo stesso nome '{name}' ({keys})")
         return out
 
     def _branch_statuses(self, scenarios: list[Scenario]) -> list[BranchStatus]:
@@ -1037,20 +1330,27 @@ class CoverageEngine:
         for activity, outcome in self.branch_list:
             ref = (activity.key, outcome.key)
             label = outcome.label or outcome.key
-            stat_note = f"reached only through a random split; statistical case of {self.settings.contacts_per_random_case} contacts"
-            if ref in plain:
+            stat_note = f"raggiunto solo attraverso un random split; caso statistico di {self.settings.contacts_per_random_case} contatti"
+            if _unknown_engagement(activity):
+                # Triage RB-5: the split measures neither an open nor a click, so no branch can be claimed,
+                # whatever path crosses it; the loader warns that both branches are not covered.
+                reason = self._not_covered_reason(activity, outcome, preds)
+                root_reasons[ref] = reason
+                statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
+                                             STATUS_NOT_COVERED, reason, []))
+            elif ref in plain:
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                              STATUS_COVERED, "", sorted(set(plain[ref]))))
             elif ref in manual:
                 is_stat = ref in statistical and ref not in plain
-                reason = "a contact must open or click the email" + ("; " + stat_note if is_stat else "")
+                reason = "un contatto deve aprire o cliccare l'email" + ("; " + stat_note if is_stat else "")
                 if self.settings.real_inbox:
                     statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                                  STATUS_MANUAL, reason, sorted(set(manual[ref])), statistical=is_stat))
                 else:
                     statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                                  STATUS_NOT_COVERED,
-                                                 "needs an open or click but no real inbox is configured; the cases exist with undeliverable addresses",
+                                                 "richiede un open o un click, ma non è configurata un'inbox reale; i casi esistono, con indirizzi non recapitabili",
                                                  sorted(set(manual[ref])), statistical=is_stat))
             elif ref in statistical:
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
@@ -1060,7 +1360,7 @@ class CoverageEngine:
                 reason = blocked[ref][0][1]
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                              STATUS_NOT_COVERED,
-                                             f"needs an open or click that cannot be done: {reason}; the cases exist",
+                                             f"richiede un open o un click che non si può fare: {reason}; i casi esistono",
                                              ids))
             else:
                 behind = None
@@ -1077,15 +1377,33 @@ class CoverageEngine:
                         if root_reason is None:
                             root_reason = self._not_covered_reason(root_activity, root_outcome, preds)
                             root_reasons[behind] = root_reason
-                        prefix = ("behind an unsupported element" if root_reason.startswith("unsupported") or
-                                  root_reason.startswith("behind an unsupported") else "unreachable")
-                        reason = (f"{prefix}: lies behind the branch '{root_activity.name or behind[0]}: {label_of(root_outcome)}' "
-                                  f"({behind[0]}), which is {root_reason}")
+                        prefix = ("a valle di un elemento non supportato"
+                                  if root_reason.startswith(("attività non supportata", "branch non supportato",
+                                                             "a valle di un elemento non supportato"))
+                                  else "non raggiungibile")
+                        reason = (f"{prefix}: si trova a valle del branch '{root_activity.name or behind[0]}: {label_of(root_outcome)}' "
+                                  f"({behind[0]}), che non è coperto per questo motivo: {root_reason}")
                     else:
                         reason = self._not_covered_reason(activity, outcome, preds)
                 statuses.append(BranchStatus(activity.key, activity.name, activity.kind, outcome.key, label,
                                              STATUS_NOT_COVERED, reason, [], behind=behind))
         return statuses
+
+    def _seen_text(self, ref: FieldRef, values: set[Value]) -> str:
+        """The values a split saw in a field, for the reason of a branch that never matched."""
+        if ref in self.row_fields.values():
+            if all(not graph.is_null(v) for v in values):
+                return f"il contatto ha sempre una riga in {ref[0]}"
+            if all(graph.is_null(v) for v in values):
+                return f"il contatto non ha mai una riga in {ref[0]}"
+        elif ref[0].lower() in self.row_fields and all(graph.is_null(v) for v in values):
+            return (f"{ref[0]}.{ref[1]} è sempre null, perché il contatto non ha una riga in {ref[0]} oppure il campo "
+                    "è vuoto")
+        if values == {KEY_MARKER}:
+            return f"{ref[0]}.{ref[1]} contiene sempre la chiave generata"
+        shown = ", ".join("la chiave generata" if v == KEY_MARKER else "null" if v is None else repr(v)
+                          for v in sorted(values, key=lambda x: (x is None, str(x))))
+        return f"{ref[0]}.{ref[1]} vale sempre uno tra {shown}"
 
     def _root_branches(self, key: str, preds: dict[str, set[str]]) -> list[BranchRef]:
         """For an activity no path reaches: the branches of reached activities that lead into the
@@ -1111,12 +1429,17 @@ class CoverageEngine:
 
     def _not_covered_reason(self, activity: Activity, outcome: Outcome, preds: dict[str, set[str]]) -> str:
         key = activity.key
+        if key in self.stopped_at:
+            return f"attività non supportata: {self.stopped_at[key]}"
         if key in self.package.unsupported_activities:
             if activity.unsupported_reason:
-                return f"unsupported activity: {activity.unsupported_reason}"
-            return f"unsupported activity: its type {activity.raw_type} is not one the PoC understands"
+                return f"attività non supportata: {activity.unsupported_reason}"
+            return f"attività non supportata: il PoC non gestisce il tipo {activity.raw_type}"
         if outcome.unsupported_reason:
-            return f"unsupported outcome: {outcome.unsupported_reason}"
+            return f"branch non supportato: {outcome.unsupported_reason}"
+        if _unknown_engagement(activity):
+            return ("branch non supportato: lo split misura un tipo di statistica che non è né un open né un click, "
+                    "quindi nessuno dei suoi branch può essere considerato coperto")
         if activity.kind == KIND_DECISION:
             remainder = [o for o in activity.outcomes if o.is_remainder or o.formula is None]
             ordered = [o for o in activity.outcomes if o not in remainder] + remainder
@@ -1124,42 +1447,58 @@ class CoverageEngine:
                 if earlier is outcome:
                     break
                 if earlier.unsupported_reason:
-                    return (f"behind an unsupported element: this outcome comes after the unsupported outcome "
-                            f"'{label_of(earlier)}' of the same split, so it is never evaluated")
+                    return (f"a valle di un elemento non supportato: questo branch viene dopo il branch non supportato "
+                            f"'{label_of(earlier)}' dello stesso split, quindi non viene mai valutato")
         blocked = self.engagement_blocked.get((key, outcome.key))
         if blocked:
-            return "unreachable: " + blocked
+            return "non raggiungibile: " + blocked
         if key not in self.reached_activities:
             parent = sorted(preds.get(key, ()))
             if not parent:
-                return "unreachable: no path from the start reaches this activity"
-            return ("unreachable: no combination of field values reaches this activity "
-                    f"(it follows {', '.join(repr(p) for p in parent)})")
+                return "non raggiungibile: nessun percorso dall'inizio del journey raggiunge questa attività"
+            return ("non raggiungibile: nessuna combinazione di valori dei campi raggiunge questa attività "
+                    f"(segue {', '.join(repr(p) for p in parent)})")
         # The split was reached but this outcome never matched.
         seen = self.reached_values.get(key, {})
         if activity.kind == KIND_DECISION and outcome.formula is not None:
+            for cond in formula_conditions(outcome.formula):
+                ref = self.schema.canonical((cond.table, cond.field))
+                ftype = self.schema.field_type(ref)
+                if cond.operator in RANGE_OPERATORS and ftype not in RANGE_TYPES and cond.value_attribute is None:
+                    # build_domain picks no value inside a range of such a field, so the branch may well be
+                    # reachable in Salesforce: an element the generator does not support, not an unreachable branch.
+                    why = (f"la condizione confronta {ref[0]}.{ref[1]}, un campo di tipo {ftype}, con {cond.operator}: il "
+                           "generatore sceglie valori dentro un intervallo solo per i campi Number, Decimal e Date, quindi "
+                           "nei dati di test nessun contatto la soddisfa, anche se in Salesforce un contatto potrebbe")
+                    self.stopped_at[f"{key}/{outcome.key}"] = why
+                    return f"branch non supportato: {why}"
             for cond in formula_conditions(outcome.formula):
                 ref = self.schema.canonical((cond.table, cond.field))
                 table = self.schema.table(ref[0])
                 field = table.field(ref[1]) if table is not None else None
                 if (cond.value is not None and field is not None and field.length
                         and field.type in TEXT_TYPES and len(cond.value) > field.length):
-                    return (f"unreachable: the condition value {cond.value!r} is longer than {ref[0]}.{ref[1]} "
-                            f"({field.length} characters), so the field can never hold it")
+                    return (f"non raggiungibile: il valore {cond.value!r} della condizione è più lungo di {ref[0]}.{ref[1]} "
+                            f"({field.length} caratteri), quindi il campo non può mai contenerlo")
             fields = []
             for cond in formula_conditions(outcome.formula):
                 ref = self.schema.canonical((cond.table, cond.field))
                 values = seen.get(ref)
                 if values:
-                    shown = ", ".join("null" if v is None else repr(v) for v in sorted(values, key=lambda x: (x is None, str(x))))
-                    fields.append(f"{ref[0]}.{ref[1]} is always one of {shown}")
-            detail = "; ".join(fields) if fields else "the condition is never true"
-            return f"unreachable: the split is reached but '{label_of(outcome)}' never matches on those paths ({detail})"
+                    fields.append(self._seen_text(ref, values))
+            detail = "; ".join(fields) if fields else "la condizione non è mai vera"
+            return (f"non raggiungibile: lo split è raggiunto, ma su quei percorsi la condizione di '{label_of(outcome)}' "
+                    f"non è mai vera ({detail})")
         if activity.kind == KIND_DECISION and outcome.is_remainder:
-            return "unreachable: the split is reached but an earlier outcome always matches"
+            return "non raggiungibile: lo split è raggiunto, ma la condizione di un branch precedente è sempre vera"
         if activity.kind == KIND_ENGAGEMENT:
-            return "unreachable: the split is reached but this branch is never taken"
-        return "unreachable: no simulated path crosses this branch"
+            return "non raggiungibile: lo split è raggiunto, ma nessun contatto prende questo branch"
+        return "non raggiungibile: nessun percorso simulato attraversa questo branch"
+
+
+def _unknown_engagement(activity: Activity) -> bool:
+    """An engagement split whose statsTypeId is neither an open nor a click (triage RB-5)."""
+    return activity.kind == KIND_ENGAGEMENT and activity.engagement_kind not in ("open", "click")
 
 
 def label_of(outcome: Outcome) -> str:

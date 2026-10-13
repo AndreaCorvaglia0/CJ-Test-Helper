@@ -43,7 +43,7 @@ def test_every_reachable_decision_branch_is_covered(result):
     assert len({b.activity_key for b in decisions}) == 106
     for b in decisions:
         if b.status == STATUS_NOT_COVERED:
-            assert b.reason.startswith("unreachable"), (b.activity_key, b.outcome_key, b.reason)
+            assert b.reason.startswith("non raggiungibile"), (b.activity_key, b.outcome_key, b.reason)
         else:
             assert b.covered_by
     for case in result.coverage.cases:
@@ -54,12 +54,12 @@ def test_engagement_yes_after_channels_2_and_3_unreachable(result):
     by_key = {(b.activity_key, b.outcome_key): b for b in result.coverage.branches}
     for split in ("ENGAGEMENTSPLITV2-3", "ENGAGEMENTSPLITV2-4", "ENGAGEMENTSPLITV2-5", "ENGAGEMENTSPLITV2-6"):
         b = by_key[(split, "branchResult-1")]
-        assert b.status == STATUS_NOT_COVERED and b.reason.startswith("unreachable"), (split, b.reason)
+        assert b.status == STATUS_NOT_COVERED and b.reason.startswith("non raggiungibile"), (split, b.reason)
     # channel 1: open is covered with a manual action, click has no link
     assert by_key[("ENGAGEMENTSPLITV2-1", "branchResult-1")].status == STATUS_MANUAL
     assert by_key[("ENGAGEMENTSPLITV2-1", "branchResult-2")].status == STATUS_COVERED
     click = by_key[("ENGAGEMENTSPLITV2-2", "branchResult-1")]
-    assert click.status == STATUS_NOT_COVERED and "no link" in click.reason
+    assert click.status == STATUS_NOT_COVERED and "non contiene link" in click.reason
 
 
 def test_random_split_statistical_case(result):
@@ -126,3 +126,18 @@ def test_zip_holds_every_file(result):
     data = outputs.build_zip(result.files)
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         assert sorted(z.namelist()) == sorted(result.files)
+
+
+def test_extensions_beyond_the_pilot_keep_its_procedure(result):
+    """Spec, "Acceptance beyond the pilot": the pilot's report keeps its automation procedure and its assumptions;
+    the testbook gains the minimum duration of each test (spec, "Honest outcomes")."""
+    import openpyxl
+    report = result.files["report.md"].decode("utf-8")
+    assert "> **Attenzione:**" not in report                  # no unsupported element leaves a branch not covered
+    assert "Run Once" not in report and "copia del journey" not in report
+    assumptions = report[report.index("## Assunzioni"):report.index("## Impostazioni usate")]
+    assert assumptions.count("\n- ") == 8                      # the spec's six, the automation, the ignored columns
+    rows = list(openpyxl.load_workbook(io.BytesIO(result.files["testbook.xlsx"])).active.iter_rows(values_only=True))
+    steps = [row[5] for row in rows[1:]]
+    assert all(("Durata minima del test" in text) != ("Il percorso non ha wait." in text) for text in steps)
+    assert "run identifier" not in "\n".join(str(row[4]) for row in rows[1:])   # MultipleEntries, automation entry

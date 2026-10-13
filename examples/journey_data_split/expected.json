@@ -1,0 +1,102 @@
+{
+  "journey_name": "EX_JourneyDataSplit",
+  "activity_count": 7,
+  "csv_tables": [
+    "DE_JD_Entry"
+  ],
+  "table_levels": {
+    "DE_JD_Entry": "contact"
+  },
+  "branches": {
+    "SPLIT-1/path_a": {
+      "status": "not covered",
+      "reason_contains": "non raggiungibile"
+    },
+    "SPLIT-1/remainder_path": {
+      "status": "covered"
+    },
+    "SPLIT-2/path_a": {
+      "status": "covered"
+    },
+    "SPLIT-2/remainder_path": {
+      "status": "covered"
+    },
+    "SPLIT-3/path_a": {
+      "status": "covered"
+    },
+    "SPLIT-3/path_b": {
+      "status": "covered"
+    },
+    "SPLIT-3/remainder_path": {
+      "status": "covered"
+    }
+  },
+  "scenario_count": {
+    "min": 1,
+    "max": 1
+  },
+  "case_count": {
+    "min": 4,
+    "max": 4
+  },
+  "contact_count": 12,
+  "cases": [
+    {
+      "contact_values": {
+        "DE_JD_Entry.HasConsent": "True",
+        "DE_JD_Entry.Segment": "Premium"
+      },
+      "end_activity": "UPDATE-1",
+      "manual_actions": [],
+      "contact_count": 3
+    },
+    {
+      "contact_values": {
+        "DE_JD_Entry.HasConsent": "True"
+      },
+      "contact_constraints": {
+        "DE_JD_Entry.Segment": {
+          "not_null": true,
+          "not_in": [
+            "Premium"
+          ]
+        },
+        "DE_JD_Entry.Score": {
+          "gt": 50
+        }
+      },
+      "end_activity": "UPDATE-2",
+      "manual_actions": [],
+      "contact_count": 3
+    },
+    {
+      "contact_values": {
+        "DE_JD_Entry.HasConsent": "True"
+      },
+      "contact_constraints": {
+        "DE_JD_Entry.Segment": {
+          "not_null": true,
+          "not_in": [
+            "Premium"
+          ]
+        },
+        "DE_JD_Entry.Score": {
+          "lt": 50
+        }
+      },
+      "end_activity": "UPDATE-4",
+      "manual_actions": [],
+      "contact_count": 3
+    },
+    {
+      "contact_values": {
+        "DE_JD_Entry.HasConsent": "False"
+      },
+      "end_activity": "UPDATE-3",
+      "manual_actions": [],
+      "contact_count": 3
+    }
+  ],
+  "unsupported": [],
+  "checks_pass": true
+}

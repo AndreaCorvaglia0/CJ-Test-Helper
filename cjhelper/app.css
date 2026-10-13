@@ -33,6 +33,9 @@ header[data-testid="stHeader"] { background: transparent; }
 .cj-stepper .done { border-top-color: var(--cj-jet); }
 .cj-stepper .now { border-top-color: var(--cj-crimson); }
 .cj-stepper .todo b { color: #888; }
+.cj-stepper .cj-num { display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: #888; margin-bottom: 2px; }
+.cj-stepper .done .cj-num { color: var(--cj-jet); }
+.cj-stepper .now .cj-num { color: var(--cj-crimson); }
 
 /* Step cards: Streamlit expanders with a title column and a one-line summary. */
 [class*="st-key-card-"] [data-testid="stExpander"] > details { border-color: var(--cj-grey-3); border-radius: 6px; background: #fff; }

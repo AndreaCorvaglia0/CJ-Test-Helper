@@ -23,7 +23,16 @@ from streamlit.testing.v1 import AppTest, element_tree
 
 from cjhelper import app, outputs, pipeline
 from cjhelper.loader import LoadError
-from cjhelper.model import STATUS_COVERED, STATUS_NOT_COVERED, CheckResult, Settings
+from cjhelper.model import (
+    ENTRY_AUTOMATION,
+    ENTRY_OTHER,
+    ENTRY_RUN_ONCE,
+    ENTRY_SCHEDULED,
+    STATUS_COVERED,
+    STATUS_NOT_COVERED,
+    CheckResult,
+    Settings,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_FILE = ROOT / "cjhelper" / "app.py"
@@ -116,7 +125,7 @@ def test_page_without_file_shows_the_upload_step_and_no_error():
     assert not at.exception
     html = _html_bodies(at)
     assert f'<span class="cj-name">{app.TITLE}</span>' in html and 'alt="Lutech"' in html   # the header
-    assert '<div class="now"><b>1 · Carica</b>' in html                                      # the stepper
+    assert '<div class="now"><span class="cj-num">01</span><b>Carica</b>' in html         # the stepper
     assert _cards(at) == [f"**{app.STEP_UPLOAD}** il file JSON che Package Manager esporta per il journey"]
     assert _card(at, app.STEP_UPLOAD).proto.expanded is True
     uploaders = at.get("file_uploader")
@@ -143,10 +152,10 @@ def test_the_uploader_takes_any_file_and_the_page_answers_with_one_sentence():
 @pytest.mark.parametrize("data, words", [
     (b"{not json", "Il file non è un JSON valido: c'è un problema alla riga 1, colonna 2."),
     (b"", "Il file non è un JSON valido: c'è un problema alla riga 1, colonna 1."),
-    (b"[1, 2]", "a JSON object is expected."),
-    (b'{"entities": {"dataExtensions": {}}}', "The export holds no journey."),
-    (b'{"name": "x"}', "so it holds no journey."),
-    (b"\xff\xfe\x00{", "The file is not UTF-8 text"),   # the loader's own words
+    (b"[1, 2]", "deve contenere un oggetto JSON."),
+    (b'{"entities": {"dataExtensions": {}}}', "L'export non contiene alcun journey."),
+    (b'{"name": "x"}', "quindi non contiene alcun journey."),
+    (b"\xff\xfe\x00{", "Il file non è testo UTF-8"),   # the loader's own words
 ])
 def test_unreadable_file_shows_one_plain_error_and_nothing_else(data, words):
     at = AppTest.from_function(_render_page, args=(data,)).run(timeout=TIMEOUT)
@@ -171,8 +180,8 @@ def test_without_a_file_nothing_is_kept():
 
 
 def test_error_messages_are_plain_and_end_with_the_next_step():
-    assert app.error_message(LoadError("The export holds no journey.")) == (
-        "The export holds no journey. Scegli il file JSON prodotto da Package Manager.")
+    assert app.error_message(LoadError("L'export non contiene alcun journey.")) == (
+        "L'export non contiene alcun journey. Scegli il file JSON prodotto da Package Manager.")
     with pytest.raises(LoadError) as not_json:
         from cjhelper import loader
         loader.load_package(b"{oops")
@@ -234,7 +243,7 @@ def test_detection_summary_on_pilot(pilot_bytes):
     assert summary.activation_field == PILOT_ACTIVATION
     assert PILOT_ACTIVATION in summary.activation_choices
     assert all(table == "DE_NCRM_AD_HOC_CONFIG" for table, _ in summary.activation_choices)
-    patterns = [w for w in summary.warnings if w.startswith("Suspicious pattern: ")]
+    patterns = [w for w in summary.warnings if w.startswith("Pattern sospetto: ")]
     assert patterns and summary.warnings[:len(patterns)] == patterns   # suspicious patterns first
     assert all(w[:1].isupper() for w in summary.warnings)
     assert not any("UPDATECONTACTDATAV2" in w for w in summary.warnings) and summary.ids_left_out
@@ -265,7 +274,7 @@ def test_detection_step_on_pilot_shows_journey_activities_and_the_four_csv_table
             "DE_SkyDE_AdHoc_Log_partial (written).") in captions
     warnings = _expander(at, "Warning trovati nell'export (5)")
     assert warnings.proto.expanded is False
-    assert "- Suspicious pattern: 23 update contact step(s) write the constant 'DemoSKY'" in text
+    assert "- Pattern sospetto: la costante 'DemoSKY' è scritta nel campo di chiave primaria" in text
     assert "UPDATECONTACTDATAV2" not in text
     assert any(c.startswith("report.md elenca le attività coinvolte") for c in captions)
     assert [b.label for b in at.button] == [app.GENERATE_LABEL]
@@ -280,19 +289,19 @@ def test_activity_counts_and_roles_use_plain_names():
                                             ("new_kind", 1)]
     assert app.role_text({"source", "split"}) == "source, split"      # as report.md writes it
     assert app.role_text({"written"}) == "written"
-    assert app.role_text(set()) == "none"
+    assert app.role_text(set()) == "nessuno"
 
 
 def test_warning_lines_put_patterns_first_and_leave_key_lists_to_the_report():
     keys = ["SPLIT-1", "SPLIT-2", "UPDATE-1"]
     lines, left_out = app.warning_lines([
         "assets/1 has no value at 'data/x'.",
-        "suspicious pattern: 2 different conditions share the split name 'Consent' (SPLIT-1, SPLIT-2)",
+        "pattern sospetto: 2 different conditions share the split name 'Consent' (SPLIT-1, SPLIT-2)",
         "Decision split Consent (SPLIT-1) is reported as unsupported.",
-        "suspicious pattern: 2 different conditions share the split name 'Consent' (SPLIT-1, SPLIT-2)",
+        "pattern sospetto: 2 different conditions share the split name 'Consent' (SPLIT-1, SPLIT-2)",
         "the note (not keys, SPLIT-1) stays",
     ], keys)
-    assert lines == ["Suspicious pattern: 2 different conditions share the split name 'Consent'",
+    assert lines == ["Pattern sospetto: 2 different conditions share the split name 'Consent'",
                      "Assets/1 has no value at 'data/x'.",
                      "Decision split Consent (SPLIT-1) is reported as unsupported.",
                      "The note (not keys, SPLIT-1) stays"]
@@ -345,6 +354,27 @@ def test_settings_mapping_reads_the_changed_values():
     assert app.settings_from_form(values).activation_field == ("DE_NCRM_AD_HOC_CONFIG", "HAS_RUN")
 
 
+def test_settings_mapping_with_a_run_once_entry_does_not_offer_one_active_scenario():
+    """Spec, "Entry source and procedure": with Run Once "All scenarios enter together, so 'one active scenario at
+    a time' is not offered"."""
+    values = app.default_form_values(PILOT_ACTIVATION, ENTRY_RUN_ONCE)
+    assert values["one_active_scenario"] is False and values["activation_field"] is None
+    settings = app.settings_from_form(values)
+    assert settings.one_active_scenario is False and settings.activation_field is None
+
+
+@needs_pilot
+def test_settings_with_a_run_once_entry_disable_one_active_scenario(pilot_bytes, monkeypatch):
+    monkeypatch.setattr("cjhelper.outputs.entry_kind", lambda package: ENTRY_RUN_ONCE)
+    at = AppTest.from_function(_render_page, args=(pilot_bytes,)).run(timeout=TIMEOUT)
+    assert not at.exception
+    one_active = _widget(at.checkbox, app.SETTING_LABELS["one_active_scenario"])
+    assert one_active.value is False and one_active.disabled
+    assert not [w for w in at.selectbox if w.label == app.SETTING_LABELS["activation_field"]]
+    assert ("L'entry source è una data extension Run Once: tutti gli scenari entrano insieme quando il journey viene "
+            "attivato, quindi l'opzione non è disponibile.") in _captions(at)
+
+
 def test_settings_notes_in_words():
     assert app.days_text(-1) == "1 giorno prima della generazione."
     assert app.days_text(7) == "7 giorni dopo la generazione."
@@ -388,8 +418,10 @@ def test_settings_start_at_the_spec_defaults_with_inbox_and_run_identifier_first
 # Step 4: the result
 # ---------------------------------------------------------------------------
 
-def _stub_result(checks=None, files=None, journey_name="CJ demo", real_inbox="", one_active=True):
-    """The parts of a GenerationResult that step 4 reads."""
+def _stub_result(checks=None, files=None, journey_name="CJ demo", real_inbox="", one_active=True,
+                 entry_kind=ENTRY_AUTOMATION, unsupported=False):
+    """The parts of a GenerationResult that step 4 reads. ``unsupported``: the branch without a root cause is not
+    covered because of an unsupported element."""
     rows = "".join(f"TST_R01_C{n:04d},,x_{n}\n" for n in range(1, 13)).encode()
     if files is None:
         files = {"DE_Entry.csv": b"ContactId,Email,Note\n" + rows,
@@ -402,17 +434,21 @@ def _stub_result(checks=None, files=None, journey_name="CJ demo", real_inbox="",
     branches = ([SimpleNamespace(status=STATUS_COVERED, behind=None)] * 4
                 + [SimpleNamespace(status=STATUS_NOT_COVERED, behind=("SPLIT-1", "yes"))] * 2
                 + [SimpleNamespace(status=STATUS_NOT_COVERED, behind=("SPLIT-2", "yes"))]
-                + [SimpleNamespace(status=STATUS_NOT_COVERED, behind=None)])
+                + [SimpleNamespace(status=STATUS_NOT_COVERED, behind=None,
+                                   reason="branch non supportato: x" if unsupported else "non raggiungibile: x")])
     cases = [SimpleNamespace(manual_actions=[SimpleNamespace(kind="open")]), SimpleNamespace(manual_actions=[])]
+    event = SimpleNamespace(kind=entry_kind, event_type="CloudPagesSmartCaptureSubmissionEvent")
     return SimpleNamespace(
-        package=SimpleNamespace(journey=SimpleNamespace(name=journey_name, activities={"SPLIT-1": 1, "SPLIT-2": 2})),
+        package=SimpleNamespace(journey=SimpleNamespace(name=journey_name, activities={"SPLIT-1": 1, "SPLIT-2": 2}),
+                                entry_event=event, unsupported_activities=[]),
+        table_model=SimpleNamespace(entry_table="DE_Entry"),
         coverage=SimpleNamespace(stats={"scenarios": 2, "cases": 3, "contacts": 9, "covered": 4,
                                         "covered_manual": 1, "not_covered": 4},
-                                 branches=branches, cases=cases,
-                                 warnings=["suspicious pattern: T.F is compared with 'Email' and 'EMAIL' "
+                                 branches=branches, cases=cases, unsupported=[],
+                                 warnings=["pattern sospetto: T.F is compared with 'Email' and 'EMAIL' "
                                            "(SPLIT-1, SPLIT-2)"]),
-        data=SimpleNamespace(warnings=["No real inbox is set, so the contacts of the 1 case(s) get undeliverable "
-                                       "addresses.", "the entry query selects 2 columns it does not have."],
+        data=SimpleNamespace(warnings=["Nessuna inbox reale impostata. I contatti di 1 caso con un open o un click "
+                                       "manuale ricevono indirizzi non recapitabili.", "the entry query selects 2 columns it does not have."],
                              scenarios_rows=scenario_rows),
         checks=checks if checks is not None else [CheckResult("Every key joins", True, [])],
         files=files,
@@ -438,13 +474,26 @@ def test_summary_import_and_download_notes():
         "recapitabili e i branch relativi risultano non coperti."]
     assert app.summary_notes(_stub_result(real_inbox="tester@example.com"))[1:] == []
     assert app.import_notes(result) == [
-        "Apri prima report.md: la sezione How to run indica l'ordine di import.",
+        "Apri prima report.md: la sezione Come eseguire i test indica l'ordine di import.",
         "Nei CSV è attivo solo TST_R01_S01, il primo scenario in ordine di esecuzione.",
         "Esegui gli scenari uno alla volta, in ordine di esecuzione. Quando i contatti di uno scenario sono usciti "
         "dal journey, attiva il successivo: imposta DE_Config.ACTIVE a True sulla sua riga e a False su tutte le "
         "altre. Non cambiare altro e non reimportare nulla."]
     assert app.import_notes(_stub_result(one_active=False))[1:] == [
         "Nei CSV tutti gli scenari sono attivi, quindi vengono eseguiti insieme."]
+    run_once = _stub_result(one_active=False, entry_kind=ENTRY_RUN_ONCE)
+    assert app.import_notes(run_once)[1:] == [
+        "Entry source Run Once: importa tutti i CSV, poi attiva il journey. Entrano solo le righe presenti in DE_Entry "
+        "all'attivazione, che deve contenere solo righe di test. Un nuovo tentativo richiede una nuova versione del "
+        "journey e un nuovo run identifier.",
+        "Nei CSV tutti gli scenari sono attivi, quindi vengono eseguiti insieme."]
+    cloudpages = _stub_result(one_active=False, entry_kind=ENTRY_OTHER)
+    assert app.import_notes(cloudpages)[1] == (
+        "L'entry source è un form CloudPages (CloudPagesSmartCaptureSubmissionEvent): i contatti non entrano con "
+        "l'import di un CSV. Usa una copia del journey con entry source una data extension con le stesse colonne di "
+        "DE_Entry, e importa lì il CSV di ingresso.")
+    assert app.import_notes(_stub_result(one_active=False, entry_kind=ENTRY_SCHEDULED))[1].startswith(
+        "Entry source con pianificazione ricorrente")
     assert app.download_lines(result) == [
         "DE_Entry.csv: i dati da importare.",
         "scenarios.csv: gli scenari in ordine di esecuzione, con quello attivo all'inizio.",
@@ -452,7 +501,7 @@ def test_summary_import_and_download_notes():
         "report.md: cosa è coperto, cosa no e perché, e come eseguire i test."]
     assert app.preview_files(result) == ["scenarios.csv", "DE_Entry.csv"]
     warnings, left_out = app.generation_warnings(result)
-    assert warnings == ["Suspicious pattern: T.F is compared with 'Email' and 'EMAIL'",
+    assert warnings == ["Pattern sospetto: T.F is compared with 'Email' and 'EMAIL'",
                         "The entry query selects 2 columns it does not have."] and left_out
 
 
@@ -471,7 +520,7 @@ def test_result_step_shows_summary_import_previews_download_checks_and_warnings(
     captions = _captions(at)
     assert "3 dei 4 branch non coperti stanno dietro a 2 branch che nessun contatto può raggiungere (vedi report.md)." in captions
     assert any(c.startswith("Non è stata indicata un'inbox reale: i contatti che devono aprire un'email") for c in captions)
-    assert "1. Apri prima report.md: la sezione How to run indica l'ordine di import." in text
+    assert "1. Apri prima report.md: la sezione Come eseguire i test indica l'ordine di import." in text
     assert "2. Nei CSV è attivo solo TST_R01_S01, il primo scenario in ordine di esecuzione." in text
     assert "- :green-badge[Superato] Every key joins" in text and "a note on a passed check" not in text
     assert "- :red-badge[Non superato] Values respect the schema" in text
@@ -488,11 +537,24 @@ def test_result_step_shows_summary_import_previews_download_checks_and_warnings(
     assert "- DE_Entry.csv: i dati da importare." in text
     warnings = _expander(at, "Warning della generazione (2)")
     assert warnings.proto.expanded is False
-    assert "- Suspicious pattern: T.F is compared with 'Email' and 'EMAIL'" in text
-    assert "No real inbox is set" not in text           # said in the summary instead
+    assert "- Pattern sospetto: T.F is compared with 'Email' and 'EMAIL'" in text
+    assert "Nessuna inbox reale impostata" not in text           # said in the summary instead
     assert "report.md elenca le attività coinvolte." in captions
     buttons = at.get("download_button")
     assert len(buttons) == 1 and buttons[0].label == app.DOWNLOAD_LABEL and buttons[0].proto.type == "primary"
+
+
+def test_result_step_opens_with_the_warning_on_unsupported_elements():
+    """Spec, "Honest outcomes": "report.md and the page open with a warning when unsupported elements leave branches
+    not covered"."""
+    at = AppTest.from_function(_result_page, args=(_stub_result(), b"zip bytes")).run(timeout=TIMEOUT)
+    assert not at.exception and not at.warning
+    at = AppTest.from_function(_result_page, args=(_stub_result(unsupported=True), b"zip bytes")).run(timeout=TIMEOUT)
+    assert not at.exception
+    assert [_plain(w.value) for w in at.warning] == [
+        "1 branch su 8 non è coperto a causa di elementi non supportati. Per questi branch i dati di test non indicano "
+        "il percorso dei contatti. report.md spiega il motivo nelle sezioni Branch non coperti ed Elementi non "
+        "supportati."]
 
 
 @needs_pilot
