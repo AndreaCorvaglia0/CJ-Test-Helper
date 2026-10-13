@@ -1,0 +1,63 @@
+{
+  "journey_name": "EX_ScheduledEntry",
+  "activity_count": 3,
+  "csv_tables": [
+    "DE_SC_Entry"
+  ],
+  "table_levels": {
+    "DE_SC_Entry": "contact"
+  },
+  "branches": {
+    "SPLIT-1/path_a": {
+      "status": "covered"
+    },
+    "SPLIT-1/remainder_path": {
+      "status": "covered"
+    }
+  },
+  "scenario_count": {
+    "min": 1,
+    "max": 1
+  },
+  "case_count": {
+    "min": 2,
+    "max": 2
+  },
+  "contact_count": 6,
+  "cases": [
+    {
+      "contact_values": {
+        "DE_SC_Entry.Tier": "Gold"
+      },
+      "end_activity": "UPDATE-1",
+      "manual_actions": [],
+      "contact_count": 3
+    },
+    {
+      "contact_constraints": {
+        "DE_SC_Entry.Tier": {
+          "not_null": true,
+          "not_in": [
+            "Gold"
+          ]
+        }
+      },
+      "end_activity": "UPDATE-2",
+      "manual_actions": [],
+      "contact_count": 3
+    }
+  ],
+  "unsupported": [],
+  "report_contains": [
+    "da verificare",
+    "valutazione"
+  ],
+  "report_not_contains": [
+    "non entrano mai",
+    "nuova versione"
+  ],
+  "testbook_contains": [
+    "da verificare"
+  ],
+  "checks_pass": true
+}

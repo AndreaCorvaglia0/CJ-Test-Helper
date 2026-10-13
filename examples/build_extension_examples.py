@@ -12,7 +12,9 @@ raw shapes the extension introduces (copied in form only from real exports, with
 - entry sources: EmailAudience with metaData.scheduleFlowMode "runOnce" (a bare automationId GUID, no
   automation in the export) and CloudPagesSmartCaptureSubmissionEvent;
 - journey entryMode OnceAndDone / SingleEntryAcrossAllVersions, journey defaults.mobileNumber;
-- Package Manager `issues` on entities.
+- Package Manager `issues` on entities;
+- a recurring data extension entry (scheduleFlowMode "recurring", invented spelling), an APIEvent entry source, an
+  entry filter on the event and trigger, journey goals and exits.
 
 Run:  python examples/build_extension_examples.py [name ...]
 (writes examples/<name>/package.json, then validates package and expected.json like build_examples.py)
@@ -144,9 +146,44 @@ def add_cloudpages_entry(pkg: Package, journey_name: str, table: str, form_id: i
     return event_id, event_key
 
 
+def add_scheduled_de_entry(pkg: Package, journey_name: str, table: str) -> tuple[str, str]:
+    """EmailAudience event with a recurring schedule instead of Run Once.
+
+    Same shape as add_de_entry; metaData.scheduleFlowMode is "recurring" (the spelling is invented: no real export
+    with a recurring data extension entry was available) and a `schedule` object like the pilot's carries the
+    recurrence. Returns (event id, eventDefinitionKey).
+    """
+    event_id, event_key = add_de_entry(pkg, journey_name, table)
+    event = pkg.entities["eventDefinitions"][event_id]["data"]
+    event["metaData"] = {"scheduleState": "Scheduled", "criteriaDescription": None, "scheduleFlowMode": "recurring"}
+    event["schedule"] = {"startDateTime": "2026-11-01T06:00:00", "endDateTime": "2027-11-01T06:00:00",
+                         "timeZone": B.TIMEZONE, "occurrences": 365, "endType": "EndDate", "frequency": "Daily",
+                         "recurrencePattern": "Interval", "interval": 1}
+    return event_id, event_key
+
+
+def add_api_event(pkg: Package, journey_name: str, table: str) -> tuple[str, str]:
+    """APIEvent event definition bound to its data extension (the payload schema). Returns (event id, key)."""
+    de_id = pkg.tables[table]
+    event_id = pkg.gid("event", journey_name)
+    event_key = "APIEvent-" + pkg.gid("event-key", journey_name)
+    pkg.add("eventDefinitions", event_id, {
+        "name": journey_name, "type": "APIEvent", "dataExtensionId": ref("dataExtensions", de_id, "id"),
+        "dataExtensionName": table, "description": "", "eventDefinitionKey": event_key, "mode": "Production",
+        "iconUrl": "/images/icon-api-event.svg", "isVisibleInPicker": False, "category": "Event",
+        "disableDEDataLogging": False, "isPlatformObject": False,
+        "metaData": {"scheduleState": "No Schedule", "criteriaDescription": ""},
+        "configurationArguments": {"unconfigured": False},
+        "arguments": {"serializedObjectType": 11, "eventDefinitionId": event_id, "eventDefinitionKey": event_key,
+                      "dataExtensionId": de_id, "criteria": ""},
+        "sourceApplicationExtensionId": pkg.gid("app-extension", "api-event")})
+    return event_id, event_key
+
+
 def add_journey_ext(pkg: Package, journey: Journey, event_id: str, trigger_type: str,
                     entry_mode: str = "MultipleEntries", email_field: str = "EmailAddress",
-                    mobile_field: str | None = None, issues: list | None = None) -> None:
+                    mobile_field: str | None = None, issues: list | None = None,
+                    goals: list | None = None, exits: list | None = None) -> None:
     """Journey entity for a non-automation entry source (shapes of the real exports)."""
     jid = pkg.gid("journey", journey.name)
     pkg.journey_id = jid
@@ -167,6 +204,12 @@ def add_journey_ext(pkg: Package, journey: Journey, event_id: str, trigger_type:
                 "eventDefinitionId": ref("eventDefinitions", event_id, "id"), "eventDefinitionKey": key_ref,
                 "iconUrl": event["iconUrl"], "title": ""}
         name = "TRIGGER"
+    elif trigger_type == "APIEvent":
+        config = {"filterDefinitionId": ZERO_GUID, "criteria": "", "schemaVersionId": 0}
+        meta = {"chainType": "None", "configurationRequired": False,
+                "eventDefinitionId": ref("eventDefinitions", event_id, "id"), "eventDefinitionKey": key_ref,
+                "iconUrl": "/images/icon-api-event.svg", "title": "API Event"}
+        name = "TRIGGER"
     else:
         config = {"filterDefinitionId": ZERO_GUID, "criteria": "", "schemaVersionId": 0}
         meta = {"category": "Audience", "chainType": "None", "configurationRequired": False,
@@ -177,7 +220,7 @@ def add_journey_ext(pkg: Package, journey: Journey, event_id: str, trigger_type:
     pkg.add("journeys", jid, {
         "name": journey.name, "key": pkg.gid("journey-key", journey.name), "workflowApiVersion": 1,
         "description": "", "channel": "", "defaults": defaults, "definitionType": "Multistep",
-        "entryMode": entry_mode, "executionMode": "Production", "exits": [], "goals": [],
+        "entryMode": entry_mode, "executionMode": "Production", "exits": exits or [], "goals": goals or [],
         "metaData": {"highThroughputSending": {"email": False}},
         "triggers": [{"arguments": trigger_args, "configurationArguments": config, "description": "",
                       "id": pkg.gid("trigger", journey.name), "key": "TRIGGER", "metaData": meta, "name": name,
@@ -580,6 +623,175 @@ def build_unused_asset() -> dict:
     return export(pkg)
 
 
+# -- entry sources, entry filter / goal / exit, assumptions, one active scenario, operators ------------------
+
+def build_scheduled_entry() -> dict:
+    pkg = Package("scheduled_entry", "EX scheduled entry")
+    entry_table(pkg, "DE_SC_Entry", [text("Tier", 20)])
+    log_table(pkg, "DE_SC_Log")
+    j = Journey(pkg, "EX_ScheduledEntry")
+    event_id, _ = add_scheduled_de_entry(pkg, j.name, "DE_SC_Entry")
+    j.decision("SPLIT-1", "Tier", [
+        ("path_a", "Gold", criteria(jd_cond(event_id, "Tier", "Equal", "Gold")), "UPDATE-1", "Tier equal Gold"),
+        ("remainder_path", "Remainder", None, "UPDATE-2", None)])
+    log(j, "UPDATE-1", "Gold welcome", "DE_SC_Log", "GoldWelcome", None)
+    log(j, "UPDATE-2", "Standard welcome", "DE_SC_Log", "StandardWelcome", None)
+    add_journey_ext(pkg, j, event_id, "EmailAudience")
+    return export(pkg)
+
+
+def build_api_event_entry() -> dict:
+    pkg = Package("api_event_entry", "EX api event entry")
+    entry_table(pkg, "DE_AP_Event", [number("Quantity")])
+    log_table(pkg, "DE_AP_Log")
+    j = Journey(pkg, "EX_ApiEventEntry")
+    event_id, _ = add_api_event(pkg, j.name, "DE_AP_Event")
+    j.decision("SPLIT-1", "Quantity", [
+        ("path_a", "Many", criteria(jd_cond(event_id, "Quantity", "GreaterThan", "5")), "UPDATE-1",
+         "Quantity greater than 5"),
+        ("remainder_path", "Remainder", None, "UPDATE-2", None)])
+    log(j, "UPDATE-1", "Bulk order", "DE_AP_Log", "Bulk", None)
+    log(j, "UPDATE-2", "Small order", "DE_AP_Log", "Small", None)
+    add_journey_ext(pkg, j, event_id, "APIEvent")
+    return export(pkg)
+
+
+def build_entry_filter_goal_exit() -> dict:
+    pkg = Package("entry_filter_goal_exit", "EX entry filter goal exit")
+    entry_table(pkg, "DE_GE_Entry", [text("Segment", 20), boolean("Optin")])
+    log_table(pkg, "DE_GE_Log")
+    j = Journey(pkg, "EX_EntryFilterGoalExit")
+    event_id, _ = add_de_entry(pkg, j.name, "DE_GE_Entry")
+    j.decision("SPLIT-1", "Opt-in", [
+        ("path_a", "true", criteria(jd_cond(event_id, "Optin", "Is", "true")), "UPDATE-1", "Optin is True"),
+        ("remainder_path", "Remainder", None, "UPDATE-2", None)])
+    log(j, "UPDATE-1", "Opted in", "DE_GE_Log", "OptedIn", None)
+    log(j, "UPDATE-2", "Not opted in", "DE_GE_Log", "NotOptedIn", None)
+    # An entry filter on the entry event and its trigger, a goal and an exit criterion on the journey.
+    entry_filter = criteria(jd_cond(event_id, "Segment", "Equal", "Premium"))
+    event = pkg.entities["eventDefinitions"][event_id]["data"]
+    event["arguments"]["criteria"] = entry_filter
+    event["metaData"]["criteriaDescription"] = "Segment equal Premium"
+    goal = {"id": pkg.gid("goal", j.name), "key": "GOAL-1", "name": "Premium purchase", "description": "",
+            "configurationArguments": {"criteria": criteria(jd_cond(event_id, "Segment", "Equal", "Bought")),
+                                       "filterDefinitionId": pkg.gid("goal-filter", j.name)},
+            "metaData": {"isConfigured": True}}
+    exit_criterion = {"id": pkg.gid("exit", j.name), "key": "EXIT-1", "name": "Unsubscribed", "description": "",
+                      "configurationArguments": {"criteria": criteria(jd_cond(event_id, "Segment", "Equal", "Out")),
+                                                 "filterDefinitionId": pkg.gid("exit-filter", j.name)},
+                      "metaData": {"isConfigured": True}}
+    add_journey_ext(pkg, j, event_id, "EmailAudience", goals=[goal], exits=[exit_criterion])
+    trigger = pkg.entities["journeys"][pkg.journey_id]["data"]["triggers"][0]
+    trigger["configurationArguments"].update({"criteria": entry_filter,
+                                              "filterDefinitionId": pkg.gid("entry-filter", j.name)})
+    trigger["metaData"]["criteriaDescription"] = "Segment equal Premium"
+    return export(pkg)
+
+
+def build_assumptions_minimal() -> dict:
+    pkg = Package("assumptions_minimal", "EX assumptions minimal")
+    entry_table(pkg, "DE_AM_Entry", [number("Score")])
+    log_table(pkg, "DE_AM_Log")
+    j = Journey(pkg, "EX_AssumptionsMinimal")
+    event_id, _ = add_de_entry(pkg, j.name, "DE_AM_Entry")
+    j.decision("SPLIT-1", "Score", [
+        ("path_a", "High", criteria(jd_cond(event_id, "Score", "GreaterThan", "50")), "UPDATE-1",
+         "Score greater than 50"),
+        ("remainder_path", "Remainder", None, "UPDATE-2", None)])
+    log(j, "UPDATE-1", "High score", "DE_AM_Log", "High", None)
+    log(j, "UPDATE-2", "Low score", "DE_AM_Log", "Low", None)
+    add_journey_ext(pkg, j, event_id, "EmailAudience")
+    return export(pkg)
+
+
+def build_assumptions_wait() -> dict:
+    pkg = Package("assumptions_wait", "EX assumptions wait")
+    setup_contact_only(pkg, [date("WaitOn"), number("Score")])
+    m = "DE_Master"
+    j = Journey(pkg, "EX_AssumptionsWait")
+    j.wait_attribute("WAIT-1", m, "WaitOn", "SPLIT-1")
+    j.decision("SPLIT-1", "Score", [
+        ("path_a", "High", criteria(pkg.cond(m, "Score", "GreaterThan", "50")), "UPDATE-1", "Score greater than 50"),
+        ("remainder_path", "Remainder", None, "UPDATE-2", None)])
+    B.log_update(j, "UPDATE-1", "High score", "High", None)
+    B.log_update(j, "UPDATE-2", "Low score", "Low", None)
+    event = add_entry_source(pkg, j.name, "DE_Entry", "Q_EX_AssumptionsWait_Entry", sql_master_only(pkg))
+    add_journey(pkg, j, event)
+    return export(pkg)
+
+
+def build_run_once_one_active() -> dict:
+    pkg = Package("run_once_one_active", "EX run once one active")
+    entry_table(pkg, "DE_RS_Entry", [text("CampaignName", 100, nullable=False)])
+    pkg.table("DE_RS_Config", [text("CampaignName", 100, pk=True, nullable=False), text("CHANNEL", 20, nullable=False),
+                               boolean("ACTIVE", nullable=False, default="False")])
+    log_table(pkg, "DE_RS_Log")
+    pkg.contact_model([("DE_RS_Entry", "SubscriberKey", ""), ("DE_RS_Config", "CampaignName", "CampaignName")])
+    c = "DE_RS_Config"
+    j = Journey(pkg, "EX_RunOnceOneActive")
+    event_id, _ = add_de_entry(pkg, j.name, "DE_RS_Entry")
+    j.decision("SPLIT-1", "Channel", [
+        ("path_a", "Email", criteria(pkg.cond(c, "CHANNEL", "Equal", "Email")), "UPDATE-1", "CHANNEL equal Email"),
+        ("remainder_path", "Remainder", None, "UPDATE-2", None)])
+    log(j, "UPDATE-1", "Email campaign", "DE_RS_Log", "Email", None)
+    log(j, "UPDATE-2", "Other campaign", "DE_RS_Log", "Other", None)
+    add_journey_ext(pkg, j, event_id, "EmailAudience")
+    return export(pkg)
+
+
+def build_operators_number_comparison() -> dict:
+    pkg = Package("operators_number_comparison", "EX operators number comparison")
+    setup_contact_only(pkg, [number("Score")])
+    m = "DE_Master"
+    j = Journey(pkg, "EX_OperatorsNumberComparison")
+    j.decision("SPLIT-1", "Below 50", [
+        ("path_a", "Low", criteria(pkg.cond(m, "Score", "LessThan", "50")), "UPDATE-1", "Score less than 50"),
+        ("remainder_path", "Remainder", None, "SPLIT-2", None)])
+    j.decision("SPLIT-2", "100 or more", [
+        ("path_a", "High", criteria(pkg.cond(m, "Score", "GreaterThanOrEqual", "100")), "UPDATE-2",
+         "Score greater than or equal 100"),
+        ("remainder_path", "Remainder", None, "SPLIT-3", None)])
+    j.decision("SPLIT-3", "Up to 75", [
+        ("path_a", "Mid low", criteria(pkg.cond(m, "Score", "LessThanOrEqual", "75")), "UPDATE-3",
+         "Score less than or equal 75"),
+        ("remainder_path", "Mid high", None, "UPDATE-4", None)])
+    B.log_update(j, "UPDATE-1", "Low score", "Low", None)
+    B.log_update(j, "UPDATE-2", "High score", "High", None)
+    B.log_update(j, "UPDATE-3", "Mid low score", "MidLow", None)
+    B.log_update(j, "UPDATE-4", "Mid high score", "MidHigh", None)
+    event = add_entry_source(pkg, j.name, "DE_Entry", "Q_EX_OperatorsNumberComparison_Entry", sql_master_only(pkg))
+    add_journey(pkg, j, event)
+    return export(pkg)
+
+
+def build_operators_text() -> dict:
+    pkg = Package("operators_text", "EX operators text")
+    setup_contact_only(pkg, [text("Code", 30)])
+    m = "DE_Master"
+    j = Journey(pkg, "EX_OperatorsText")
+    j.decision("SPLIT-1", "Starts with VIP", [
+        ("path_a", "VIP", criteria(pkg.cond(m, "Code", "BeginsWith", "VIP")), "UPDATE-1", "Code begins with VIP"),
+        ("remainder_path", "Remainder", None, "SPLIT-2", None)])
+    j.decision("SPLIT-2", "Ends with -EU", [
+        ("path_a", "EU", criteria(pkg.cond(m, "Code", "EndsWith", "-EU")), "UPDATE-2", "Code ends with -EU"),
+        ("remainder_path", "Remainder", None, "SPLIT-3", None)])
+    j.decision("SPLIT-3", "Contains TEST", [
+        ("path_a", "Test", criteria(pkg.cond(m, "Code", "Contains", "TEST")), "UPDATE-3", "Code contains TEST"),
+        ("remainder_path", "Remainder", None, "SPLIT-4", None)])
+    j.decision("SPLIT-4", "Not blocked", [
+        ("path_a", "Not blocked", criteria(pkg.cond(m, "Code", "NotEqual", "BLOCKED")), "UPDATE-4",
+         "Code not equal BLOCKED"),
+        ("remainder_path", "Blocked", None, "UPDATE-5", None)])
+    B.log_update(j, "UPDATE-1", "VIP code", "Vip", None)
+    B.log_update(j, "UPDATE-2", "EU code", "Eu", None)
+    B.log_update(j, "UPDATE-3", "Test code", "Test", None)
+    B.log_update(j, "UPDATE-4", "Ordinary code", "Ordinary", None)
+    B.log_update(j, "UPDATE-5", "Blocked code", "Blocked", None)
+    event = add_entry_source(pkg, j.name, "DE_Entry", "Q_EX_OperatorsText_Entry", sql_master_only(pkg))
+    add_journey(pkg, j, event)
+    return export(pkg)
+
+
 EXTENSION = {
     "journey_data_split": build_journey_data_split,
     "journey_data_snapshot": build_journey_data_snapshot,
@@ -598,6 +810,14 @@ EXTENSION = {
     "single_entry_all_versions": build_single_entry_all_versions,
     "default_missing_column": build_default_missing_column,
     "unused_asset": build_unused_asset,
+    "scheduled_entry": build_scheduled_entry,
+    "api_event_entry": build_api_event_entry,
+    "entry_filter_goal_exit": build_entry_filter_goal_exit,
+    "assumptions_minimal": build_assumptions_minimal,
+    "assumptions_wait": build_assumptions_wait,
+    "run_once_one_active": build_run_once_one_active,
+    "operators_number_comparison": build_operators_number_comparison,
+    "operators_text": build_operators_text,
 }
 
 

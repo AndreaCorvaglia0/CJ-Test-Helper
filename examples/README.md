@@ -53,6 +53,14 @@ only then is `expected.json` changed (in the same commit). A failing example is 
 | `once_and_done_entry`, `single_entry_all_versions` | `entryMode` OnceAndDone / SingleEntryAcrossAllVersions with an automation entry | 1 / 2 / 6; testbook names the run identifier |
 | `default_missing_column` | `defaults.mobileNumber` naming a column the entry table lacks | 1 / 2 / 6; report names the column |
 | `unused_asset` | An image and an email no activity uses, with an unresolvable `publishedURL` reference | 1 / 2 / 6; no warning and no report line about them |
+| `scheduled_entry` | Data extension entry with a recurring schedule (`scheduleFlowMode` `recurring`, spelling invented) | 1 / 2 / 6; report and testbook: procedure "da verificare", entry at the next evaluation; no Run Once sentences |
+| `api_event_entry` | `APIEvent` entry source, Journey Data `GreaterThan` on a Number | 1 / 2 / 6; report and testbook: test a copy of the journey with a DE entry; the entry CSV is for that DE |
+| `entry_filter_goal_exit` | Entry filter, one goal and one exit criterion on the journey | 1 / 2 / 6; report names all three (not modelled; contacts may not enter or may leave early) |
+| `assumptions_minimal` | Number-only journey, single condition, Run Once: none of the six assumptions of the spec is triggered | 1 / 2 / 6; report lists none of the six |
+| `assumptions_wait` | Wait by attribute on a Date field: past date, import format and time zone triggered, the other three not | 1 / 2 / 6; report lists those three only |
+| `run_once_one_active` | Run Once with the settings "one active scenario" forced, scenario-level Config with `ACTIVE` | 2 / 2 / 6; scenarios enter together; no one-row-at-a-time procedure |
+| `operators_number_comparison` | `LessThan`, `GreaterThanOrEqual`, `LessThanOrEqual` on a Number, three splits in series | 1 / 4 / 12; values strictly inside (<50, >100, 50..75, 75..100), not null |
+| `operators_text` | `BeginsWith`, `EndsWith`, `Contains`, `NotEqual` on a Text, four splits in series | 1 / 5 / 15; the remainder of `NotEqual` is exactly `BLOCKED` |
 | `pilot` | The spec's acceptance criteria on the real export (default settings + real inbox) | >= 23 scenarios, >= 33 cases, >= 146 contacts (proven minima); 137 of 259 branches unreachable |
 | `pilot_case_insensitive` | The pilot with case-insensitive text (what the earlier tool assumed) | >= 41 / 59 / 224 (41 is the earlier tool's "40 + 1"); 91 unreachable |
 

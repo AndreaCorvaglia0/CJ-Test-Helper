@@ -1,0 +1,62 @@
+{
+  "journey_name": "EX_RunOnceOneActive",
+  "activity_count": 3,
+  "csv_tables": [
+    "DE_RS_Entry",
+    "DE_RS_Config"
+  ],
+  "table_levels": {
+    "DE_RS_Entry": "contact",
+    "DE_RS_Config": "scenario"
+  },
+  "branches": {
+    "SPLIT-1/path_a": {
+      "status": "covered"
+    },
+    "SPLIT-1/remainder_path": {
+      "status": "covered"
+    }
+  },
+  "scenario_count": {
+    "min": 2,
+    "max": 2
+  },
+  "case_count": {
+    "min": 2,
+    "max": 2
+  },
+  "contact_count": 6,
+  "cases": [
+    {
+      "scenario_values": {
+        "DE_RS_Config.CHANNEL": "Email"
+      },
+      "end_activity": "UPDATE-1",
+      "manual_actions": [],
+      "contact_count": 3
+    },
+    {
+      "end_activity": "UPDATE-2",
+      "manual_actions": [],
+      "contact_count": 3
+    }
+  ],
+  "unsupported": [],
+  "settings": {
+    "one_active_scenario": true,
+    "activation_field": [
+      "DE_RS_Config",
+      "ACTIVE"
+    ]
+  },
+  "report_contains": [
+    "entrano insieme"
+  ],
+  "report_not_contains": [
+    "Per rendere attivo",
+    "imposta ACTIVE",
+    "rendi attivo lo scenario successivo",
+    "sì, campo di attivazione"
+  ],
+  "checks_pass": true
+}
