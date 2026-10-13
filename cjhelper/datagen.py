@@ -49,6 +49,7 @@ from typing import Optional
 from .graph import CURRENT_DATE_DEFAULTS, case_paths, fixed_wait_minutes
 from .model import (
     ENTRY_AUTOMATION,
+    ENTRY_RUN_ONCE,
     GENERATED_KEY,
     KIND_DECISION,
     KIND_WAIT_ATTRIBUTE,
@@ -163,6 +164,12 @@ def generate_data(
     return _Generator(package, model, coverage, settings, generation_time).run()
 
 
+def one_active_not_offered(package: Package) -> bool:
+    """Spec, "Entry source and procedure": with a Run Once entry "All scenarios enter together, so 'one
+    active scenario at a time' is not offered"."""
+    return package.entry_event is not None and package.entry_event.kind == ENTRY_RUN_ONCE
+
+
 def activation_setting(
     package: Package, model: TableModel, settings: Settings
 ) -> tuple[bool, Optional[FieldRef], list[str]]:
@@ -176,11 +183,20 @@ def activation_setting(
     The field comes from ``settings.activation_field``, else ``model.activation_field``. The mode
     needs a Boolean field of a table that gets a CSV; otherwise it is switched off with a warning.
     The returned field uses the schema spelling.
+
+    Spec, "Entry source and procedure", Run Once row: "All scenarios enter together, so 'one active scenario
+    at a time' is not offered": on a Run Once entry the setting is ignored, with a warning saying why.
     """
     warnings: list[str] = []
     ref = settings.activation_field or model.activation_field
     on = settings.one_active_scenario if settings.one_active_scenario is not None else ref is not None
     if not on:
+        return False, None, warnings
+    if one_active_not_offered(package):
+        warnings.append(
+            "L'impostazione \"Un solo scenario attivo alla volta\" non si applica a un ingresso Run Once: tutti gli "
+            "scenari entrano insieme quando il journey viene attivato, quindi tutti gli scenari sono attivi nel CSV."
+        )
         return False, None, warnings
     if ref is None:
         warnings.append(
@@ -329,13 +345,20 @@ def _minutes_text(minutes: int) -> str:
     return _count(minutes, "minuto", "minuti")
 
 
-def manual_wait_rank(wait_key: str, case: Case, activities: Optional[dict] = None) -> int:
-    """0 when the wait gives no time for a manual action; otherwise the position of its manual
-    action on the path (1 for the first engagement split, 2 for the second, ...), so that each
-    deadline comes one offset after the previous one."""
+def manual_wait_delay(wait_key: str, case: Case, offset_hours: int,
+                      activities: Optional[dict] = None) -> Optional[timedelta]:
+    """How long after the generation time a wait by attribute that leaves time for a manual action ends; None
+    when it lies between no email and the engagement split that needs an action on it.
+
+    Spec, "Dates", "Wait date before an engagement split", as decided by the team on 13 October 2026: the
+    fixed waits before the email on the path delay its arrival, so they are added to the date, and the window
+    still lasts the offset: generation time + the fixed waits before the email + the offset multiplied by
+    the position of the manual action on the path (1 for the first engagement split, 2 for the second, ...), so
+    that each deadline comes one offset after the previous one. A wait whose duration is unknown, and a wait
+    by attribute, count 0 here; ``_fill_timing`` still warns when the window is too short."""
     if not case.manual_actions:
-        return 0
-    best = 0
+        return None
+    best: Optional[timedelta] = None
     for keys in case_paths(case):
         if wait_key not in keys:
             continue
@@ -344,8 +367,16 @@ def manual_wait_rank(wait_key: str, case: Case, activities: Optional[dict] = Non
         for position, action in enumerate(actions, start=1):
             end = keys.index(action.activity_key)
             start = keys.index(action.email_activity_key) if action.email_activity_key in keys[:end] else -1
-            if wait_key in keys[start + 1:end]:
-                best = max(best, position)
+            if wait_key not in keys[start + 1:end]:
+                continue
+            before = 0
+            for key in keys[:max(start, 0)]:
+                activity = (activities or {}).get(key)
+                if activity is not None and activity.kind in _WAIT_KINDS:
+                    before += fixed_wait_minutes(activity) or 0
+            delay = timedelta(hours=offset_hours * position, minutes=before)
+            if best is None or delay > best:
+                best = delay
     return best
 
 
@@ -906,18 +937,18 @@ class _Generator:
     def _wait_value(self, wait_keys: tuple[str, ...], row: _Row) -> str:
         """Spec, "Dates": a wait date is the generation time plus the wait offset (default 0 hours, "so
         the wait ends at once"), or plus the offset before an engagement split (default 24 hours)
-        when a case crosses the wait and later needs a manual action. A scenario-level field is decided
-        over all the cases of its scenario, a contact-level field for the contact's own case."""
+        when a case crosses the wait and later needs a manual action; in that case the fixed waits before
+        the email are added too (``manual_wait_delay``, team decision of 13 October 2026). A scenario-level
+        field is decided over all the cases of its scenario, a contact-level field for the contact's own case."""
         cases = [row.case] if row.case is not None else list(row.scenario.cases)
         activities = self.package.journey.activities
-        rank = max((manual_wait_rank(key, case, activities) for case in cases for key in wait_keys), default=0)
-        if rank:
-            # Two engagement splits on one path need two deadlines: the second wait ends one offset
-            # after the first, so that the second email is sent before its own deadline starts.
-            hours = self.settings.wait_offset_before_engagement_hours * rank
-        else:
-            hours = self.settings.wait_offset_hours
-        return self._format_date(self.generation_time + timedelta(hours=hours))
+        # Two engagement splits on one path need two deadlines: the second wait ends one offset after the
+        # first, so that the second email is sent before its own deadline starts (``manual_wait_delay``).
+        delays = [manual_wait_delay(key, case, self.settings.wait_offset_before_engagement_hours, activities)
+                  for case in cases for key in wait_keys]
+        delays = [d for d in delays if d is not None]
+        delay = max(delays) if delays else timedelta(hours=self.settings.wait_offset_hours)
+        return self._format_date(self.generation_time + delay)
 
     def _email_value(self, table: Table, field: Field, row: _Row) -> str:
         """Spec, "Email": the contact's address (see ``_build_contacts``)."""
@@ -1204,7 +1235,7 @@ class _Generator:
                 f"L'email {email_name!r} arriva non prima del {window.email_not_before}, per {delay}, e la scadenza "
                 f"per {verb} l'email prima dell'engagement split {split_name} è il {window.deadline}: {time_left}. "
                 "L'offset della data di wait prima di un engagement split si cambia nelle impostazioni: per dare "
-                "tempo al tester deve superare di almeno un'ora il ritardo dell'email."
+                "tempo al tester va alzato."
             )
         elif window.attribute_wait_key is not None:
             self._warn(

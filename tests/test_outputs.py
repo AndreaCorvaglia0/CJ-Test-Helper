@@ -438,11 +438,16 @@ def test_run_once_procedure_in_report_and_testbook():
     assert "è lo scheduler che Journey Builder crea per la pianificazione della data extension" in assumptions
 
 
-def test_run_once_with_one_active_scenario_says_it_cannot_work():
-    how = _how_to_run(write_report(_with_entry(ENTRY_RUN_ONCE)))
-    assert ("con un'entry source Run Once tutti gli scenari entrano insieme quando il journey viene attivato, quindi "
-            "non si può eseguire uno scenario alla volta. Genera di nuovo i dati con l'impostazione \"Un solo "
-            "scenario attivo alla volta\" disattivata.") in how
+def test_run_once_ignores_one_active_scenario():
+    """Spec, Run Once row: "All scenarios enter together, so 'one active scenario at a time' is not offered": the
+    setting is ignored, the report gives no row-switching procedure and says why in the settings table."""
+    report = write_report(_with_entry(ENTRY_RUN_ONCE))
+    how = _how_to_run(report)
+    assert ("Tutti gli scenari entrano insieme quando il journey viene attivato, quindi vengono eseguiti insieme: con "
+            "Run Once non si può eseguire uno scenario alla volta.") in how
+    assert "rendi attivo lo scenario successivo" not in report and "sì, campo di attivazione" not in report
+    assert ("| Un solo scenario attivo alla volta, come applicato | no: non si applica a un ingresso Run Once, dove "
+            "tutti gli scenari entrano insieme |") in report
 
 
 def test_other_entry_sources_use_a_copy_of_the_journey():

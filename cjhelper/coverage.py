@@ -29,8 +29,8 @@ Spec, "Extensions beyond the pilot":
 - Preference. Among values that cover the same branches, the generator prefers those whose
   path rests on no unverified assumption: not null, row present, then values inside the
   ranges rather than on a named value (``_preference``). It decides the representative of
-  each contact class and the scenario kept for each signature; among different scenarios
-  crossing the same branches it looks only at values inside ranges (``_preferred_per_mask``).
+  each contact class, the scenario kept for each signature and, among different scenarios
+  crossing the same branches, the one the cover can choose (``_preferred_per_mask``).
 - Honest outcomes. A path that stops at an element the PoC cannot evaluate is marked
   ``Case.unknown_from``; each manual action gets its window (``Case.action_windows``) and
   each case its minimum duration, from the waits on its path.
@@ -953,14 +953,13 @@ class CoverageEngine:
         can only ever choose the first of them in the shuffled order (the others never gain more), so that
         place goes to the preferred one, and the others are dropped. Ties keep the shuffled order.
 
-        Here the preference looks only at values inside ranges (scenario-level fields have no row present /
-        row absent variable). A not-null preference between different scenarios would change the pilot
-        (S18 would get CHANNEL2 = OTHER instead of empty), and the pilot files must stay byte-identical
-        (spec, "Acceptance beyond the pilot"), so that choice is left to the team."""
+        The full preference applies (not null, then values inside ranges; scenario-level fields have no row
+        present / row absent variable). The team accepted on 13 October 2026 the one pilot difference this
+        makes: S18 gets CHANNEL2 = OTHER instead of empty."""
         best: dict[int, tuple] = {}
         for cand in candidates:
             held = best.get(cand[2])
-            if held is None or self._preference(cand[1])[2] < self._preference(held[1])[2]:
+            if held is None or self._preference(cand[1]) < self._preference(held[1]):
                 best[cand[2]] = cand
         out = []
         for cand in candidates:

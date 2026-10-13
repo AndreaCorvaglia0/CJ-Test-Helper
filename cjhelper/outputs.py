@@ -47,6 +47,7 @@ from .datagen import (
     UNDELIVERABLE_DOMAIN,
     activation_setting,
     boolean_text,
+    one_active_not_offered,
     case_paths,
     wait_precedes_manual_action,
 )
@@ -1678,10 +1679,6 @@ def _how_to_run(result: GenerationResult, context: _TestbookContext) -> str:
         if automation and _activation_is_entry_filter(result, context.activation_ref):
             parts.append(f"{field} è un filtro della entry query e nessuno split lo legge, quindi con l'import "
                          "diretto non trattiene alcuno scenario.")
-        if kind == ENTRY_RUN_ONCE:
-            parts.append("Attenzione: con un'entry source Run Once tutti gli scenari entrano insieme quando il journey "
-                         "viene attivato, quindi non si può eseguire uno scenario alla volta. Genera di nuovo i dati "
-                         "con l'impostazione \"Un solo scenario attivo alla volta\" disattivata.")
     elif kind == ENTRY_RUN_ONCE and result.coverage.scenarios:
         parts.append("Tutti gli scenari entrano insieme quando il journey viene attivato, quindi vengono eseguiti "
                      "insieme: con Run Once non si può eseguire uno scenario alla volta.")
@@ -2382,8 +2379,13 @@ def _section_settings(result: GenerationResult) -> str:
     rows = [[_SETTING_LABELS.get(f.name, f.name), _setting_text(f.name, getattr(result.settings, f.name), result)]
             for f in dataclasses.fields(result.settings)]
     on, ref, _ = activation_setting(result.package, result.table_model, result.settings)
-    rows.append(["Un solo scenario attivo alla volta, come applicato",
-                 f"sì, campo di attivazione {ref[0]}.{ref[1]}" if on else "no"])
+    if on:
+        applied = f"sì, campo di attivazione {ref[0]}.{ref[1]}"
+    elif one_active_not_offered(result.package):
+        applied = "no: non si applica a un ingresso Run Once, dove tutti gli scenari entrano insieme"
+    else:
+        applied = "no"
+    rows.append(["Un solo scenario attivo alla volta, come applicato", applied])
     return "\n\n".join(["## Impostazioni usate", _md_table(["Impostazione", "Valore"], rows)])
 
 

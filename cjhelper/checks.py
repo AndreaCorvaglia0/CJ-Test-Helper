@@ -371,6 +371,9 @@ class Checker:
         one_active = self.settings.one_active_scenario
         if one_active is None:
             one_active = activation is not None
+        entry_event = self.package.entry_event
+        if entry_event is not None and entry_event.kind == ENTRY_RUN_ONCE:
+            one_active = False   # spec: with Run Once "'one active scenario at a time' is not offered"
         kept = []
         for combo in joined:
             ok = True

@@ -35,7 +35,10 @@ Rules of the spec section "Extensions beyond the pilot (agreed 12 October 2026)"
 - ``Between``: a value not written ``low|high`` makes the branch unsupported.
 - Missing relationship: a Contact Data condition on an attribute set that no relationship of the
   export names is unsupported, "relazione mancante nell'export" (``Package.missing_relationships``).
-- Package Manager ``issues`` of level warning or error (top level and per entity) become warnings.
+- Package Manager ``issues`` of level warning or error (top level and per entity) become warnings; the
+  level is the most severe of the issue and its cause. On content the journey uses only indirectly (an
+  image inside a sent email, a landing page the journey reaches through references) only the errors are
+  kept (team decision, 13 October 2026).
 - Entry source: the event definition's type and ``metaData.scheduleFlowMode`` give
   ``EntryEvent.kind`` (``ENTRY_SOURCE_TYPES`` and ``SCHEDULE_FLOW_MODES``, one lookup table each). An
   ``automationId`` is a feeding automation only for an automation entry: on a data extension entry it
@@ -175,7 +178,7 @@ def load_package(source: Any) -> Package:
             continue
         resolved[kind] = {entity_id: _resolve(entity, entities, _filtered_sink(warnings, sent, (kind, entity_id)))
                           for entity_id, entity in group.items()}
-    for text in _package_issues(export, entities, journey_id, sent):
+    for text in _package_issues(export, entities, journey_id, sent, _indirect_content(entities, journey_id, sent)):
         _warn(warnings, text)
     return _ExportReader(resolved, warnings).read_package(str(export.get("name") or ""), journey_id)
 
@@ -363,6 +366,32 @@ def _unused_content(kind: Optional[str], entity_id: Any, sent: set[str]) -> bool
     return kind in CONTENT_KINDS and str(entity_id) not in sent
 
 
+def _indirect_content(entities: dict, journey_id: str, sent: set[str]) -> set[str]:
+    """Ids of the assets and landing pages the journey uses only indirectly: reached through references
+    (``{{mcpm#/entities/...}}``) from the journey, its sent emails and whatever they reference in turn, other
+    journeys left out, but not sent by an Email activity. An image inside a sent email, or a landing page an
+    email or the entry event links to, is one."""
+    seen: set[tuple[str, str]] = set()
+    queue = [("journeys", journey_id)] + [("assets", asset_id) for asset_id in sent]
+    found: set[str] = set()
+    while queue:
+        kind, entity_id = queue.pop()
+        if (kind, entity_id) in seen:
+            continue
+        seen.add((kind, entity_id))
+        group = entities.get(kind)
+        entity = group.get(entity_id) if isinstance(group, dict) else None
+        if entity is None:
+            continue
+        if kind in CONTENT_KINDS and entity_id not in sent:
+            found.add(entity_id)
+        for match in REFERENCE.finditer(json.dumps(entity)):
+            ref_kind, ref_id = match.group(1), match.group(2)
+            if ref_kind != "journeys" and (ref_kind, ref_id) not in seen:
+                queue.append((ref_kind, ref_id))
+    return found
+
+
 def _filtered_sink(warnings: list[str], sent: set[str], resolving: Optional[tuple[str, str]]) -> WarningSink:
     """Collect the warnings met while resolving one entity, except those about unused assets.
 
@@ -394,15 +423,22 @@ _ISSUE_HOSTS = {
     "attributeSets": "sull'attribute set",
     "attributeRelationships": "sulla relazione",
     "assets": "sull'asset",
+    "landingPages": "sulla landing page",
+    "primaryLandingPages": "sulla landing page",
+    "cloudPageCollections": "sulla collection CloudPages",
 }
 
 
-def _package_issues(export: dict, entities: dict, journey_id: str, sent: set[str]) -> list[str]:
+def _package_issues(export: dict, entities: dict, journey_id: str, sent: set[str],
+                    indirect: frozenset[str] | set[str] = frozenset()) -> list[str]:
     """Spec: "Package Manager issues of level warning or error are listed in the report".
 
-    Issues are read at the top level of the export and on every entity (other journeys left out). An
-    issue sitting on, or naming, an asset or landing page the journey does not send is dropped, like
-    the other warnings about assets the journey does not use. Returned as plain Italian sentences.
+    Issues are read at the top level of the export and on every entity (other journeys left out). The
+    level of an issue is the most severe of the issue and its cause. An issue sitting on, or naming, an
+    asset or landing page the journey does not use is dropped, like the other warnings about assets the
+    journey does not use. On content the journey uses only indirectly (``indirect``, or content named by an
+    issue of an email or page the journey uses: an image inside a sent email) only the errors are kept
+    (team decision, 13 October 2026). Returned as plain Italian sentences.
     """
     found: list[tuple[Optional[str], str, dict]] = [(None, "", issue) for issue in _list(export.get("issues"))]
     for kind, group in entities.items():
@@ -414,7 +450,10 @@ def _package_issues(export: dict, entities: dict, journey_id: str, sent: set[str
             found.extend((kind, entity_id, issue) for issue in _list(entity.get("issues")))
     texts: list[str] = []
     for kind, entity_id, issue in found:
-        if not isinstance(issue, dict) or _unused_content(kind, entity_id, sent):
+        if not isinstance(issue, dict):
+            continue
+        indirectly_used = _unused_content(kind, entity_id, sent)
+        if indirectly_used and str(entity_id) not in indirect:
             continue
         levels = {str(issue.get("level") or "").upper(), str(_dict(issue.get("cause")).get("level") or "").upper()}
         if not levels & set(ISSUE_LEVELS):
@@ -423,6 +462,10 @@ def _package_issues(export: dict, entities: dict, journey_id: str, sent: set[str
         location = _dict(missing.get("locationInformation"))
         sent_by_journey = ACTIVITY_KINDS.get(str(location.get("activityType") or "")) == KIND_EMAIL
         if _unused_content(missing.get("entityType"), missing.get("value"), sent) and not sent_by_journey:
+            if kind not in CONTENT_KINDS:
+                continue
+            indirectly_used = True   # named by an email or page the journey uses: an image inside it
+        if indirectly_used and "ERROR" not in levels:
             continue
         level = "un errore" if "ERROR" in levels else "un warning"
         texts.append(f"Package Manager segnala {level} {_issue_host(entities, kind, entity_id)}: "
@@ -1062,13 +1105,13 @@ class _ExportReader:
                 if event_key == entry.key:
                     column = _event_field(expression)
                     if column and entry_table is not None and entry_table.field(column) is None:
-                        self.warn(f"Il valore predefinito {default_name} del journey legge il campo {column} "
+                        self.warn(f"Il valore di default {default_name} del journey legge il campo {column} "
                                   f"dell'entry event, ma la tabella di ingresso {entry_table.name} non ha questo "
                                   "campo.")
                     continue
                 other_name = self.event_name(event_key)
                 other = f"{event_key} ({other_name})" if other_name else event_key
-                self.warn(f"Il valore predefinito {default_name} del journey legge {expression} dall'entry event "
+                self.warn(f"Il valore di default {default_name} del journey legge {expression} dall'entry event "
                           f"{other}, non dall'entry event del journey, {entry.key} ({entry.name}).")
 
     # -- journey ----------------------------------------------------------------

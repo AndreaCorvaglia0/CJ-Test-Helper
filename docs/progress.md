@@ -112,7 +112,7 @@ Spec, "Acceptance beyond the pilot": sul pilota CSV e `scenarios.csv` restano id
 report.md e del testbook vanno elencate per il team. Confronto con gli output di prima delle estensioni, stessa ora di
 generazione (2026-10-11 12:00), stesso run identifier e stesso seed.
 
-### Differenze sul pilota
+### Differenze sul pilota (prima delle decisioni del 13 ottobre)
 
 - I quattro CSV e `scenarios.csv`: identici.
 - report.md: identico.
@@ -123,34 +123,46 @@ generazione (2026-10-11 12:00), stesso run identifier e stesso seed.
   percorso prima del 2026-10-11 12:01." in 3; "Durata minima del test: 1 minuto." in 1. Il test che non cambia
   (S19-C01) non ha wait sul percorso.
 
-### Da decidere con il team
+### Decisioni del team (13 ottobre)
 
-1. **Preferenza "not null" e pilota identico (scenario S18).** La spec chiede che, tra valori che coprono gli stessi
-   branch, il generatore preferisca quelli il cui percorso non dipende da assunzioni non verificate ("not null, row
-   present"), e che sul pilota CSV e `scenarios.csv` restino identici. Sul pilota le due regole si contraddicono in un
-   solo punto: applicando la preferenza anche tra scenari diversi che coprono gli stessi branch, lo scenario S18
-   cambierebbe `DE_NCRM_AD_HOC_CONFIG.CHANNEL2` da vuoto a `OTHER`; tutti gli altri scenari restano uguali. Oggi vince
-   il pilota identico: la preferenza vale per il rappresentante di ogni classe di contatti e per lo scenario tenuto a
-   parità di percorsi, ma tra scenari diversi conta solo il criterio dei valori interni agli intervalli. Su un altro
-   journey con campi a livello di scenario che ammettono null, questo può tenere valori null il cui percorso dipende da
-   un'assunzione non verificata. Serve una decisione: accettare la differenza su S18, o confermare la scelta attuale.
-2. **Data del wait prima di un engagement split, con wait prima dell'email.** La spec dà a quella data l'ora di
-   generazione più 24 ore. Se dei wait prima dell'email la ritardano oltre quella data, il wait by attribute termina
-   subito e lo split viene valutato appena arriva l'email. Il generatore tiene la data della spec, misura la finestra
-   dall'arrivo dell'email e lo segnala con un warning (e nella Note del testbook), che indica di alzare l'offset
-   nelle impostazioni. Alternativa da valutare: aggiungere alla data i wait prima dell'email (cambierebbe i CSV di quei
-   journey; il pilota non ne ha).
-3. **Warning e issue su contenuti usati in modo indiretto.** I warning e le issue di Package Manager sugli asset che il
-   journey non usa vengono tolti, come chiede la spec. Vengono tolti anche quelli su contenuti usati solo in modo
-   indiretto, per esempio un'immagine dentro un'email inviata o la landing page CloudPages di un form di ingresso.
-   Va confermato, insieme al conflitto tra "asset non usato" e "issue di livello warning o error elencate" descritto
-   nel README dell'esempio `unused_asset`.
-4. **Livello delle issue.** Un'issue di livello WARNING con una causa di livello ERROR (esempio `missing_relationship`)
-   è riportata come "Package Manager segnala un errore". Un test unitario fissa questa scelta; se il team preferisce il
-   livello dell'issue, cambiano il test e il testo.
-5. **"valore predefinito".** Due messaggi del loader usano "valore predefinito" invece di "valore di default" del
-   glossario (docs/brand.md). Uno dei due compare nel report.md del pilota: correggerlo aggiunge una differenza che non
-   viene da una regola delle estensioni, quindi è rimandato a dopo che il team ha accettato questo elenco.
+Il team ha preso il 13 ottobre le cinque decisioni che restavano aperte sulle estensioni; sono applicate in `cjhelper/`
+e nei test. La prima cambia il pilota in un punto, accettato in deroga alla regola "CSV e `scenarios.csv` identici".
+
+1. **Preferenza "not null" anche tra scenari diversi (scenario S18): accettata.** La preferenza completa (prima not null
+   e row present, poi i valori interni agli intervalli) vale anche tra scenari diversi che coprono gli stessi branch
+   (`coverage.py`, `_preferred_per_mask`). Differenza approvata sul pilota: solo lo scenario `TST_R01_S18`, dove
+   `DE_NCRM_AD_HOC_CONFIG.CHANNEL2` passa da vuoto a `OTHER`. Cambia una riga di `DE_NCRM_AD_HOC_CONFIG.csv` e una di
+   `scenarios.csv` (colonna `DE_NCRM_AD_HOC_CONFIG.CHANNEL2`), la riga di S18 nella tabella degli scenari di report.md
+   e la colonna "Description" del test S18-C01 nel testbook. Gli altri tre CSV e tutti gli altri scenari sono identici.
+2. **Data del wait prima di un engagement split: aggiunge i wait prima dell'email.** La data scritta è l'ora di
+   generazione più i wait a durata fissa che precedono l'email sul percorso più l'offset delle impostazioni (per il
+   secondo engagement split dello stesso percorso, due volte l'offset), così la finestra manuale non viene assorbita
+   (`datagen.py`, `manual_wait_delay`). Il warning resta solo quando la finestra è ancora sotto l'ora (per esempio con
+   offset 0, o quando a ritardare l'email è un wait by attribute o un wait di durata sconosciuta). Il pilota non ha wait
+   prima delle email con engagement split: i suoi CSV non cambiano per questo.
+3. **Issue di Package Manager su contenuti usati in modo indiretto: restano solo gli errori.** Un contenuto è usato in
+   modo indiretto quando il journey lo raggiunge attraverso i riferimenti `{{mcpm#/entities/...}}` (dal journey, dalle
+   email inviate e da ciò che queste nominano) senza inviarlo, oppure quando è nominato da un'issue di un'email o di
+   una pagina usata (un'immagine dentro un'email inviata). Su questi contenuti le issue restano nel report solo se il
+   loro livello è error; le altre vengono tolte, come le issue sugli asset non usati (`loader.py`,
+   `_indirect_content`). Sui quattro export dei clienti tutte le issue di questo tipo sono di livello warning: nessuna
+   differenza.
+4. **Livello delle issue: il più grave tra l'issue e la sua causa.** Comportamento invariato; lo fissa
+   `tests/test_loader.py::test_package_manager_issues_of_level_warning_or_error_are_reported`.
+5. **"valore di default".** I due messaggi del loader usano ora "valore di default", come il glossario di
+   docs/brand.md. Cambia una riga di report.md del pilota (il warning su `mobileNumber`) e una del report di uno dei
+   quattro export dei clienti.
+
+Corretto nello stesso passo, dall'esempio `run_once_one_active`: con un ingresso Run Once l'impostazione "Un solo
+scenario attivo alla volta" viene ignorata anche quando è forzata (spec, riga Run Once: "'one active scenario at a
+time' is not offered"). Tutti gli scenari sono attivi, il report non dà la procedura a una riga attiva alla volta,
+un warning spiega perché e la tabella delle impostazioni dice che non si applica. Il pilota non cambia.
+
+Nuovo riferimento per il pilota (CSV, `scenarios.csv`, report.md e testbook), da usare nei prossimi confronti al posto
+degli output di prima delle estensioni:
+`python -m cjhelper "fixtures/CJ template complesso-v1.json" --out <cartella> --inbox tester@example.com --time "2026-10-11 12:00"`
+con il codice del commit che applica queste decisioni. Il pilota resta a 7/7 trust check, 23 scenari, 33 casi, 146
+contatti.
 
 ### Lasciato agli esempi
 

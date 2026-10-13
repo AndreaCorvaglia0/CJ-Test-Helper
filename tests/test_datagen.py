@@ -499,6 +499,19 @@ def test_activation_setting_resolves_the_schema_spelling():
     assert activation_setting(world.package, world.model, world.settings) == (True, (CONFIG, "ACTIVE"), [])
 
 
+def test_one_active_scenario_is_not_applied_on_a_run_once_entry():
+    """Spec, "Entry source and procedure", Run Once row: "All scenarios enter together, so 'one active scenario
+    at a time' is not offered" (examples/run_once_one_active): even when forced, the setting is ignored."""
+    from cjhelper.model import ENTRY_RUN_ONCE
+    world = build_world(one_active_scenario=True)
+    world.package.entry_event.kind = ENTRY_RUN_ONCE
+    on, field, warnings = activation_setting(world.package, world.model, world.settings)
+    assert (on, field) == (False, None)
+    data = run(world)
+    assert [r["active_at_start"] for r in data.scenarios_rows] == ["yes", "yes"]
+    assert sum("Run Once" in w and "Un solo scenario attivo alla volta" in w for w in data.warnings) == 1
+
+
 def test_key_wins_over_a_split_value_with_a_warning():
     world = build_world()
     world.coverage.scenario_fields.append((CONFIG, "CampaignName"))
@@ -1209,24 +1222,28 @@ def delayed_email_world(**settings):
 def test_window_of_a_manual_action_starts_when_the_email_can_arrive():
     """Spec, "Honest outcomes": "The deadline of a manual open or click is computed from the waits between the
     email and the engagement split, with a warning when the window is under one hour". The window opens when the
-    email arrives: a 2-day wait before the email sends it after the wait date (generation time plus 24 hours), so
-    the wait by attribute ends at once and the split is evaluated as soon as the email arrives."""
+    email arrives. Team decision of 13 October 2026 (docs/progress.md): the wait date before an engagement split
+    adds the fixed waits before the email, so a 2-day wait before the email does not swallow the window: the
+    date is the generation time + 2 days + the 24-hour offset."""
     world = delayed_email_world()
     data = run(world)
     case = next(c for c in world.coverage.cases if c.manual_actions)
     [window] = case.action_windows
     assert window.wait_keys_before == ["WAIT-0"]
+    assert window.email_not_before == "2026-10-13 09:30" and window.deadline == "2026-10-14 09:30"
+    assert not window.short and not any("'Slow'" in w for w in data.warnings)
+    assert {row["Reminder"] for row in data.tables["DE_Master"].rows if row["ContactId"] in case.contact_keys} \
+        == {"2026-10-14 09:30"}
+    # The warning stays when the window is still too short: with no offset the wait date is the arrival of
+    # the email, the wait by attribute ends at once and the split is evaluated as soon as the email arrives.
+    world = delayed_email_world(wait_offset_before_engagement_hours=0)
+    data = run(world)
+    case = next(c for c in world.coverage.cases if c.manual_actions)
+    [window] = case.action_windows
     assert window.email_not_before == "2026-10-13 09:30" and window.deadline == "2026-10-13 09:30"
     assert window.short
     assert any("'Slow'" in w and "arriva non prima del 2026-10-13 09:30" in w and "non ha il tempo" in w
                for w in data.warnings)
-    # An offset past the delay of the email leaves the tester a day: no warning, the deadline is the wait date.
-    world = delayed_email_world(wait_offset_before_engagement_hours=72)
-    data = run(world)
-    case = next(c for c in world.coverage.cases if c.manual_actions)
-    [window] = case.action_windows
-    assert window.email_not_before == "2026-10-13 09:30" and window.deadline == "2026-10-14 09:30"
-    assert not window.short and not any("'Slow'" in w for w in data.warnings)
 
 
 def test_long_fixed_window_is_not_warned_and_a_short_wait_date_is():

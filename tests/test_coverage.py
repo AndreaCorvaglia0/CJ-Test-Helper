@@ -443,6 +443,26 @@ def test_scenarios_crossing_the_same_branches_prefer_values_inside_the_ranges():
         assert mid.values[("DE_Config", "Score")] == "15"
 
 
+def test_scenarios_crossing_the_same_branches_prefer_values_without_null():
+    """Spec: "Among values that cover the same branches, the generator prefers those whose path rests on no
+    unverified assumption: not null". Team decision of 13 October 2026 (docs/progress.md): this holds between
+    different scenarios too. A scenario-level Channel2 of OTHER and of null both take the remainder; OTHER wins
+    whatever the seed (on the pilot, S18 gets CHANNEL2 = OTHER)."""
+    acts = [decision("SPLIT-1", "channel 2", [("e", "email", "UPD-1", cond("DE_Config", "Channel2", "Equal", "Email"))],
+                     remainder_next="UPD-2"),
+            update("UPD-1", "1", [], None), update("UPD-2", "2", [], None)]
+    tables = [ENTRY, MASTER, CONFIG]
+    levels = {"DE_Entry": LEVEL_CONTACT, "DE_Master": LEVEL_CONTACT, "DE_Config": LEVEL_SCENARIO}
+    groups = [("contact", [("DE_Entry", "ContactId"), ("DE_Master", "ContactId")]),
+              ("scenario", [("DE_Entry", "CampaignName"), ("DE_Config", "CampaignName")])]
+    tm = table_model("DE_Entry", "ContactId", levels, groups, tables)
+    for seed in range(8):
+        r = coverage.compute_coverage(package(journey(acts), tables), tm, Settings(seed=seed), NOW)
+        assert None in r.domains[("DE_Config", "Channel2")]
+        other = next(s for s in r.scenarios if s.cases[0].end_activity_key == "UPD-2")
+        assert other.values[("DE_Config", "Channel2")] == "OTHER"
+
+
 def test_row_present_or_absent_variable():
     """Spec, "Row present or absent": the linked key takes "row present" or "row absent"; on an absent row
     IsNull is true on any field and every other operator false; the absent row has no other value."""

@@ -673,7 +673,7 @@ def test_entry_event_and_automation():
 def test_default_reading_another_entry_event_is_reported():
     package = load()
     assert has_warning(package, "mobileNumber", "DEAudience-2", "Old event", "DEAudience-1")
-    assert not has_warning(package, "valore predefinito email")
+    assert not has_warning(package, "valore di default email")
 
 
 def test_default_email_reading_another_entry_event():
@@ -683,11 +683,11 @@ def test_default_email_reading_another_entry_event():
         "{{Event." + ref("eventDefinitions", OLD_EVENT, "eventDefinitionKey") + '."Emailaddress"}}']
     package = load_package(export)
     assert package.journey.default_email_event_key == "DEAudience-2"
-    assert has_warning(package, "valore predefinito email", "DEAudience-2")
+    assert has_warning(package, "valore di default email", "DEAudience-2")
     assert not has_warning(package, "mobileNumber", "non dall'entry event")
     # Spec, "Honest outcomes": "A journey default (email, mobile number) that names a column the entry data
     # extension lacks is reported": mobileNumber now reads the trigger's event, whose table has no Mobile.
-    assert has_warning(package, "valore predefinito mobileNumber", "Mobile", "DE_Entry", "non ha questo campo")
+    assert has_warning(package, "valore di default mobileNumber", "Mobile", "DE_Entry", "non ha questo campo")
 
 
 def test_entry_event_found_by_key_when_the_id_is_missing():
@@ -1119,6 +1119,8 @@ def test_package_manager_issues_of_level_warning_or_error_are_reported():
         {"type": "UNSUPPORTED_FUNCTIONALITY", "level": "WARNING", "functionality": "SOMETHING_ODD"}]
     export["issues"] = [{"type": "UNSUPPORTED_FUNCTIONALITY", "level": "ERROR", "functionality": "PACKAGE_LEVEL"}]
     package = load_package(export)
+    # The level is the most severe of the issue and its cause (team decision, 13 October 2026): a WARNING issue
+    # with an ERROR cause is reported as an error.
     assert has_warning(package, "Package Manager segnala un errore sul journey J_Test", "attributeRelationships",
                        "rel-404", "'Channel'", "Messaggio di Package Manager: Unable to find attribute relationship")
     assert has_warning(package, "Package Manager segnala un warning sulla data extension DE_Log", "SOMETHING_ODD")
@@ -1150,6 +1152,36 @@ def test_issues_about_assets_the_journey_does_not_send_are_dropped():
     assert not has_warning(package, "UNSUPPORTED_BLOCK")
     assert not has_warning(package, "image.example.com")
     assert has_warning(package, "sull'asset Welcome (111)", "Content_DE")
+
+
+def test_issues_about_content_used_only_indirectly_are_kept_only_when_errors():
+    """Team decision of 13 October 2026 (docs/progress.md): on content the journey uses only indirectly (an
+    image inside a sent email, a landing page linked from it) only the issues of level error stay; on content
+    the journey does not use at all every issue is dropped."""
+    export = make_export()
+    entities = export["entities"]
+    assets = entities["assets"]
+    assets[ASSET_LINK]["data"]["views"]["html"]["content"] += (
+        f'<a href="{ref("landingPages", "lp-1", "name")}">form</a>')
+    entities["landingPages"] = {"lp-1": entity({"name": "Linked page"}), "lp-2": entity({"name": "Lone page"})}
+    entities["landingPages"]["lp-1"]["issues"] = [
+        {"type": "UNSUPPORTED_FUNCTIONALITY", "level": "WARNING", "functionality": "LINKED_WARNING"},
+        {"type": "UNSUPPORTED_FUNCTIONALITY", "level": "ERROR", "functionality": "LINKED_ERROR"}]
+    entities["landingPages"]["lp-2"]["issues"] = [
+        {"type": "UNSUPPORTED_FUNCTIONALITY", "level": "ERROR", "functionality": "LONE_ERROR"}]
+    assets[ASSET_LINK]["issues"] = [
+        {"type": "ENTITY_NOT_FOUND", "level": "WARNING",
+         "entity": {"entityType": "assets", "retrievalProperty": "fileProperties.publishedURL",
+                    "value": "https://image.example.com/warning.png"}},
+        {"type": "ENTITY_NOT_FOUND", "level": "WARNING", "cause": {"level": "ERROR"},
+         "entity": {"entityType": "assets", "retrievalProperty": "fileProperties.publishedURL",
+                    "value": "https://image.example.com/error.png"}}]
+    package = load_package(export)
+    assert has_warning(package, "Package Manager segnala un errore sulla landing page Linked page", "LINKED_ERROR")
+    assert not has_warning(package, "LINKED_WARNING")
+    assert not has_warning(package, "LONE_ERROR")
+    assert has_warning(package, "Package Manager segnala un errore sull'asset Welcome (111)", "error.png")
+    assert not has_warning(package, "warning.png")
 
 
 def test_reference_warnings_about_assets_the_journey_does_not_send_are_dropped():
