@@ -69,15 +69,14 @@ criteri di uscita, le tabelle non importabili, la timeline e gli SMS.
 - **Assunzioni 47-61** (`docs/assumptions.md`) da verificare con un run reale: in testa il confronto sul giorno delle
   date relative, `IsNot` su null, il wait by attribute con campo null, il fuso orario dell'orologio.
 
-## Domande per il team
+## Risposte del team (14 ottobre 2026, sera)
 
-1. Le date relative ("Today più N giorni") sono confrontate sul giorno, come assume il generatore, o sull'ora? Un
-   contatto puntuale ricade esattamente sull'estremo dopo un wait "N giorni prima della data": il risultato dipende
-   da questa risposta.
-2. Per `CampaignMember_Salesforce_9` (sincronizzata dal CRM) il report esclude il CSV dall'import e dice che con
-   l'import diretto della tabella di ingresso non serve: è la procedura che il team segue?
-3. La validità dei dati va misurata sul valore (prudente, oggi) o sul percorso di ogni caso (più lasca, coincide con
-   la derivazione a mano)?
-4. Il generatore copre di proposito il target "criteri di uscita soddisfatti" con un caso che esce (per esempio un
-   contatto con `IsDunning` vero): va bene come test, o i criteri di uscita vanno solo evitati?
-5. Il rilievo sul journey 4 settimane (`is not null`) va comunicato al cliente così com'è?
+1. **Date relative confrontate sul giorno**, non sull'ora: confermato. Non è più un'assunzione (`docs/assumptions.md`).
+2. **Data extension sincronizzate** (`CampaignMember_Salesforce_9`): se servono dentro il journey vanno importate come
+   gli altri CSV. Il report le tiene nell'elenco dei file da importare e dice solo che la tabella è sincronizzata dal CRM.
+3. **Validità dei dati misurata sul valore**, come oggi: i CSV vengono usati in giornata, quindi la lettura prudente
+   basta. La misura sul percorso del caso resta un'idea, non un passo da fare.
+4. **Target "criteri di uscita soddisfatti"** coperto da un caso che esce: va bene.
+5. **Journey 4 settimane**: l'exit criterion `Entitle_RequestCancellationDate is not null` (gli altri cinque dicono `is
+   null`) è un errore di configurazione da segnalare al cliente. Il report lo dice così ("probabile errore di
+   configurazione del journey, da segnalare al cliente").

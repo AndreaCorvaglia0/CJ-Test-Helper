@@ -2545,7 +2545,8 @@ class CoverageEngine:
             out.append(f"rilievo sul journey: tutti i contatti che arrivano alla fine del wait "
                        f"{self._wait_label(activity.key)} soddisfano i criteri di uscita ({self._exits_text([activity.key])}) "
                        "ed escono dal journey, quindi nessuno raggiunge le attività che seguono il wait e ogni branch a "
-                       "valle è non raggiungibile")
+                       "valle è non raggiungibile: probabile errore di configurazione del journey, da segnalare al cliente "
+                       "(decisione del team del 14 ottobre 2026)")
         return out
 
     def _exit_shadow(self) -> dict[BranchRef, set[str]]:
