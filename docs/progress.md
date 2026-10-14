@@ -1,6 +1,37 @@
 # Avanzamento
 
-Si riparte da questo file. Spec: `docs/spec.md`. Contratto: `docs/plan.md`.
+Si riparte da questo file. Spec: `docs/spec.md`. Contratto: `docs/plan.md`. Disegno del passo 3: `docs/design-passo3.md`.
+
+## Ripartenza del passo 3 (journey che dipendono dal tempo): stato al checkpoint
+
+Obiettivo del passo 3: far funzionare il generatore sui sei export della famiglia RET_99 (2W, 3m, 4W, HC, 5d, 6w,
+forniti dall'utente come zip, dati del cliente, MAI nel repository) senza perdere il pilota (CSV identici byte per
+byte) né i quattro export del passo 2 (anche questi fuori dal repository). Le regole nuove sono nella sezione della
+spec "Extensions for time-dependent journeys (step 3, 14 October 2026)"; i contratti dei moduli in `docs/plan.md`,
+"Estensioni del passo 3"; il perché in `docs/design-passo3.md`.
+
+Materiale fuori dal repository (va ricaricato in una sessione nuova): i sei export RET_99 e i quattro export del
+passo 2; gli script di diagnosi (`dump_cj.py`, `graph_cj.py`, `run_cohort.py`) sono sotto `tools/` nel repository
+e ricostruiscono dumps, grafi, baseline e confronto con le risposte attese; le risposte attese derivate a mano per i
+sei export (`target_<nome>.md/.json`) vanno rigenerate con il workflow "derive-targets" (tre agenti per journey:
+deriva, confuta, riconcilia) se perse.
+
+Fatto (commit sul branch `claude/quirky-bohr-24fr8j`):
+
+- Diagnosi: il generatore del passo 2 non si rompe sui sei export ma copre 0 branch su cinque di essi.
+- Spec, contratti, disegno; `model.py` esteso in modo additivo.
+- `sqlparse_lite.py` (filtro data = oggi ± N giorni, sorgenti opzionali, colonne scambiate), `criteria.py` (date
+  relative, After/AtOrAfter/Before/AtOrBefore/IsNot, valutazione con `now`), `loader.py` (SMSSYNC, offset e ora dei
+  wait, percorsi, exit criteria, numero mobile, data extension sincronizzate): fatti, con test, suite verde.
+- Esempi sintetici del passo 3 con risposte derivate a mano (`examples/build_step3_*_examples.py`, 15 esempi):
+  scritti; FALLISCONO in `tests/test_examples.py` finché coverage, datagen, checks e outputs non sono adeguati.
+- Runner degli esempi esteso con le chiavi del passo 3.
+
+In corso o da fare, nell'ordine: `graph.py` (orologio, exit criteria, SMS, timeline), `tables.py` (tabelle di
+collegamento, alias) -> `coverage.py` -> `datagen.py` e `checks.py` -> `outputs.py` e `app.py` -> coorte completa
+(pilota byte-identico, 83 esempi, sei export contro le risposte attese, quattro export del passo 2 contro la
+baseline) -> documenti (assunzioni, report finale, README) -> domande al team (in `docs/design-passo3.md` e nel
+report finale).
 
 ## Fatto
 
