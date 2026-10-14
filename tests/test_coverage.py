@@ -1047,3 +1047,70 @@ def test_exit_criteria_on_a_scenario_level_field_branch_at_the_wait():
     leaving = next(s for s in r.scenarios if any(c.exit_by_criteria for c in s.cases))
     assert leaving.values[("DE_Config", "CG")] == "True"
     assert all(s.values[("DE_Config", "CG")] == "False" for s in r.scenarios if s is not leaving)
+
+
+def test_classes_are_built_per_component_of_the_contact_fields():
+    """14 nullable Booleans in two independent components of 7 (each read by its own splits): 3**14 combinations,
+    more than the old cap on the whole product, which never let the first field leave its first value, so the
+    remainder of a split on A1 alone was lost. Per component, each product has 3**7 combinations: every class is
+    found and the member counts add up to the whole product."""
+    wide = table("DE_Master", [field("ContactId", pk=True, nullable=False)]
+                 + [field(f"{side}{i}", "Boolean") for side in "AB" for i in range(1, 8)], sendable_field="ContactId")
+    all_true = lambda side: AND(*[cond("DE_Master", f"{side}{i}", "Is", "true") for i in range(1, 8)])
+    acts = [decision("SPLIT-1", "all A", [("yes", "yes", "SPLIT-2", all_true("A"))], remainder_next="SPLIT-2"),
+            decision("SPLIT-2", "all B", [("yes", "yes", "SPLIT-3", all_true("B"))], remainder_next="SPLIT-3"),
+            decision("SPLIT-3", "A1", [("yes", "yes", "UPD-1", cond("DE_Master", "A1", "Is", "true"))], remainder_next="UPD-2"),
+            update("UPD-1", "1", [], None), update("UPD-2", "2", [], None)]
+    assert 3 ** 14 > coverage.MAX_CONTACT_COMBINATIONS
+    _, r = engine_run(acts, (ENTRY, wide))
+    assert r.stats["classes_incomplete"] == 0 and not any("combinazioni" in w for w in r.warnings)
+    assert len(r.classes) == 3 * 2 and sum(c.member_count for c in r.classes) == 3 ** 14
+    assert [c.id for c in r.classes] == list(range(1, 7))
+    assert all(b.status == STATUS_COVERED for b in r.branches)
+    # representatives keep the preference (no null) and every class holds every contact-level field, in order
+    assert all(list(c.values) == r.contact_fields and None not in c.values.values() for c in r.classes)
+    assert r.classes[0].values == {ref: "True" for ref in r.contact_fields}
+
+
+def _class_rows(result):
+    return [(c.id, c.values, c.predicate_truth, c.member_count) for c in result.classes]
+
+
+def test_large_components_are_enumerated_exactly_field_by_field(monkeypatch):
+    """A component over the cap is enumerated by prefixes that merge when their predicates have the same residual;
+    it gives the same classes (ids, representatives, truths, member counts) and cases as the full product."""
+    many = table("DE_Master", [field("ContactId", pk=True, nullable=False), field("StartDate", "Date")]
+                 + [field(f"F{i}", "Boolean") for i in range(1, 7)], sendable_field="ContactId")
+    f = lambda i, v="true": cond("DE_Master", f"F{i}", "Is", v)
+    acts = [decision("SPLIT-1", "mix", [("a", "a", "WAIT-1", AND(f(1), OR(f(2), f(3, "false")), rel("DE_Master", "StartDate", "After", ";+;0;days"))),
+                                        ("b", "b", "WAIT-1", OR(AND(f(4), f(5)), cond("DE_Master", "F6", "IsNull")))],
+                     remainder_next="WAIT-1"),
+            wait_dur("WAIT-1", 2, "DAYS", "SPLIT-2"),
+            decision("SPLIT-2", "later", [("a", "a", "UPD-1", AND(f(2), rel("DE_Master", "StartDate", "After", ";+;1;days")))],
+                     remainder_next="UPD-2"),
+            update("UPD-1", "1", [], None), update("UPD-2", "2", [], None)]
+    _, plain = engine_run(acts, (ENTRY, many))
+    monkeypatch.setattr(coverage, "MAX_CONTACT_COMBINATIONS", 10)
+    _, exact = engine_run(acts, (ENTRY, many))
+    assert exact.stats["classes_incomplete"] == 0 and not any("combinazioni" in w for w in exact.warnings)
+    assert _class_rows(exact) == _class_rows(plain)
+    assert [(c.id, c.contact_values, c.steps) for c in exact.cases] == [(c.id, c.contact_values, c.steps) for c in plain.cases]
+    assert sum(c.member_count for c in exact.classes) == 3 ** 6 * len(exact.domains[START])
+
+
+def test_a_component_over_the_cap_is_complete():
+    """13 Booleans read by one formula: 3**13 combinations in one component, more than the cap; the first and the
+    last field still take every value."""
+    wide = table("DE_Master", [field("ContactId", pk=True, nullable=False)]
+                 + [field(f"B{i}", "Boolean") for i in range(1, 14)], sendable_field="ContactId")
+    acts = [decision("SPLIT-1", "all", [("yes", "yes", "SPLIT-2", AND(*[cond("DE_Master", f"B{i}", "Is", "true") for i in range(1, 14)]))],
+                     remainder_next="SPLIT-2"),
+            decision("SPLIT-2", "first", [("yes", "yes", "SPLIT-3", cond("DE_Master", "B1", "Is", "true"))], remainder_next="SPLIT-3"),
+            decision("SPLIT-3", "last", [("yes", "yes", "UPD-1", cond("DE_Master", "B13", "Is", "true"))], remainder_next="UPD-2"),
+            update("UPD-1", "1", [], None), update("UPD-2", "2", [], None)]
+    assert 3 ** 13 > coverage.MAX_CONTACT_COMBINATIONS
+    _, r = engine_run(acts, (ENTRY, wide))
+    assert r.stats["classes_incomplete"] == 0
+    assert sum(c.member_count for c in r.classes) == 3 ** 13
+    assert len(r.classes) == 5      # all true; then B1 and B13 each true or not, with some other field not true
+    assert all(b.status == STATUS_COVERED for b in r.branches)

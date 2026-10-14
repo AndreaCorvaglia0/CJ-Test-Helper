@@ -141,7 +141,10 @@ from .model import (
 )
 
 # Safety limits so a strange export cannot hang the generator. Both are reported when hit.
-MAX_CONTACT_COMBINATIONS = 1_000_000
+MAX_CONTACT_COMBINATIONS = 1_000_000   # per component of the contact-level fields (build_classes)
+MAX_CONTACT_CLASSES = 20_000
+MAX_PREFIX_STATES = 200_000          # partial assignments kept by the exact enumeration of a large component
+_UNSET = object()                    # a field not assigned yet (CoverageEngine._component_classes_by_prefix)
 MAX_SCENARIO_COMBINATIONS = 2_000_000
 MAX_PATHS = 400_000
 
@@ -467,6 +470,16 @@ class ClockPoint:
     site: str
     delay: float
     anchors: tuple[str, ...] = ()
+
+
+@dataclass
+class _SubClass:
+    """The class of one component of the contact-level fields (``CoverageEngine.build_classes``)."""
+    values: dict[FieldRef, Value]                  # the representative values of the component's fields
+    groups: dict[int, tuple[bool, ...]]            # predicate index -> its truths at its moments
+    count: int                                     # how many combinations of the component it stands for
+    first: tuple[int, ...]                         # domain indexes of its first member in product order
+    best: tuple[int, ...]                          # the preference of the representative
 
 
 @dataclass
@@ -1121,10 +1134,103 @@ class CoverageEngine:
                 out.append(moment)
         return out
 
+    def _component_classes_by_prefix(self, fields: list[FieldRef], pred_indexes: list[int], preds,
+                                     reads) -> Optional[list["_SubClass"]]:
+        """The classes of a component too large to enumerate, found exactly field by field.
+
+        The fields are assigned in product order. After each field, two partial assignments whose predicates are
+        left with the same residual (each formula simplified with the values assigned so far: decided conditions
+        replaced by their truth, AND and OR reduced) have the same completions and the same truths, so they merge:
+        their member counts add up; the representative is the one with the smaller (preference, index vector) and
+        the first member the smaller index vector, since the preference is a sum over the fields with an order
+        invariant under translation. The classes, counts, representatives and first members are those of the full
+        product. None when the residuals do not merge enough (MAX_PREFIX_STATES); the caller then truncates."""
+        instances = [(k, m, delay, anchors) for k in pred_indexes for m, (delay, anchors) in enumerate(preds[k][1])]
+        reads_of = {k: reads[k] for k in pred_indexes}
+        memo: dict[tuple, object] = {}
+
+        def residuals(values: dict[FieldRef, Value]) -> tuple:
+            def lookup(ref: FieldRef):
+                return values.get(self._var(ref), graph.UNKNOWN)
+            out = []
+            for k, m, delay, anchors in instances:
+                seen = tuple(values.get(ref, _UNSET) for ref in reads_of[k])
+                key = (k, m, seen)
+                found = memo.get(key)
+                if found is None:
+                    if anchors and any(values.get(self._var(self.schema.canonical(self.journey.activities[a].wait_field)),
+                                                  _UNSET) is _UNSET for a in anchors):
+                        found = ("pending", seen)     # the clock is not known yet: keep the values read so far
+                    elif all(v is not _UNSET for v in seen):
+                        found = self._predicate_truth(preds[k][0], lookup, values, delay, anchors)
+                    else:
+                        found = self._residual(preds[k][0], lookup, self.entry_time + timedelta(days=delay))
+                    memo[key] = found
+                out.append(found)
+            return tuple(out)
+
+        states: dict[tuple, _SubClass] = {residuals({}): _SubClass(values={}, groups={}, count=1, first=(),
+                                                                    best=self._preference({}))}
+        for ref, domain in zip(fields, (self.domains[f] for f in fields)):
+            merged: dict[tuple, tuple[_SubClass, tuple]] = {}
+            for state in states.values():
+                for i, value in enumerate(domain):
+                    values = {**state.values, ref: value}
+                    first = state.first + (i,)
+                    key = residuals(values)
+                    held = merged.get(key)
+                    candidate = (self._preference(values), first)
+                    if held is None:
+                        merged[key] = (_SubClass(values=values, groups={}, count=state.count, first=first,
+                                                 best=candidate[0]), first)
+                        continue
+                    sub, rep_index = held
+                    sub.count += state.count
+                    if first < sub.first:
+                        sub.first = first
+                    if candidate < (sub.best, rep_index):
+                        sub.values, sub.best = values, candidate[0]
+                        merged[key] = (sub, first)
+            if len(merged) > MAX_PREFIX_STATES:
+                return None
+            states = {key: sub for key, (sub, _) in merged.items()}
+        out: list[_SubClass] = []
+        for key, sub in states.items():
+            groups: dict[int, list[bool]] = {k: [] for k in pred_indexes}
+            for (k, _, _, _), truth in zip(instances, key):
+                groups[k].append(bool(truth))
+            sub.groups = {k: tuple(v) for k, v in groups.items()}
+            out.append(sub)
+        out.sort(key=lambda sub: sub.first)
+        return out
+
+    def _residual(self, formula: Formula, lookup, now: datetime):
+        """A formula simplified with the values decided so far: True, False, or what is left of it (a condition,
+        or an operator with its remaining items), in a form equal for equal remainders."""
+        if isinstance(formula, Condition):
+            try:
+                result = graph.evaluate(formula, lookup, self.schema, self.settings.case_insensitive_text, now=now)
+            except criteria.UnsupportedOperator:
+                return False
+            return formula if isinstance(result, graph.Unknown) else bool(result)
+        items = []
+        for item in formula.items:
+            result = self._residual(item, lookup, now)
+            if result is True or result is False:
+                if (formula.operator == "AND") != result:
+                    return result          # a False item decides an AND, a True item decides an OR
+                continue
+            if result not in items:
+                items.append(result)
+        if not items:
+            return formula.operator == "AND"
+        return items[0] if len(items) == 1 else (formula.operator, tuple(items))
+
     def _clocked_truths(self, index: int, formula: Formula, moments, lookup, values: dict[FieldRef, Value],
                         reads: list[list[FieldRef]], memo: dict[tuple, tuple[bool, ...]]) -> tuple[bool, ...]:
-        """The truths of a predicate at each of its moments, memoised by the values of the fields it reads (a
-        field of an absent row reads null, as ``_mask_absent_rows`` has already written in ``values``)."""
+        """The truths of a predicate at each of its moments, memoised by the values of the fields it reads and of
+        its anchor waits (a field of an absent row reads null, as ``_mask_absent_rows`` has already written in
+        ``values``): the truth depends on nothing else."""
         key = (index,) + tuple(values.get(ref) for ref in reads[index])
         found = memo.get(key)
         if found is None:
@@ -1151,47 +1257,141 @@ class CoverageEngine:
             return False
 
     def build_classes(self) -> None:
+        """Spec step 4: "a class groups the contact-level combinations that satisfy the same conditions".
+
+        The combinations are not listed as one cartesian product of every contact-level field: a journey with
+        many such fields has hundreds of millions of them. The fields are grouped into connected components by
+        "read by the same predicate" (aliases resolved; the fields of a table with the row present / row absent
+        variable go with its linked field, since an absent row empties them; a field no predicate reads is a
+        component of its own). Each predicate lies in exactly one component, so each component is enumerated on
+        its own (``_component_classes``) and the classes are the product of the components' classes: the values
+        are the union of their representatives, the truth vector the concatenation in predicate order, the member
+        count the product. This is the same partition as the full product: the preference is a sum over the
+        components and its lexicographic order is translation-invariant, so the best member of a product class is
+        the product of the best members; the first in product order of a product set is the product of the
+        firsts, so representatives and the order of the classes (first appearance) are the same as before.
+        """
         preds = self._contact_predicate_points()
-        domains = [self.domains[f] for f in self.contact_fields]
+        fields = self.contact_fields
+        position = {ref: i for i, ref in enumerate(fields)}
+        parent = list(range(len(fields)))
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def union(i: int, j: int) -> None:
+            a, b = find(i), find(j)
+            if a != b:
+                parent[max(a, b)] = min(a, b)
+
+        # A predicate evaluated at several moments depends only on the fields it reads and on the dates of its
+        # anchor waits: its truths are kept per combination of those values.
+        reads = [sorted({self._cond_var(c) for c in formula_conditions(p)}
+                        | {self._var(self.schema.canonical(self.journey.activities[key].wait_field))
+                           for _, anchors in moments for key in anchors}) for p, moments in preds]
+        for refs in reads:
+            indexes = [position[ref] for ref in refs if ref in position]
+            for i in indexes[1:]:
+                union(indexes[0], i)
+        for table, linked in self.row_fields.items():
+            if linked in position:
+                for ref in fields:
+                    if ref[0].lower() == table:
+                        union(position[linked], position[ref])
+        members: dict[int, list[int]] = {}
+        for i in range(len(fields)):
+            members.setdefault(find(i), []).append(i)
+        components = list(members.values())             # in order of their first field
+        owner: dict[int, int] = {}                       # predicate index -> component index (-1: reads no field)
+        for k, refs in enumerate(reads):
+            indexes = [position[ref] for ref in refs if ref in position]
+            owner[k] = components.index(members[find(indexes[0])]) if indexes else -1
+        if any(c == -1 for c in owner.values()):
+            components.append([])                        # predicates that read no contact-level field
+            for k in owner:
+                if owner[k] == -1:
+                    owner[k] = len(components) - 1
+        memo: dict[tuple, tuple[bool, ...]] = {}
+        per_component = [self._component_classes([fields[i] for i in comp],
+                                                 [k for k in range(len(preds)) if owner[k] == c], preds, reads, memo)
+                         for c, comp in enumerate(components)]
+
+        total = math.prod(len(found) for found in per_component)
+        combos = itertools.product(*per_component)
+        if total > MAX_CONTACT_CLASSES:
+            self.classes_incomplete = True
+            self.warnings.append(
+                f"{total} classi di contatti: ne sono state tenute solo {MAX_CONTACT_CLASSES}, quindi alcuni branch "
+                "raggiungibili possono risultare non coperti")
+            combos = itertools.islice(combos, MAX_CONTACT_CLASSES)
+        entries = []
+        for combo in combos:
+            first = [0] * len(fields)
+            for comp, sub in zip(components, combo):
+                for j, i in enumerate(comp):
+                    first[i] = sub.first[j]
+            entries.append((first, combo))
+        entries.sort(key=lambda entry: entry[0])
+        classes: list[ContactClass] = []
+        for number, (_, combo) in enumerate(entries, start=1):
+            merged: dict[FieldRef, Value] = {}
+            groups: dict[int, tuple[bool, ...]] = {}
+            count = 1
+            for sub in combo:
+                merged.update(sub.values)
+                groups.update(sub.groups)
+                count *= sub.count
+            truth = tuple(value for k in range(len(preds)) for value in groups.get(k, ()))
+            classes.append(ContactClass(id=number, values={ref: merged[ref] for ref in fields},
+                                        predicate_truth=truth, member_count=count))
+        self.classes = classes
+
+    def _component_classes(self, fields: list[FieldRef], pred_indexes: list[int], preds, reads,
+                           memo: dict[tuple, tuple[bool, ...]]) -> list["_SubClass"]:
+        """The classes of one component: the product of its fields' domains (at most MAX_CONTACT_COMBINATIONS,
+        with a warning), grouped by the truths of its predicates. Each keeps its member count, the index vector of
+        its first member in product order, and its representative: the best by ``_preference`` (spec: "prefers
+        those whose path rests on no unverified assumption"), the first in product order on a tie."""
+        domains = [self.domains[ref] for ref in fields]
         total = math.prod(len(d) for d in domains) if domains else 1
-        combos = itertools.product(*domains)
+        if total > MAX_CONTACT_COMBINATIONS and not any(ref[0].lower() in self.row_fields for ref in fields):
+            exact = self._component_classes_by_prefix(fields, pred_indexes, preds, reads)
+            if exact is not None:
+                return exact
+        combos = itertools.product(*[range(len(d)) for d in domains])
         if total > MAX_CONTACT_COMBINATIONS:
             self.classes_incomplete = True
             self.warnings.append(
                 f"{total} combinazioni di valori a livello di contatto: sono state esaminate solo le prime {MAX_CONTACT_COMBINATIONS}, "
                 "quindi mancano alcune classi di contatti e alcuni branch raggiungibili possono risultare non coperti")
             combos = itertools.islice(combos, MAX_CONTACT_COMBINATIONS)
-        by_truth: dict[tuple[bool, ...], ContactClass] = {}
-        best: dict[tuple[bool, ...], tuple[int, ...]] = {}
-        # A predicate evaluated at several moments depends only on the fields it reads and on the dates of its
-        # anchor waits: its truths are kept per combination of those values.
-        reads = [sorted({self._cond_var(c) for c in formula_conditions(p)}
-                        | {self._var(self.schema.canonical(self.journey.activities[key].wait_field))
-                           for _, anchors in moments for key in anchors}) for p, moments in preds]
-        memo: dict[tuple, tuple[bool, ...]] = {}
-        for combo in combos:
-            values = self._mask_absent_rows(dict(zip(self.contact_fields, combo)))
+        found: dict[tuple, _SubClass] = {}
+        for indexes in combos:
+            values = self._mask_absent_rows({ref: domain[i] for ref, domain, i in zip(fields, domains, indexes)})
 
             def lookup(ref: FieldRef, _values=values):
                 return _values.get(self._var(ref), graph.UNKNOWN)
 
-            truth = tuple(self._clocked_truths(index, p, moments, lookup, values, reads, memo)
-                          if len(moments) > 1 else (self._predicate_truth(p, lookup, values, *moments[0]),)
-                          for index, (p, moments) in enumerate(preds) if moments)
-            truth = tuple(value for group in truth for value in group)
-            cls = by_truth.get(truth)
+            groups = {}
+            for k in pred_indexes:
+                formula, moments = preds[k]
+                groups[k] = self._clocked_truths(k, formula, moments, lookup, values, reads, memo) if moments else ()
+            key = tuple(groups[k] for k in pred_indexes)
+            sub = found.get(key)
             preference = self._preference(values)
-            if cls is None:
-                by_truth[truth] = ContactClass(id=len(by_truth) + 1, values=values, predicate_truth=truth, member_count=1)
-                best[truth] = preference
+            if sub is None:
+                found[key] = _SubClass(values=values, groups=groups, count=1, first=indexes, best=preference)
             else:
-                cls.member_count += 1
-                if preference < best[truth]:
+                sub.count += 1
+                if preference < sub.best:
                     # Spec: among values that cover the same branches, prefer those whose path rests on no
                     # unverified assumption. Every member of a class takes the same paths.
-                    cls.values = values
-                    best[truth] = preference
-        self.classes = list(by_truth.values())
+                    sub.values = values
+                    sub.best = preference
+        return list(found.values())
 
     def _mask_absent_rows(self, values: dict[FieldRef, Value]) -> dict[FieldRef, Value]:
         """Spec, "Row present or absent": every field of an absent row reads null, so a contact without the
