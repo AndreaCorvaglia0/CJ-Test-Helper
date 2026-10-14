@@ -557,7 +557,9 @@ sms_sent`, `RandomBranch.timeline/exit_by_criteria`, `CoverageResult.exit_target
   validità è None). Per ogni classe resta un candidato, scelto in quest'ordine: (1) validità ≥
   `Settings.min_validity_days` (tutti, se nessuno la raggiunge); (2) il wait by attribute sul campo finisce prima
   (solo quando un wait con offset legge il campo); (3) non su un punto di taglio; (4) validità più lunga;
-  (5) data più vicina. I campi "solo wait" senza condizioni restano fuori dalla coverage, come prima.
+  (5) data più vicina; null non rappresenta mai una classe che ha un membro non null. `Case.validity_days` è None
+  quando nessun valore del caso è deperibile. I campi "solo wait" senza condizioni restano fuori dalla coverage,
+  come prima.
 - Target "exit criteria met": un bit per ogni exit criterion supportato nel set cover (`exit_targets`,
   `activity_key` = chiave del criterio, `outcome_key` = `"met"`, `activity_kind` = `"exit"`), coperto dai casi con
   `exit_by_criteria`.

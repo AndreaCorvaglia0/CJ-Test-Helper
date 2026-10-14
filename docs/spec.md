@@ -446,7 +446,9 @@ the ranges now move with the clock, so the values are chosen as offsets from the
   validity (see "Validity of the data") reaches the setting "minimum validity of the data", or all of them when
   none does; (2) the one that makes the waits by attribute on the field end soonest (so the test runs as early
   as the margin allows; a setting of 0 lets them end at once); (3) not on a cut point; (4) the longest validity;
-  (5) the earliest date. It tries the classes like any other domain.
+  (5) the earliest date; null never represents a class that has a non-null member. It tries the classes like
+  any other domain. A case whose values are all not perishable has no validity (nothing in it depends on the
+  clock) and sets no deadline.
 - A wait by attribute with an offset no longer writes "the generation time plus the wait offset" into its
   field when the field also has conditions: the field takes the candidate the case needs, and the
   testbook says when the wait ends. A wait by attribute on a field with no condition keeps the earlier rule.
