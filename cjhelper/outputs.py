@@ -622,7 +622,7 @@ def unsupported_warning(result: GenerationResult) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 _ROLE_WORDS = {ROLE_LINK: "collegamento"}    # the report's role names are Salesforce's own words, except this one
-_DAY_LEVEL_WORDS = "confronto sul giorno"    # how coverage.py names the day-level comparison assumption
+_DAY_LEVEL_WORDS = "confronto sul giorno"    # how coverage.py names the day-level comparison in its bound notes
 _EXIT_WORDS = "criteri di uscita"
 
 
@@ -1503,7 +1503,7 @@ def _note(context: _TestbookContext, scenario: Scenario, case: Case) -> str:
 
 def _time_notes(context: _TestbookContext, case: Case) -> list[str]:
     """Spec, step 3: the deadline of this case ("Validity of the data") and, when a branch of its path rests on a
-    bound, the day-level comparison assumption (the note coverage.py wrote for this case)."""
+    bound, the day-level comparison it is decided on (the note coverage.py wrote for this case)."""
     notes = []
     days = getattr(case, "validity_days", None)
     if days is not None:
@@ -2612,7 +2612,9 @@ def _triggered_assumptions(result: GenerationResult) -> list[str]:
 
 
 def _time_assumptions(result: GenerationResult, conditions: list) -> list[str]:
-    """The assumptions of the time-dependent extensions (spec, step 3) that this export triggers."""
+    """The assumptions of the time-dependent extensions (spec, step 3) that this export triggers. The day-level
+    comparison of relative dates is a fact confirmed by the team (14 October 2026), so it is not listed; the
+    comparison of the full date and time with hours or minutes (docs/assumptions.md row 48) still is."""
     journey = result.package.journey
     items = []
     every = list(conditions) + [(None, None, c) for e in getattr(journey, "exits", None) or []
@@ -2620,13 +2622,12 @@ def _time_assumptions(result: GenerationResult, conditions: list) -> list[str]:
     for _, _, condition in every:
         relative = getattr(condition, "relative", None)
         try:
-            day_level = relative is not None and criteria.is_day_level(relative)
+            full_time = relative is not None and not criteria.is_day_level(relative)
         except criteria.UnsupportedOperator:
             continue
-        if day_level:
-            items.append("Una condizione con una data relativa in giorni, settimane, mesi o anni confronta la parte "
-                         "data del campo con la data dell'orologio, senza l'ora (confronto sul giorno); con ore e "
-                         "minuti confronta data e ora.")
+        if full_time:
+            items.append("Una condizione con una data relativa in ore o minuti confronta data e ora intere, non "
+                         "solo il giorno.")
             break
     return items
 

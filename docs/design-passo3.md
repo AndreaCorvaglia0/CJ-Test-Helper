@@ -35,7 +35,8 @@ Le cause, raggruppate per classe:
 5. **Fiducia dei check**: il check sulla entry query falliva su colonne che non può verificare (default `GetDate()`,
    espressioni non comprese) invece di dire "non verificato". Un check che fallisce per i propri limiti insegna al
    tester a ignorarlo.
-6. **Procedura**: una data extension sincronizzata dal CRM non si può importare; una tabella scritta da un LEFT JOIN può
+6. **Procedura**: una data extension sincronizzata dal CRM si importa come gli altri CSV (risposta del team, 14 ottobre
+   2026) e le sue righe arrivano anche dalla sincronizzazione; una tabella scritta da un LEFT JOIN può
    non avere la riga. Il report deve dire cosa importare davvero.
 
 La lezione metodologica: ogni volta che una condizione di Salesforce può dipendere da *qualcosa*, quel qualcosa deve
@@ -102,7 +103,7 @@ Il contratto per modulo è in `docs/plan.md`, "Estensioni del passo 3". In sinte
 | coverage | domini delle date relative per vettore di verità, alias come variabili, target degli exit criteria, validità |
 | datagen | alias, colonne calcolate lette dagli split, numero reale per gli SMS, filtri con offset |
 | checks | stesso orologio ed exit criteria nella simulazione; check della entry query onesto |
-| outputs, app | scadenza di attivazione, sezione exit criteria, timeline nel testbook, SMS, CSV non importabili |
+| outputs, app | scadenza di attivazione, sezione exit criteria, timeline nel testbook, SMS, nota sulle data extension sincronizzate |
 
 ## 5. Cosa resta fuori, e perché
 
@@ -146,6 +147,6 @@ Il contratto per modulo è in `docs/plan.md`, "Estensioni del passo 3". In sinte
 - In tutti e sei: `Booked?/MP/LI/DOI/MCL` compare in più versioni con condizioni diverse (già segnalato come pattern
   sospetto); lo stesso split ripetuto dopo un'email senza che nulla cambi i campi letti rende il suo remainder non
   raggiungibile; `M.Phone AS MobilePhone, M.MobilePhone AS Phone` scambia due colonne nella entry query;
-  `CampaignMember_Salesforce_9` è sincronizzata e non importabile.
+  `CampaignMember_Salesforce_9` è sincronizzata (il suo CSV si importa come gli altri).
 - I journey "ED on or after Today + N days" subito dopo "N days before ED": il branch sì vale solo sull'estremo (contatto
   puntuale), il remainder serve ai contatti in ritardo; entrambi sono test utili e il testbook deve dire quale è quale.

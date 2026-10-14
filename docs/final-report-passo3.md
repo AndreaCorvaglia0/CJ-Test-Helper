@@ -44,15 +44,17 @@ milioni di combinazioni, che la versione precedente troncava alla prima miliones
 entry query come una sola variabile; le tabelle di collegamento sui percorsi degli attribute set; il parser SQL con il
 filtro "data = oggi ± N giorni", le sorgenti opzionali e le colonne scambiate; i trust check che dicono "non
 verificato" invece di fallire sui propri limiti; report e testbook con la scadenza di attivazione, la sezione dei
-criteri di uscita, le tabelle non importabili, la timeline e gli SMS.
+criteri di uscita, la nota sulle data extension sincronizzate (il loro CSV si importa come gli altri), la
+timeline e gli SMS.
 
 ## Rilievi sui journey, che il report ora porta al cliente
 
 - **4 settimane**: l'exit criterion dice `Entitle_RequestCancellationDate is not null` (negli altri cinque è `is
   null`): ogni contatto accettato dagli split esce alla fine del primo wait; 35 branch su 41 non sono raggiungibili.
 - In tutti e sei: la entry query scambia le colonne `Phone` e `MobilePhone`; `CampaignMember_Salesforce_9` è una data
-  extension sincronizzata e il suo CSV non si può importare; lo split "Booked?/MP/LI/DOI/MCL" compare in versioni con
-  condizioni diverse e, ripetuto dopo l'email senza che nulla cambi i campi letti, ha il remainder non raggiungibile.
+  extension sincronizzata dal CRM, il cui CSV si importa come gli altri (risposta del team); lo split
+  "Booked?/MP/LI/DOI/MCL" compare in versioni con condizioni diverse e, ripetuto dopo l'email senza che nulla cambi i campi letti, ha il remainder non
+  raggiungibile.
 
 ## Cosa si discosta e cosa resta aperto
 
@@ -66,8 +68,8 @@ criteri di uscita, le tabelle non importabili, la timeline e gli SMS.
 - **Risposte attese**: derivate da un agente per cinque export, senza il passo di confutazione previsto (fermato per
   restare nel budget); le differenze di validità (HC 1 contro 2, 2W 1 contro 2) vanno a favore del generatore, che
   applica la regola della spec con l'operatore esclusivo.
-- **Assunzioni 47-61** (`docs/assumptions.md`) da verificare con un run reale: in testa il confronto sul giorno delle
-  date relative, `IsNot` su null, il wait by attribute con campo null, il fuso orario dell'orologio.
+- **Assunzioni 48-61** (`docs/assumptions.md`; le righe 47 e 57 sono state confermate dal team) da verificare con un
+  run reale: in testa `IsNot` su null, il wait by attribute con campo null, il fuso orario dell'orologio.
 
 ## Risposte del team (14 ottobre 2026, sera)
 

@@ -52,7 +52,8 @@ class Table:
     is_sendable: bool = False
     sendable_field: Optional[str] = None   # sendableCustomObjectField: the field holding the contact key
     # Spec, step 3, "Synchronized data extensions": a managed data extension (Package Manager issue NO_DEPLOY /
-    # ManagedDataExtension, the Salesforce objects synchronized from the CRM) cannot be filled by an import.
+    # ManagedDataExtension, the Salesforce objects synchronized from the CRM): its CSV is imported like the others and
+    # its rows also arrive from the sync.
     managed: bool = False
 
     def field(self, name: str) -> Optional[Field]:

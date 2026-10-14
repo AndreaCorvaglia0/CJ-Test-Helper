@@ -2151,8 +2151,8 @@ class CoverageEngine:
 
     def _bound_notes(self, scenarios: list[Scenario]) -> list[str]:
         """Spec, step 3: "Some classes compare on a bound at the split whatever their value ... The branch is still
-        covered, by a value of that class chosen with the rules above, and the testbook and the report say that it
-        rests on the day-level comparison assumption." One note per branch and condition: a day-level relative
+        covered, by a value of that class chosen with the rules above, and the testbook and the report say that the
+        branch is decided on the bound of a day-level comparison." One note per branch and condition: a day-level relative
         condition evaluated on the path of a case (the outcomes tried up to the one taken) whose date equals the
         reference date at the clock the timeline gives."""
         found: dict[tuple[str, str, str, FieldRef, Value], list[str]] = {}
@@ -2196,7 +2196,7 @@ class CoverageEngine:
             cases = ids[0] if len(ids) == 1 else ", ".join(ids)
             notes.append(f"il branch '{label}' dello split '{name}' ({split}) è percorso {'dal caso' if len(ids) == 1 else 'dai casi'} "
                          f"{cases}, in cui {ref[0]}.{ref[1]} = {value} cade esattamente sull'estremo della condizione "
-                         f"{text} quando il contatto arriva allo split: il risultato atteso poggia sull'assunzione del "
+                         f"{text} quando il contatto arriva allo split: il branch è deciso sull'estremo di un "
                          "confronto sul giorno (si confronta la parte data del campo con la data dell'orologio)")
         return notes
 

@@ -755,7 +755,7 @@ WAIT_THEN_BOUND = [wait_offset("WAIT-1", "DE_Master", "EndDate", -13, "DAYS", "S
 def test_wait_with_an_offset_makes_the_class_compare_on_the_bound():
     """examples/wait_offset_then_relative_split: the wait "13 days before EndDate" holds the contact until the split
     compares on its bound. Rule 1 drops T0+13 (validity 0), rule 2 prefers T0+14 (the wait ends after one day); the
-    late contact gets T0+11 (rule 5); the branch on the bound is noted (day-level comparison assumption)."""
+    late contact gets T0+11 (rule 5); the branch on the bound is noted (decided on the bound of a day-level comparison)."""
     engine, r = engine_run(WAIT_THEN_BOUND)
     assert engine.cut_points[END] == [13.0]
     assert r.domains[END] == [day(11), day(14)]

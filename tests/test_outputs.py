@@ -676,7 +676,7 @@ def test_report_opens_with_the_activation_deadline_and_the_testbook_gives_each_c
     result.coverage.perishable = ["DE_Config.Start = 2026-10-13 12:00: resta valido 2 giorni dall'ora di ingresso"]
     day_level = ("il branch 'Email' dello split 'Channel' (DEC-1) è percorso dal caso S01-C02, in cui DE_Config.Start = "
                  "2026-10-13 12:00 cade esattamente sull'estremo della condizione X quando il contatto arriva allo "
-                 "split: il risultato atteso poggia sull'assunzione del confronto sul giorno")
+                 "split: il branch è deciso sull'estremo di un confronto sul giorno")
     result.coverage.warnings.append(day_level)
     sentence = ("Importa i file e attiva il journey entro 2026-10-13 12:00: i valori scelti rispetto all'ora di ingresso "
                 "restano validi 2 giorni.")
@@ -693,8 +693,23 @@ def test_report_opens_with_the_activation_deadline_and_the_testbook_gives_each_c
     assert "Attiva entro" not in (first["Note"] or "")
     assert ("Attiva entro 2026-10-12 12:00: i valori di questo test restano validi 1 giorno dall'ora di ingresso "
             "(2026-10-11 12:00)") in second["Note"]
-    assert "poggia sull'assunzione del confronto sul giorno" in second["Note"]       # only the case it names
+    assert "il branch è deciso sull'estremo di un confronto sul giorno" in second["Note"]   # only the case it names
+    assert "assunzione" not in second["Note"]
     assert "confronto sul giorno" not in (first["Note"] or "")
+
+
+def test_day_level_comparison_is_a_confirmed_fact_and_only_hours_and_minutes_stay_an_assumption():
+    """Spec, "Relative dates in conditions": the day-level comparison is confirmed by the team (14 October 2026);
+    the comparison of the full date and time with hours or minutes is still an assumption (docs/assumptions.md 48)."""
+    from types import SimpleNamespace
+    from cjhelper.model import RelativeDate
+
+    result = SimpleNamespace(package=SimpleNamespace(journey=SimpleNamespace(exits=[])))
+    day = [(None, None, SimpleNamespace(relative=RelativeDate(-1, 7, "days")))]
+    hour = [(None, None, SimpleNamespace(relative=RelativeDate(-1, 1, "hours")))]
+    assert outputs._time_assumptions(result, day) == []
+    assert outputs._time_assumptions(result, day + hour) == [
+        "Una condizione con una data relativa in ore o minuti confronta data e ora intere, non solo il giorno."]
 
 
 def test_exit_criteria_section_summary_rows_and_what_is_still_not_modelled():

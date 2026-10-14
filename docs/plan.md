@@ -520,7 +520,7 @@ sms_sent`, `RandomBranch.timeline/exit_by_criteria`, `CoverageResult.exit_target
 - `TableModel.aliases`: gruppi di campi non chiave che una query seguita copia come colonna semplice (`SELECT M.X` nella
   tabella di ingresso): stessa variabile per la coverage. Le copie di campi chiave restano nei `key_groups`.
 - Una sorgente `optional` resta selezionata; il motivo cita il LEFT JOIN. Una tabella `managed` resta selezionata; il
-  motivo dice che il CSV non si può importare. `DateOffsetFilter` non è un campo di attivazione.
+  motivo dice che la tabella è sincronizzata dal CRM e che il CSV si importa come gli altri. `DateOffsetFilter` non è un campo di attivazione.
 
 ### graph.py
 
@@ -591,11 +591,11 @@ sms_sent`, `RandomBranch.timeline/exit_by_criteria`, `CoverageResult.exit_target
 ### outputs.py e app.py
 
 - report.md: nel blocco "Attenzione" la scadenza di attivazione quando `validity_days` non è None; sezione "Criteri di
-  uscita" (descrizione, modellati o no, casi che escono, stato del target); le tabelle di collegamento e i CSV non
-  importabili nella sezione Tabelle e in "Come eseguire i test"; i valori deperibili tra i warning.
+  uscita" (descrizione, modellati o no, casi che escono, stato del target); le tabelle di collegamento e la nota
+  sulle data extension sincronizzate (il loro CSV è tra quelli da importare) nella sezione Tabelle e in "Come eseguire i test"; i valori deperibili tra i warning.
 - testbook.xlsx: nei passi la timeline ("Giorno N (data e ora): ..."), il passo dell'SMS e il suo risultato atteso,
-  l'uscita per i criteri nel risultato atteso, la scadenza di attivazione nelle Note, la nota sul confronto sul giorno
-  quando un branch poggia su un estremo.
+  l'uscita per i criteri nel risultato atteso, la scadenza di attivazione nelle Note, la nota che dice che un branch è
+  deciso sull'estremo di un confronto sul giorno.
 - app.py: impostazione "Validità minima dei dati (giorni)"; la scadenza di attivazione nel riepilogo; gli exit
   criteria nel passo di revisione. `scenarios.csv` non cambia.
 

@@ -15,6 +15,8 @@ risposte attese derivate a mano per cinque dei sei export (`target_<nome>.json`,
 di confutazione per restare nel budget). Gli script `tools/dump_cj.py`, `tools/graph_cj.py` e `tools/run_cohort.py`
 ricostruiscono dumps, grafi, baseline e confronto (`CJ_SCRATCH`, `CJ_RUNS`, `CJ_REPO` nell'ambiente).
 
+Risposte del team del 14 ottobre sera applicate (`docs/final-report-passo3.md`, "Risposte del team"): date relative sul giorno confermate, data extension sincronizzate importate come gli altri CSV, validità sul valore, target dei criteri di uscita coperto, errore del journey 4 settimane segnalato al cliente.
+
 Suite: ~1000 test, 79 esempi (64 dei passi 1 e 2, 15 del passo 3), pilota: tutto verde. Prossimi passi possibili, da
 decidere con l'utente: le domande in `docs/final-report-passo3.md`; la validità misurata sul percorso del caso (oggi
 è misurata sul valore, lettura prudente); il set cover che sui sei export usa da 1 a 2 casi più del minimo derivato

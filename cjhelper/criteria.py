@@ -388,7 +388,8 @@ def _relative_reference(cond: Condition, now: Optional[datetime]) -> str:
     Spec, step 3: the value "compares the field with the clock's date moved by n units"; "with the unit
     days, weeks, months or years the field's date part is compared with the clock's date part, as the
     interface says "Today"; with hours or minutes the full date and time are compared with the clock
-    ("Now")" (assumption). The reference is therefore written as a date alone at day level and as a
+    ("Now")" (the day-level part confirmed by the team on 14 October 2026; hours and minutes stay an assumption,
+    docs/assumptions.md row 48). The reference is therefore written as a date alone at day level and as a
     date and time otherwise, and the operator reads it exactly as an absolute value: "a value without
     a time compares on the date part". "Both bounds are inclusive for AtOrAfter and AtOrBefore."
     """
@@ -424,8 +425,9 @@ def relative_units() -> tuple[str, ...]:
 def is_day_level(rel: RelativeDate) -> bool:
     """True when a condition with ``rel`` compares the date part, False when it compares the date and time.
 
-    Spec, step 3 (assumption): "with the unit days, weeks, months or years the field's date part is
-    compared with the clock's date part ...; with hours or minutes the full date and time are compared".
+    Spec, step 3 (day-level part confirmed by the team on 14 October 2026): "with the unit days, weeks, months
+    or years the field's date part is compared with the clock's date part ...; with hours or minutes the full
+    date and time are compared" (hours and minutes: assumption, docs/assumptions.md row 48).
     Raises UnsupportedOperator for a unit that is not supported.
     """
     return _known_unit(rel) in DAY_LEVEL_UNITS

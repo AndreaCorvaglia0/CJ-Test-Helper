@@ -121,3 +121,5 @@ the remainder, 10, is not a candidate.
 - The exact wording of the bound and day-level notes, of the deadline, and of the "in time" / "late" labels.
 - The validity of the remainder case (not perishable).
 - `Case.not_before` (2026-10-12 12:00 for the `path_a` case, in a format the spec does not fix).
+
+**Update 14 October 2026.** The team confirmed that relative dates are compared on the day, not on the time, so the day-level comparison is a fact, no longer an assumption. The note on the bound in report.md and in the testbook now says that the branch is decided on the bound of a day-level comparison (it no longer says that it "rests on the assumption"), and report.md does not list the comparison among the assumptions. `expected.json` still asserts "confronto sul giorno" in both texts, unchanged.

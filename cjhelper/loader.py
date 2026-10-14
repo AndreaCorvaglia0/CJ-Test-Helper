@@ -892,8 +892,9 @@ class _ExportReader:
         return table
 
     def read_managed(self, kind: str, entity_id: str, table: Table) -> None:
-        """Spec, step 3, "Synchronized data extensions": "A source table that Package Manager marks as a managed
-        data extension (NO_DEPLOY, ManagedDataExtension ...) cannot be filled by an import."
+        """Spec, step 3, "Synchronized data extensions": a source table that Package Manager marks as a managed
+        data extension (NO_DEPLOY, ManagedDataExtension ...) is imported like every other CSV; its rows also arrive
+        from the CRM sync.
 
         The marks are read in the issues of the table's entity and in the export-level issues that name the
         table (by id, name or customer key). A marked table is ``managed``, with one warning, which also stands
@@ -908,7 +909,8 @@ class _ExportReader:
             return
         table.managed = True
         self.warn(f"La data extension {table.name} è sincronizzata (managed data extension; Package Manager la "
-                  f"segnala come {', '.join(dict.fromkeys(marks))}): non si può riempire con un import.")
+                  f"segnala come {', '.join(dict.fromkeys(marks))}): le sue righe arrivano anche dalla "
+                  "sincronizzazione.")
 
     def field_from(self, table_name: str, raw: dict, position: int) -> Field:
         name = str(raw["name"])

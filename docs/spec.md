@@ -422,9 +422,10 @@ moved by `n` units. The operators that take such a value are `After`, `AtOrAfter
 rule "any other operator on null is false" does not apply to a negated operator; `NotEqual` keeps its
 earlier reading, since the step 2 example `operators_text` fixes it).
 
-- Comparison level (confirmed by the team on 14 October 2026): with the unit `days`, `weeks`, `months` or `years` the field's date part is
-  compared with the clock's date part, as the interface says "Today"; with `hours` or `minutes` the full date
-  and time are compared with the clock ("Now"). Both bounds are inclusive for `AtOrAfter` and `AtOrBefore`.
+- Comparison level: with the unit `days`, `weeks`, `months` or `years` the field's date part is compared with
+  the clock's date part, as the interface says "Today" (confirmed by the team on 14 October 2026); with `hours`
+  or `minutes` the full date and time are compared with the clock ("Now") (assumption). Both bounds are
+  inclusive for `AtOrAfter` and `AtOrBefore`.
 - The same operators with an absolute date value keep the earlier reading (a value without a time compares
   on the date part).
 - Any other value form, unit or operator is unsupported and reported as before.
@@ -455,8 +456,8 @@ the ranges now move with the clock, so the values are chosen as offsets from the
 - Some classes compare on a bound at the split whatever their value (the journey waits until "13 days before
   the date" and then asks "is the date on or after Today plus 13 days": the wait makes the comparison fall on
   the bound for every contact that arrives in time). The branch is still covered, by a value of that class
-  chosen with the rules above, and the testbook and the report say that it rests on the day-level comparison
-  assumption.
+  chosen with the rules above, and the testbook and the report say that the branch is decided on the bound of a
+  day-level comparison (confirmed by the team on 14 October 2026).
 
 ### Validity of the data
 

@@ -1721,8 +1721,9 @@ MANAGED_ISSUE = {"type": "UNSUPPORTED_FUNCTIONALITY", "level": "WARNING", "sourc
 
 
 def test_managed_data_extension_is_marked_and_reported_once():
-    """Spec, step 3, "Synchronized data extensions": a table "that Package Manager marks as a managed data extension
-    (NO_DEPLOY, ManagedDataExtension ...) cannot be filled by an import"."""
+    """Spec, step 3, "Synchronized data extensions": a table that Package Manager marks as a managed data extension
+    (NO_DEPLOY, ManagedDataExtension ...) is imported like the others; the warning says its rows also arrive from
+    the sync."""
     export = make_export()
     export["entities"]["sharedDataExtensions"] = {"de-cm": table("CampaignMember_Salesforce_9", [field("Id")])}
     export["entities"]["sharedDataExtensions"]["de-cm"]["issues"] = [
@@ -1733,7 +1734,9 @@ def test_managed_data_extension_is_marked_and_reported_once():
     managed = [w for w in package.warnings if "NO_DEPLOY" in w]
     assert len(managed) == 1
     assert all(fragment in managed[0] for fragment in (
-        "La data extension CampaignMember_Salesforce_9 è sincronizzata", "ManagedDataExtension", "import"))
+        "La data extension CampaignMember_Salesforce_9 è sincronizzata", "ManagedDataExtension",
+        "le sue righe arrivano anche dalla sincronizzazione"))
+    assert "non si può riempire" not in managed[0]
     # the other issue of the same table is still a Package Manager warning
     assert has_warning(package, "sulla data extension CampaignMember_Salesforce_9", "SHARED_DE")
 

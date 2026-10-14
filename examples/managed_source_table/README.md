@@ -60,7 +60,7 @@ Tables: `DE_Entry` (`ContactId` PK, `Emailaddress`), `DE_Master` (`ContactId` PK
 
 ## Not asserted
 
-- The wording of the loader warning in "Lettura dell'export" (kept as it was).
+- The wording of the loader warning in "Lettura dell'export" (now: "... le sue righe arrivano anche dalla sincronizzazione.").
 - Whether the report lists the managed table among the assumptions: it does not, the procedure is confirmed.
 
 ## Team procedure (proof for the change of 14 October 2026)

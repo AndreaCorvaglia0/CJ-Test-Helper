@@ -111,3 +111,5 @@ Not read by `tests/test_examples.py` yet (examples/README.md, "Extensions to the
 - Which scenario is S01, S02 or S03 (the run order); `csv_values` compares sets for that reason.
 - How the testbook writes the timeline (the case timeline itself is in `timeline`: every step at T0, WAIT-1 included).
 - The exact wording of the link-table reason and of the deadline sentence.
+
+**Update 14 October 2026.** The team confirmed that relative dates ("Today +/- N days") are compared on the day, not on the time: the day-level comparison is a fact, no longer an assumption, so report.md does not list it among the assumptions any more (the comparison with hours or minutes, `docs/assumptions.md` row 48, is still one). The expected values above do not change.

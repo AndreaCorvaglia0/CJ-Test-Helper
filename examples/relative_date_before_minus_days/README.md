@@ -76,3 +76,5 @@ validity 1 day. Below, "k" stands for T0 + k days at 12:00.
 
 - The validity of the `path_a` case (not perishable; whether `Case.validity_days` is then null is not fixed).
 - The wording of the deadline sentence.
+
+**Update 14 October 2026.** The team confirmed that relative dates ("Today +/- N days") are compared on the day, not on the time: the day-level comparison is a fact, no longer an assumption, so report.md does not list it among the assumptions any more (the comparison with hours or minutes, `docs/assumptions.md` row 48, is still one). The expected values above do not change.

@@ -99,3 +99,5 @@ and so is the minimum validity of the data (1 day). Every date below is T0 moved
 
 Proposed keys used here (`cases[i].timeline`, `cases[i].validity_days`, `cases[i].exit_by_criteria`, top-level
 `validity_days`) are described in `examples/README.md`, "Extensions to the expected.json format (proposed)".
+
+**Update 14 October 2026.** The team confirmed that relative dates ("Today +/- N days") are compared on the day, not on the time: the day-level comparison is a fact, no longer an assumption, so report.md does not list it among the assumptions any more (the comparison with hours or minutes, `docs/assumptions.md` row 48, is still one). The expected values above do not change.
