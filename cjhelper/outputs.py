@@ -36,7 +36,8 @@ Spec, "Extensions for time-dependent journeys" (14 October 2026), as report.md a
   modelled, and the state of their coverage target; a case that leaves the journey that way says so last.
 - SMS sends: the steps and the expected result name the SMS and the contact that receives it (the one with the
   real number), or say it cannot be checked without a real number.
-- Synchronized data extensions (managed): their CSV is left out of the files to import.
+- Synchronized data extensions (managed): their CSV is imported like the others; a note says the table is
+  synchronized from the CRM.
 """
 
 from __future__ import annotations
@@ -683,7 +684,7 @@ def _exit_phrase(journey: Journey) -> str:
 
 def _managed_tables(result: GenerationResult) -> list[str]:
     """The tables with a CSV that Package Manager marks as managed (synchronized) data extensions: spec,
-    "Synchronized data extensions", an import cannot fill them."""
+    "Synchronized data extensions", their rows also arrive from the CRM sync."""
     found = []
     for name in result.data.tables:
         table = _table_of(result.package, name)
@@ -693,22 +694,17 @@ def _managed_tables(result: GenerationResult) -> list[str]:
 
 
 def _managed_text(result: GenerationResult, names: list[str], short: bool = False) -> str:
-    """Why the CSV of a managed table is not among the files to import (spec: "assumption: the team confirms the
-    procedure"); ``short`` is the form for the import instructions."""
+    """The note on a managed (synchronized) table (spec, "Synchronized data extensions"): its CSV is imported like
+    the others and its rows will also arrive from the sync; ``short`` is the form for the import instructions."""
     one = len(names) == 1
-    files = _join_words(table_file_name(name) for name in names)
-    entry_csv = table_file_name(result.table_model.entry_table)
+    who = _join_words(names)
+    synced = "è una data extension sincronizzata dal CRM" if one else "sono data extension sincronizzate dal CRM"
+    imported = "il CSV si importa" if one else "i CSV si importano"
+    arrive = "le sue righe arriveranno" if one else "le loro righe arriveranno"
     if short:
-        return (f"Non importare {files}: {_join_words(names)} "
-                f"{'è una data extension sincronizzata' if one else 'sono data extension sincronizzate'} dal CRM "
-                f"(managed), che un import non può riempire. Con l'import diretto di {entry_csv} non "
-                f"{'serve' if one else 'servono'}; {'il CSV è prodotto' if one else 'i CSV sono prodotti'} solo per "
-                "riferimento.")
-    return (f"{files} {'è prodotto' if one else 'sono prodotti'} solo per riferimento: {_join_words(names)} "
-            f"{'è una data extension sincronizzata dal CRM' if one else 'sono data extension sincronizzate dal CRM'} "
-            "(managed data extension, che Package Manager segnala come NO_DEPLOY o ManagedDataExtension), quindi "
-            f"{'non si può riempire' if one else 'non si possono riempire'} con un import. Non va importato: con "
-            f"l'import diretto di {entry_csv} non serve (assunzione da verificare: il team conferma la procedura).")
+        return f"{who} {synced}: {imported} come gli altri e {arrive} anche dalla sincronizzazione."
+    return (f"{who} {synced} (managed data extension, che Package Manager segnala come NO_DEPLOY o "
+            f"ManagedDataExtension): {imported} come gli altri e {arrive} anche dalla sincronizzazione.")
 
 
 def _known_steps(steps: Iterable[Step], unknown_from: Optional[str]) -> list[Step]:
@@ -857,8 +853,8 @@ class _TestbookContext:
     name_counts: dict = dataclasses.field(default_factory=dict)     # test-name part -> number of cases
     entry_kind: str = ENTRY_AUTOMATION                              # EntryEvent.kind
     entry_mode: Optional[str] = None                                # entryMode, when in SINGLE_ENTRY_MODES
-    import_names: list = dataclasses.field(default_factory=list)    # CSV files to import (managed tables left out)
-    managed: list = dataclasses.field(default_factory=list)         # tables whose CSV cannot be imported
+    import_names: list = dataclasses.field(default_factory=list)    # CSV files to import (managed tables included)
+    managed: list = dataclasses.field(default_factory=list)         # synchronized (managed) tables, noted as such
     real_phone_keys: set = dataclasses.field(default_factory=set)   # contacts that hold the real phone number
 
 
@@ -874,7 +870,7 @@ def _testbook_context(result: GenerationResult) -> _TestbookContext:
         journey=journey,
         settings=result.settings,
         csv_names=csv_names,
-        import_names=[name for name in csv_names if name not in {table_file_name(m) for m in managed}],
+        import_names=list(csv_names),
         managed=managed,
         real_phone_keys={c.key for c in result.data.contacts if getattr(c, "uses_real_phone", False)},
         one_active=on,
@@ -1885,8 +1881,6 @@ def _section_tables(result: GenerationResult) -> str:
     for role in result.table_model.tables.values():
         data = result.data.tables.get(role.name)
         csv_name = table_file_name(role.name) if role.selected else "no"
-        if role.name in managed:
-            csv_name += " (non importabile)"
         rows.append([role.name, role_text(role.roles),
                      _LEVEL_WORDS.get(role.level, role.level) if role.level else "-",
                      csv_name, len(data.rows) if data is not None else "-", role.reason])
@@ -2634,12 +2628,6 @@ def _time_assumptions(result: GenerationResult, conditions: list) -> list[str]:
                          "data del campo con la data dell'orologio, senza l'ora (confronto sul giorno); con ore e "
                          "minuti confronta data e ora.")
             break
-    managed = _managed_tables(result)
-    if managed:
-        items.append(f"{_join_words(managed)} {'è' if len(managed) == 1 else 'sono'} sincronizzat"
-                     f"{'a' if len(managed) == 1 else 'e'} dal CRM e il suo CSV non si importa: con l'import diretto di "
-                     f"{table_file_name(result.table_model.entry_table)} non serve. La procedura è da confermare con il "
-                     "team.")
     return items
 
 

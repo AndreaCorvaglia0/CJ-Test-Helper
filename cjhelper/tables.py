@@ -52,8 +52,8 @@ Rules of the spec section "Extensions for time-dependent journeys (step 3, 14 Oc
   key fields stay in the key groups.
 - "A LEFT JOIN source still gets one row per contact (read as an inner join, as before); the report says
   so": the source keeps its CSV and its reason says so.
-- "Synchronized data extensions": a managed table keeps its CSV; its reason says that the CSV cannot be
-  imported.
+- "Synchronized data extensions": a managed table keeps its CSV; its reason says that it is synchronized from
+  the CRM and that the CSV is imported like the others.
 - A ``DateOffsetFilter`` of the entry query is never an activation field (only equality filters are).
 - "Exit criteria and goals": the exit criteria the generator evaluates (``graph.evaluable_exits``) read their
   tables at the end of every wait, as a split does, so their tables count as split tables (decision of the
@@ -142,7 +142,8 @@ READERS_NAMED = 5
 NO_ROLE_REASON = "Né letta né scritta da questo journey."
 INFERRED_PATH = "percorso dedotto dalle relazioni dell'export, non indicato dallo split"
 LEFT_JOIN_NOTE = "Unita con LEFT JOIN: le righe generate la trattano come inner join."
-MANAGED_NOTE = "Data extension sincronizzata dal CRM: il CSV viene prodotto ma non si può importare."
+MANAGED_NOTE = ("Data extension sincronizzata dal CRM: il CSV si importa come gli altri e le righe arriveranno "
+                "anche dalla sincronizzazione.")
 
 
 def build_table_model(package: Package) -> TableModel:

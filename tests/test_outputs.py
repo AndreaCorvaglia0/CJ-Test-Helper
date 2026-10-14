@@ -761,21 +761,31 @@ def test_sms_step_and_result_name_the_contact_with_the_real_number_or_say_it_can
     assert "SMS" not in _case_row(result, "S01-C01")["Detailed steps"]
 
 
-def test_managed_table_is_left_out_of_the_import_list_but_keeps_its_csv_for_reference():
+def test_managed_table_is_imported_like_the_others_and_noted_as_synchronized():
+    """Spec, "Synchronized data extensions" (confirmed by the team on 14 October 2026): the CSV is in the import
+    list; the report only notes that the table is synchronized from the CRM."""
     result = build_result()
     table = next(t for t in result.package.tables.values() if t.name == MASTER)
+    unmarked = write_report(result)
     table.managed = True
+    assert not any("sincronizzat" in item for item in outputs._triggered_assumptions(result))   # no assumption left
     report = write_report(result)
-    assert "Importa prima DE_Config.csv, poi DE_Entry.csv" in _how_to_run(report)
-    assert "Non importare DE_Master.csv: DE_Master è una data extension sincronizzata dal CRM (managed)" in _how_to_run(report)
-    assert "| DE_Master | source, split | contatto | DE_Master.csv (non importabile) |" in report
-    assert "DE_Master.csv è prodotto solo per riferimento" in report                       # the Tabelle section
+    how_to_run = _how_to_run(report)
+    assert "Importa prima DE_Master.csv e DE_Config.csv, poi DE_Entry.csv" in how_to_run                 # in the list
+    assert ("DE_Master è una data extension sincronizzata dal CRM: il CSV si importa come gli altri e le sue righe "
+            "arriveranno anche dalla sincronizzazione.") in how_to_run
+    assert "| DE_Master | source, split | contatto | DE_Master.csv |" in report
+    assert ("DE_Master è una data extension sincronizzata dal CRM (managed data extension, che Package Manager "
+            "segnala come NO_DEPLOY o ManagedDataExtension): il CSV si importa come gli altri e le sue righe "
+            "arriveranno anche dalla sincronizzazione.") in report                                    # the Tabelle section
     pre = _rows(result)[0]["Pre conditions"]
-    assert "Importa questi file CSV: DE_Entry.csv, DE_Config.csv. Importa DE_Entry.csv per ultimo." in pre
-    assert "Non importare DE_Master.csv" in pre
-    assert "DE_Master.csv" in result.files and result.data.tables[MASTER].rows                  # the CSV is still produced
+    assert "Importa questi file CSV: DE_Entry.csv, DE_Master.csv, DE_Config.csv. Importa DE_Entry.csv per ultimo." in pre
+    assert "DE_Master è una data extension sincronizzata dal CRM: il CSV si importa" in pre
+    assert "DE_Master.csv" in result.files and result.data.tables[MASTER].rows
+    assert not any(fragment in report + pre for fragment in ("non importabile", "Non importare"))
+    assert "sincronizzata dal CRM" not in unmarked
     table.managed = False
-    assert "Non importare" not in write_report(result)
+    assert "sincronizzat" not in write_report(result)
 
 
 def test_link_role_is_written_in_italian_and_isnot_is_a_text_operator():

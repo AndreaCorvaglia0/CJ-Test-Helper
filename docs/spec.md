@@ -422,7 +422,7 @@ moved by `n` units. The operators that take such a value are `After`, `AtOrAfter
 rule "any other operator on null is false" does not apply to a negated operator; `NotEqual` keeps its
 earlier reading, since the step 2 example `operators_text` fixes it).
 
-- Comparison level (assumption): with the unit `days`, `weeks`, `months` or `years` the field's date part is
+- Comparison level (confirmed by the team on 14 October 2026): with the unit `days`, `weeks`, `months` or `years` the field's date part is
   compared with the clock's date part, as the interface says "Today"; with `hours` or `minutes` the full date
   and time are compared with the clock ("Now"). Both bounds are inclusive for `AtOrAfter` and `AtOrBefore`.
 - The same operators with an absolute date value keep the earlier reading (a value without a time compares
@@ -540,9 +540,10 @@ relationship ids in `AttributePath` and `UiMetaData`) and the segments of the wa
 
 A source table that Package Manager marks as a managed data extension (`NO_DEPLOY`,
 `ManagedDataExtension`: the Salesforce objects synchronized from the CRM, named like
-`CampaignMember_Salesforce_9`) cannot be filled by an import. Its CSV is still produced, so the tester sees the
-rows the entry query would need, but the report and the testbook leave it out of the files to import and say
-that with the direct import of the entry CSV it is not needed (assumption: the team confirms the procedure).
+`CampaignMember_Salesforce_9`) is imported like every other CSV: its CSV is produced and is among the files to
+import, in the report and in the testbook. The report notes that the table is synchronized from the CRM
+(`NO_DEPLOY`, `ManagedDataExtension`), so the tester knows the rows will also arrive from the sync. Confirmed by
+the team on 14 October 2026.
 
 ### Honest checks
 

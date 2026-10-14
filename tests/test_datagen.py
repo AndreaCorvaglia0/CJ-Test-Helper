@@ -1355,9 +1355,11 @@ def test_wait_by_attribute_deadline_follows_the_offset_and_the_time_of_day():
         == {"2026-10-12 09:30"}                                         # the date written is the old rule's
 
 
-def test_managed_table_keeps_its_csv_and_is_warned_as_not_importable():
+def test_managed_table_keeps_its_csv_and_notes_that_it_is_synchronized():
     world = build_world()
     world.package.tables[CONFIG].managed = True
     data = run(world)
     assert CONFIG in data.tables and len(rows_of(data, CONFIG)) == 2
-    assert len([w for w in data.warnings if CONFIG in w and "non si può importare" in w]) == 1
+    notes = [w for w in data.warnings if CONFIG in w and "sincronizzata dal CRM" in w]
+    assert len(notes) == 1 and "arriveranno anche dalla sincronizzazione" in notes[0]
+    assert not any("non si può importare" in w or "assunzione" in w for w in notes)

@@ -221,7 +221,7 @@ class TableLine:
     role: str              # report.md's role names, e.g. "source, split", "written", "nessuno"
     level: str             # "contact", "scenario", or "-" for a table without a CSV
     csv: bool              # gets a CSV
-    managed: bool = False  # a synchronized (managed) data extension: its CSV is for reference, not to import
+    managed: bool = False  # a synchronized (managed) data extension: shown as such, its CSV is imported as usual
 
 
 @dataclass
@@ -838,7 +838,7 @@ def _show_detection(summary: DetectionSummary) -> None:
         _label("Tabelle con CSV")
         with_csv = [line for line in summary.tables if line.csv]
         if with_csv:
-            rows = [(line.name + (" (non importabile)" if line.managed else ""), line.role,
+            rows = [(line.name + (" (sincronizzata dal CRM)" if line.managed else ""), line.role,
                      _level_text(line.level)) for line in with_csv]
             st.markdown(_markdown_table(["Tabella", "Ruolo", "Livello"], rows))
         else:

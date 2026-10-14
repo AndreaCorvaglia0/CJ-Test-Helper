@@ -29,7 +29,8 @@ Spec, step 3 ("Columns the entry query derives and columns it copies", "Synchron
 - An entry column that a split reads and that the entry query computes with an expression the generator does
   not understand takes the value the case needs (rule 2), with a warning instead of a placeholder.
 - A filter on the date part moved by a number of days gives the generation time moved by that number of days.
-- A managed (synchronized) data extension keeps its CSV; a warning says it cannot be imported.
+- A managed (synchronized) data extension keeps its CSV; a note says it is synchronized from the CRM, so its
+  rows will also arrive from the sync.
 
 Spec, "Extensions beyond the pilot":
 
@@ -1153,14 +1154,13 @@ class _Generator:
         self._sms_ready = True
 
     def _warn_managed_tables(self) -> None:
-        """Spec, step 3, "Synchronized data extensions": the CSV of a managed table is produced, but an import
-        cannot fill the table."""
+        """Spec, step 3, "Synchronized data extensions": the CSV of a managed table is produced and imported like
+        the others; the note tells the tester that the rows will also arrive from the sync."""
         for table, _ in self._tables_plan:
             if table.managed:
                 self._warn(
-                    f"{table.name} è una data extension sincronizzata dal CRM (managed): il CSV viene prodotto, ma "
-                    "non si può importare. Con l'import diretto del CSV della tabella di ingresso non serve "
-                    "(assunzione: da confermare con il team)."
+                    f"{table.name} è una data extension sincronizzata dal CRM (managed): il CSV si importa come gli "
+                    "altri e le sue righe arriveranno anche dalla sincronizzazione."
                 )
 
     def _build_contacts(self, scenarios: list[Scenario]) -> list[Contact]:

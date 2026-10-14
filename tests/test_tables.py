@@ -1280,9 +1280,9 @@ def test_left_join_source_says_it_is_read_as_an_inner_join(sql):
     assert model.aliases == [[(ENTRY, "Score"), ("DE_Score", "Score")]]
 
 
-def test_managed_table_keeps_its_csv_and_says_it_cannot_be_imported(sql):
-    """Spec, step 3, "Synchronized data extensions": "Its CSV is still produced"; the report says it cannot be
-    filled by an import. A managed table the journey does not read gets no CSV and no note."""
+def test_managed_table_keeps_its_csv_and_says_it_is_synchronized_from_the_crm(sql):
+    """Spec, step 3, "Synchronized data extensions": the CSV is produced and imported like the others; the reason
+    says the table is synchronized from the CRM. A managed table the journey does not read gets no CSV and no note."""
     package = make_package(
         [make_table(ENTRY, text("ContactId", pk=True), sendable_field="ContactId"),
          make_table("CampaignMember_Salesforce_3", text("Id", pk=True), text("ContactId"), text("Status"),
@@ -1296,8 +1296,9 @@ def test_managed_table_keeps_its_csv_and_says_it_cannot_be_imported(sql):
 
     member = model.tables["CampaignMember_Salesforce_3"]
     assert (member.roles, member.selected, member.level) == ({ROLE_SOURCE}, True, LEVEL_CONTACT)
-    assert member.reason.endswith("Data extension sincronizzata dal CRM: il CSV viene prodotto ma non si può "
-                                  "importare.")
+    assert member.reason.endswith("Data extension sincronizzata dal CRM: il CSV si importa come gli altri e le "
+                                  "righe arriveranno anche dalla sincronizzazione.")
+    assert "non importabile" not in member.reason
     assert model.tables["Account_Salesforce"].reason == "Né letta né scritta da questo journey."
 
 

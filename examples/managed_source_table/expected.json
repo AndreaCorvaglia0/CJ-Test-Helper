@@ -22,7 +22,16 @@
   "report_contains": [
     "CampaignMember_Salesforce_3",
     ["NO_DEPLOY", "ManagedDataExtension", "UNSUPPORTED_FUNCTIONALITY"],
-    ["sincronizzat", "non importabil", "non si può importare", "non può essere importat", "non si importa"]
+    "CampaignMember_Salesforce_3 è una data extension sincronizzata dal CRM",
+    "le sue righe arriveranno anche dalla sincronizzazione",
+    ["Importa prima CampaignMember_Salesforce_3.csv e DE_Master.csv, poi DE_Entry.csv",
+     "Importa prima DE_Master.csv e CampaignMember_Salesforce_3.csv, poi DE_Entry.csv"]
+  ],
+  "report_not_contains": ["non importabile", "Non importare", "non si può importare"],
+  "testbook_contains": [
+    ["Importa questi file CSV: DE_Entry.csv, CampaignMember_Salesforce_3.csv, DE_Master.csv. Importa DE_Entry.csv per ultimo.",
+     "Importa questi file CSV: DE_Entry.csv, DE_Master.csv, CampaignMember_Salesforce_3.csv. Importa DE_Entry.csv per ultimo."],
+    "CampaignMember_Salesforce_3 è una data extension sincronizzata dal CRM: il CSV si importa come gli altri"
   ],
   "csv_rows": {"DE_Entry": 6, "DE_Master": 6, "CampaignMember_Salesforce_3": 6},
   "csv_values": {
