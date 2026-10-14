@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import zipfile
 from dataclasses import replace
+from datetime import datetime, timedelta
 
 import pytest
 from openpyxl import load_workbook
@@ -18,18 +19,27 @@ from cjhelper.model import (
     ENTRY_RUN_ONCE,
     ENTRY_SCHEDULED,
     GENERATED_KEY,
+    KIND_SMS,
     KIND_WAIT_ATTRIBUTE,
     KIND_WAIT_DURATION,
     KIND_UPDATE,
+    ROLE_LINK,
+    STATUS_COVERED,
     ActionWindow,
+    Activity,
+    BranchStatus,
     CheckResult,
     Field,
     GenerationResult,
+    JourneyFilter,
+    Outcome,
     Relationship,
     Table,
     TableData,
+    TimelinePoint,
     Write,
 )
+from cjhelper import outputs
 from cjhelper.outputs import (
     REPORT_FILE,
     SCENARIOS_FILE,
@@ -644,3 +654,136 @@ def test_update_contact_whose_insert_may_fail_is_listed_as_unsupported_for_some_
     assert ("non è supportata per una parte dei contatti: l'Update contact può fallire. Per questi contatti il "
             "percorso non è noto da quell'attività in poi") in report
     assert "che il generatore non supporta" not in report
+
+
+# ---------------------------------------------------------------------------
+# Spec, "Extensions for time-dependent journeys" (step 3): deadline, exit criteria, timeline, SMS, managed tables
+# ---------------------------------------------------------------------------
+
+ENTRY_TIME = datetime(2026, 10, 11, 12, 0)
+
+
+def _case_row(result, case_id: str) -> dict:
+    return next(row for row in _rows(result) if row["Test name"].startswith(case_id))
+
+
+def test_report_opens_with_the_activation_deadline_and_the_testbook_gives_each_case_its_own():
+    result = build_result()
+    assert "attiva il journey entro" not in write_report(result)                # nothing depends on the clock
+    assert outputs.activation_deadline_text(result) is None
+    result.settings.entry_time = ENTRY_TIME
+    result.coverage.validity_days = 2
+    result.coverage.perishable = ["DE_Config.Start = 2026-10-13 12:00: resta valido 2 giorni dall'ora di ingresso"]
+    day_level = ("il branch 'Email' dello split 'Channel' (DEC-1) è percorso dal caso S01-C02, in cui DE_Config.Start = "
+                 "2026-10-13 12:00 cade esattamente sull'estremo della condizione X quando il contatto arriva allo "
+                 "split: il risultato atteso poggia sull'assunzione del confronto sul giorno")
+    result.coverage.warnings.append(day_level)
+    sentence = ("Importa i file e attiva il journey entro 2026-10-13 12:00: i valori scelti rispetto all'ora di ingresso "
+                "restano validi 2 giorni.")
+    report = write_report(result)
+    assert outputs.activation_deadline_text(result) == sentence
+    assert f"> **Attenzione:** {sentence}" in report[:report.index("## Riepilogo")]
+    assert ("### Valori che dipendono dall'ora di ingresso\n\n- DE_Config.Start = 2026-10-13 12:00: resta valido 2 giorni "
+            "dall'ora di ingresso.") in report
+    assert "| Ora di ingresso | 2026-10-11 12:00 |" in report
+    assert "| Validità minima dei dati (giorni) | 1 giorno |" in report
+    for case in result.coverage.cases:
+        case.validity_days = 1 if case.id == "S01-C02" else None
+    first, second = _case_row(result, "S01-C01"), _case_row(result, "S01-C02")
+    assert "Attiva entro" not in (first["Note"] or "")
+    assert ("Attiva entro 2026-10-12 12:00: i valori di questo test restano validi 1 giorno dall'ora di ingresso "
+            "(2026-10-11 12:00)") in second["Note"]
+    assert "poggia sull'assunzione del confronto sul giorno" in second["Note"]       # only the case it names
+    assert "confronto sul giorno" not in (first["Note"] or "")
+
+
+def test_exit_criteria_section_summary_rows_and_what_is_still_not_modelled():
+    result = build_result()
+    assert "## Criteri di uscita" not in write_report(result)
+    journey = result.package.journey
+    journey.exits = [JourneyFilter("EXIT-1", "EXIT-1", "exit", None, description="Contract ended"),
+                     JourneyFilter("EXIT-2", "EXIT-2", "exit", None, description="Odd rule",
+                                   unsupported_reason="un operatore non supportato")]
+    journey.exit_count = 2
+    result.coverage.exit_targets = [BranchStatus("EXIT-1", "Contract ended", "exit", "met", "criteri di uscita soddisfatti",
+                                                 STATUS_COVERED, "", ["S01-C02"])]
+    report = write_report(result)
+    assert report.index("## Branch non coperti") < report.index("## Criteri di uscita") < report.index("## Branch coperti con")
+    section = report[report.index("## Criteri di uscita"):report.index("## Branch coperti con")]
+    assert "| EXIT-1: Contract ended | valutato alla fine di ogni wait | coperto dal caso S01-C02 |" in section
+    assert "| EXIT-2: Odd rule | non modellato: un operatore non supportato | non applicabile |" in section
+    assert "| Target dei criteri di uscita | 1 |" in report and "| Target dei criteri di uscita coperti | 1 |" in report
+    how = _how_to_run(report)
+    assert "Il journey ha 1 criterio di uscita che il generatore non modella" in how      # only the second one
+    assert "2 criteri di uscita" not in how
+
+
+def test_testbook_writes_the_timeline_and_the_exit_by_criteria_last():
+    result = build_result()
+    result.settings.entry_time = ENTRY_TIME
+    result.package.journey.exits = [JourneyFilter("EXIT-1", "EXIT-1", "exit", None, description="Contract ended")]
+    assert "Giorno" not in _case_row(result, "S01-C02")["Detailed steps"]                    # a case without a timeline
+    case = next(c for c in result.coverage.cases if c.id == "S01-C02")
+    case.timeline = [TimelinePoint("DEC-1", "email", ENTRY_TIME), TimelinePoint("EMAIL-1", "e1", ENTRY_TIME),
+                     TimelinePoint("WAIT-1", "w1", ENTRY_TIME + timedelta(days=1, hours=2)),
+                     TimelinePoint("WAIT-3", None, ENTRY_TIME + timedelta(days=3))]
+    case.exit_by_criteria = "WAIT-3"
+    row = _case_row(result, "S01-C02")
+    assert ("3. Controlla che il percorso rispetti questi tempi, contati dall'ora di ingresso (2026-10-11 12:00):\n"
+            "   Giorno 0 (2026-10-11 12:00): 'Channel' (DEC-1), branch 'Email'; invio dell'email 'Welcome' (EMAIL-1)\n"
+            "   Giorno 1 (2026-10-12 14:00): fine del wait 'Wait campaign date' (WAIT-1)\n"
+            "   Giorno 3 (2026-10-14 12:00): il contatto esce dal journey alla fine del wait 'Wait one minute' (WAIT-3) "
+            "per i criteri di uscita (Contract ended)\n4. ") in row["Detailed steps"]
+    assert row["Expected result"].splitlines()[-1] == (
+        "- Uscita: i contatti escono dal journey alla fine del wait 'Wait one minute' (WAIT-3), perché soddisfano i "
+        "criteri di uscita (Contract ended).")
+
+
+def test_sms_step_and_result_name_the_contact_with_the_real_number_or_say_it_cannot_be_checked():
+    result = build_result()
+    result.package.journey.activities["SMS-1"] = Activity(key="SMS-1", raw_type="SMSSYNC", kind=KIND_SMS,
+                                                          name="Reminder SMS", outcomes=[Outcome("s1", "", None)])
+    result.package.journey.default_mobile_field = "Phone"
+    case = next(c for c in result.coverage.cases if c.id == "S01-C02")
+    case.sms_sent = ["SMS-1"]
+    row = _case_row(result, "S01-C02")
+    assert "non verificabile senza numero reale" in row["Expected result"]
+    assert "l'SMS non può essere verificato" in row["Detailed steps"]
+    assert "Il caso S01-C02 invia un SMS, ma non è stato indicato un numero di telefono reale: l'invio dell'SMS non " \
+           "può essere verificato." in write_report(result)
+    result.settings.real_phone = "393401234567"
+    for contact in result.data.contacts:
+        contact.uses_real_phone = contact.key == case.contact_keys[0]
+    row = _case_row(result, "S01-C02")
+    assert ("SMS 'Reminder SMS' (SMS-1) inviato al numero del contatto TST_R01_C0004, che ha il numero reale "
+            "393401234567 nella colonna Phone di DE_Entry.") in row["Detailed steps"]
+    assert ("- SMS ricevuti: 'Reminder SMS' (SMS-1) sul telefono del contatto TST_R01_C0004") in row["Expected result"]
+    assert "SMS" not in _case_row(result, "S01-C01")["Detailed steps"]
+
+
+def test_managed_table_is_left_out_of_the_import_list_but_keeps_its_csv_for_reference():
+    result = build_result()
+    table = next(t for t in result.package.tables.values() if t.name == MASTER)
+    table.managed = True
+    report = write_report(result)
+    assert "Importa prima DE_Config.csv, poi DE_Entry.csv" in _how_to_run(report)
+    assert "Non importare DE_Master.csv: DE_Master è una data extension sincronizzata dal CRM (managed)" in _how_to_run(report)
+    assert "| DE_Master | source, split | contatto | DE_Master.csv (non importabile) |" in report
+    assert "DE_Master.csv è prodotto solo per riferimento" in report                       # the Tabelle section
+    pre = _rows(result)[0]["Pre conditions"]
+    assert "Importa questi file CSV: DE_Entry.csv, DE_Config.csv. Importa DE_Entry.csv per ultimo." in pre
+    assert "Non importare DE_Master.csv" in pre
+    assert "DE_Master.csv" in result.files and result.data.tables[MASTER].rows                  # the CSV is still produced
+    table.managed = False
+    assert "Non importare" not in write_report(result)
+
+
+def test_link_role_is_written_in_italian_and_isnot_is_a_text_operator():
+    assert outputs.role_text({ROLE_LINK, "source"}) == "collegamento, source"
+    assert outputs.role_text(set()) == "nessuno"
+    result = build_result()
+    result.table_model.tables[MASTER].roles.add(ROLE_LINK)
+    report = write_report(result)
+    assert "| DE_Master | collegamento, source, split |" in report
+    assert "Una tabella di collegamento sta sul percorso" in report
+    assert "isnot" in outputs._CASE_OPERATORS
