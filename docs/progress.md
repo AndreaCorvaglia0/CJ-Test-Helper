@@ -2,36 +2,23 @@
 
 Si riparte da questo file. Spec: `docs/spec.md`. Contratto: `docs/plan.md`. Disegno del passo 3: `docs/design-passo3.md`.
 
-## Ripartenza del passo 3 (journey che dipendono dal tempo): stato al checkpoint
+## Ripartenza del passo 3 (journey che dipendono dal tempo): stato al checkpoint del 14 ottobre 2026, sera
 
-Obiettivo del passo 3: far funzionare il generatore sui sei export della famiglia RET_99 (2W, 3m, 4W, HC, 5d, 6w,
-forniti dall'utente come zip, dati del cliente, MAI nel repository) senza perdere il pilota (CSV identici byte per
-byte) né i quattro export del passo 2 (anche questi fuori dal repository). Le regole nuove sono nella sezione della
-spec "Extensions for time-dependent journeys (step 3, 14 October 2026)"; i contratti dei moduli in `docs/plan.md`,
-"Estensioni del passo 3"; il perché in `docs/design-passo3.md`.
+Passo 3 consegnato: il generatore gira sui sei export della famiglia RET_99 (2W, 3m, 4W, HC, 5d, 6w; dati del cliente,
+MAI nel repository), sul pilota (CSV e `scenarios.csv` identici byte per byte) e sui quattro export del passo 2 (stessi
+numeri e stessi stati di prima). Report finale del passo: `docs/final-report-passo3.md`. Regole: sezione della spec
+"Extensions for time-dependent journeys (step 3, 14 October 2026)"; contratti: `docs/plan.md`, "Estensioni del passo
+3"; perché: `docs/design-passo3.md`; assunzioni 47-61: `docs/assumptions.md`.
 
-Materiale fuori dal repository (va ricaricato in una sessione nuova): i sei export RET_99 e i quattro export del
-passo 2; gli script di diagnosi (`dump_cj.py`, `graph_cj.py`, `run_cohort.py`) sono sotto `tools/` nel repository
-e ricostruiscono dumps, grafi, baseline e confronto con le risposte attese; le risposte attese derivate a mano per i
-sei export (`target_<nome>.md/.json`) vanno rigenerate con il workflow "derive-targets" (tre agenti per journey:
-deriva, confuta, riconcilia) se perse.
+Materiale fuori dal repository (da ricaricare in una sessione nuova): i sei export RET_99 e i quattro del passo 2, le
+risposte attese derivate a mano per cinque dei sei export (`target_<nome>.json`, derivate da un agente, senza il passo
+di confutazione per restare nel budget). Gli script `tools/dump_cj.py`, `tools/graph_cj.py` e `tools/run_cohort.py`
+ricostruiscono dumps, grafi, baseline e confronto (`CJ_SCRATCH`, `CJ_RUNS`, `CJ_REPO` nell'ambiente).
 
-Fatto (commit sul branch `claude/quirky-bohr-24fr8j`):
-
-- Diagnosi: il generatore del passo 2 non si rompe sui sei export ma copre 0 branch su cinque di essi.
-- Spec, contratti, disegno; `model.py` esteso in modo additivo.
-- `sqlparse_lite.py` (filtro data = oggi ± N giorni, sorgenti opzionali, colonne scambiate), `criteria.py` (date
-  relative, After/AtOrAfter/Before/AtOrBefore/IsNot, valutazione con `now`), `loader.py` (SMSSYNC, offset e ora dei
-  wait, percorsi, exit criteria, numero mobile, data extension sincronizzate): fatti, con test, suite verde.
-- Esempi sintetici del passo 3 con risposte derivate a mano (`examples/build_step3_*_examples.py`, 15 esempi):
-  scritti; FALLISCONO in `tests/test_examples.py` finché coverage, datagen, checks e outputs non sono adeguati.
-- Runner degli esempi esteso con le chiavi del passo 3.
-
-In corso o da fare, nell'ordine: `graph.py` (orologio, exit criteria, SMS, timeline), `tables.py` (tabelle di
-collegamento, alias) -> `coverage.py` -> `datagen.py` e `checks.py` -> `outputs.py` e `app.py` -> coorte completa
-(pilota byte-identico, 83 esempi, sei export contro le risposte attese, quattro export del passo 2 contro la
-baseline) -> documenti (assunzioni, report finale, README) -> domande al team (in `docs/design-passo3.md` e nel
-report finale).
+Suite: ~1000 test, 79 esempi (64 dei passi 1 e 2, 15 del passo 3), pilota: tutto verde. Prossimi passi possibili, da
+decidere con l'utente: le domande in `docs/final-report-passo3.md`; la validità misurata sul percorso del caso (oggi
+è misurata sul valore, lettura prudente); il set cover che sui sei export usa da 1 a 2 casi più del minimo derivato
+a mano; la verifica delle assunzioni 47-61 con un run reale.
 
 ## Fatto
 
