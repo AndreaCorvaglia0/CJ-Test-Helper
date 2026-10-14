@@ -143,9 +143,10 @@ class Condition:
     value_attribute: Optional[str] = None
     # Spec, step 3: a relative date value, parsed by criteria.py (``value`` keeps the text as written).
     relative: Optional[RelativeDate] = None
-    # Spec, step 3, "Tables reached through other tables": the attribute sets (as written in the export, before
-    # loader.py maps them to table names) between the contact and ``table``, nearest the contact first; empty
-    # when the export gives no path. loader.py fills it from the relationship ids of the condition.
+    # Spec, step 3, "Tables reached through other tables": the tables between the contact and ``table``, nearest
+    # the contact first, excluding ``table`` itself; empty when the export gives no path. As criteria.py writes it,
+    # ``path`` holds the RELATIONSHIP IDS of the condition (``groupToSetRelationshipId`` of ``UiMetaData``, then the
+    # ``RelationshipID`` of each ``<AttributePath>`` wrapper); loader.py replaces them with the table names.
     path: tuple[str, ...] = ()
 
 
