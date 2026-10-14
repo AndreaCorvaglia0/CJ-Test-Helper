@@ -56,19 +56,23 @@ Spec, "Extensions for time-dependent journeys (step 3, 14 October 2026)":
 
 Assumptions and readings of the lead for step 3 (the spec does not fix them; each is in the developer report):
 
-- The clock with which a condition on a clock field is evaluated at a split reached with the fixed delay d
-  is the entry time plus d, or the end of a wait by attribute on the same field that precedes the split on
-  some path when that is later (waits by duration between that wait and the split are not added to its end).
-  Exit criteria are evaluated in the same way at the end of every wait, the wait's own duration included.
+- Two candidates of a clock field are one class when they decide the same way on the same paths
+  (``_behaviour``): the journey is walked with only that field known, each split with the clock of the path
+  that reaches it, both ways where a formula also depends on other fields; a wait by attribute on another field
+  counts 0, as in the fixed delays. The cut points still come from every fixed delay of each split (the clock
+  points): the entry time plus d, or the end of a wait by attribute on the field that precedes the split.
 - A wait by attribute on a clock field without an offset counts with an offset of 0 (cut point and choice
   rule 2). Rule 2 compares, for each wait on the field, the later of its earliest arrival (entry time plus
   its smallest fixed delay) and the end its date gives; with several waits, the last of them.
 - A day-level cut point is a whole number of days (the difference of the dates), so the candidates keep the
   time of day of the entry time; a time-level one (hours, minutes) is exact. The bounds of the absolute
   ordering conditions on a clock field are cut points too.
-- Validity is found by bisection over the slips 0..366 days: each condition is monotone in the slip (the
-  clock only moves forward, a relative reference with it), so the first slip that changes the truth vector
-  is the one the day-by-day re-evaluation finds.
+- Validity is the behaviour re-evaluated one day of slip at a time for the first two months, then by bisection
+  up to 366 days, a change read as permanent (each condition is monotone in the slip: the clock moves forward,
+  a relative reference with it). It is a property of the value on every path a contact holding it can take
+  ("at any delay a contact can reach it with"), not of one case's path.
+- In the cover, a leaf holding a value below the minimum validity counts only for the targets no other leaf
+  reaches (``_effective_masks``).
 - Among the members of a contact class, a value whose validity is below the minimum validity counts against
   the representative, after null and absent rows and before values on a named point.
 - Whether the exit criteria are why a branch is never crossed is found by walking every path that leaves by
@@ -95,6 +99,7 @@ from .model import (
     GENERATED_KEY,
     KIND_SMS,
     KIND_WAIT_ATTRIBUTE,
+    KIND_WAIT_DURATION,
     SOURCE_JOURNEY,
     ActionWindow,
     EqualityFilter,
@@ -168,6 +173,7 @@ EXIT_LABEL = "criteri di uscita soddisfatti"
 EXIT_KIND = "exit"
 # Spec, step 3, "Validity of the data": "A value that no slip of up to a year changes is not perishable".
 MAX_SLIP_DAYS = 366
+SLIP_SCAN_DAYS = 62             # slips tried one day at a time before bisection (``_clock_validity``)
 MAX_SHADOW_PATHS = 100_000      # paths walked on past the exit criteria to explain unreachable branches
 
 
@@ -723,7 +729,7 @@ class CoverageEngine:
                     f"{ref[0]}.{ref[1]} è letto da uno split ed è fissato dalla entry query: i contatti che entrano "
                     f"nel journey hanno sempre {shown}, quindi si prova solo quel valore")
                 if clock:
-                    days, change = self._clock_validity(self._clock_points(ref), value)
+                    days, change = self._clock_validity(ref, value)
                     self.validity[ref] = {value: days}
                     self.validity_change[ref] = {value: change}
             elif ref in not_null and None in domain:
@@ -902,30 +908,172 @@ class CoverageEngine:
                 out.append(None)
         return tuple(out)
 
-    def _clock_validity(self, points: list[ClockPoint], value: Value) -> tuple[Optional[int], Optional[ClockPoint]]:
+    def _behaviour(self, ref: FieldRef, value: Value, slip: int, intern: dict[tuple, int],
+                   visited: Optional[set] = None) -> int:
+        """How a contact whose clock field ``ref`` holds ``value`` goes through the journey when the entry time
+        slips by ``slip`` days, every other field undecided: an interned signature of the decisions on every path.
+
+        Spec, step 3: "Candidates that take the same branches at every split that reads the field, whatever the
+        delay, are one class". The journey is walked from the start with the clock of each path (waits by duration
+        advance it, a wait by attribute on the field holds the contact until its end, a wait by attribute on
+        another field counts 0, as in the fixed delays). At a decision split each outcome's formula is reduced
+        with the value (``_residual``): false, the next outcome is tried; true, it is taken; undecided (it also
+        depends on other fields), both it and the next outcomes are followed. At the end of every wait the exit
+        criteria are reduced in the same way (true: the path ends there). Engagement and random splits follow
+        every outcome. Update contact writes into the field are read by later Contact Data conditions. The
+        signature keeps the activity keys, outcomes and residuals, never the clock, so two values that decide the
+        same way on the same paths have the same signature even when a wait on the field ends at another time.
+        ``visited`` collects ``(site, days from the entry)`` for every decision split and exit evaluation."""
+        entry = self.entry_time + timedelta(days=slip)
+        activities = self.journey.activities
+        memo: dict[tuple, int] = {}
+        on_path: set[str] = set()
+
+        def sign(structure: tuple) -> int:
+            found = intern.get(structure)
+            if found is None:
+                found = intern[structure] = len(intern)
+            return found
+
+        def readers(written: dict[FieldRef, Value]):
+            def lookup(r: FieldRef):
+                if r in written:
+                    return written[r]
+                return value if self._var(r) == ref else graph.UNKNOWN
+
+            def snapshot(r: FieldRef):
+                return value if self._var(r) == ref else graph.UNKNOWN
+            return lookup, snapshot
+
+        def offset(clock: datetime) -> float:
+            return round((clock - entry) / timedelta(days=1), 6)
+
+        def visit(key: Optional[str], clock: datetime, written: tuple) -> int:
+            if key is None:
+                return sign(("E",))
+            state = (key, clock, written)
+            if state in memo:
+                return memo[state]
+            activity = activities.get(key)
+            if activity is None:
+                return sign(("dangling", key))
+            if key in on_path:
+                return sign(("loop", key))
+            on_path.add(key)
+            written_map = dict(written)
+            lookup, snapshot = readers(written_map)
+            nxt = activity.outcomes[0].next if activity.outcomes else None
+            if activity.kind == KIND_DECISION:
+                if visited is not None:
+                    visited.add((key, offset(clock)))
+                remainder = [o for o in activity.outcomes if o.is_remainder or o.formula is None]
+                parts: list[tuple] = []
+                for outcome in [o for o in activity.outcomes if o not in remainder] + remainder:
+                    if outcome.is_remainder or outcome.formula is None:
+                        parts.append((outcome.key, True, visit(outcome.next, clock, written)))
+                        break
+                    if outcome.unsupported_reason:
+                        parts.append((outcome.key, "unsupported"))
+                        break
+                    result = self._residual(outcome.formula, lookup, clock, snapshot)
+                    if result is False:
+                        parts.append((outcome.key, False))
+                        continue
+                    parts.append((outcome.key, result, visit(outcome.next, clock, written)))
+                    if result is True:
+                        break
+                signature = sign(("D", key, tuple(parts)))
+            elif activity.kind in (KIND_ENGAGEMENT, KIND_RANDOM):
+                signature = sign(("C", key, tuple(visit(o.next, clock, written) for o in activity.outcomes)))
+            elif activity.kind in graph.WAIT_KINDS:
+                end = clock
+                if activity.kind == KIND_WAIT_DURATION:
+                    end = clock + timedelta(minutes=graph.fixed_wait_minutes(activity) or 0)
+                elif activity.kind == KIND_WAIT_ATTRIBUTE and activity.wait_field is not None \
+                        and self._var(self.schema.canonical(activity.wait_field)) == ref:
+                    moment = self.walker.read_date(lookup(self.schema.canonical(activity.wait_field)))
+                    if moment is not None:
+                        try:
+                            end = max(clock, graph.wait_end(activity, moment))
+                        except criteria.UnsupportedOperator:
+                            pass
+                exits: list[tuple] = []
+                leaves = False
+                for exit_ in self.active_exits:
+                    if visited is not None:
+                        visited.add((EXIT_PREFIX + exit_.key, offset(end)))
+                    result = self._residual(exit_.formula, lookup, end, snapshot)
+                    if result is True:
+                        leaves = True
+                        break
+                    if result is not False:
+                        exits.append((exit_.key, result))
+                if leaves:
+                    signature = sign(("X", key))
+                else:
+                    signature = sign(("W", key, tuple(exits), visit(nxt, end, written)))
+            elif activity.kind == KIND_UPDATE:
+                changed = dict(written_map)
+                for w in activity.writes:
+                    member = self.schema.canonical((w.table, w.field))
+                    if self._var(member) == ref:
+                        changed[member] = (clock.strftime(self.settings.date_format) if w.value == graph.DATETIME_NOW
+                                           else w.value)
+                signature = visit(nxt, clock, tuple(sorted(changed.items(), key=lambda kv: kv[0])))
+            elif activity.kind == KIND_UNSUPPORTED:
+                signature = sign(("U", key))
+            else:
+                signature = visit(nxt, clock, written)
+            on_path.discard(key)
+            memo[state] = signature
+            return signature
+
+        return visit(self.journey.start_key, entry, ())
+
+    def _clock_validity(self, ref: FieldRef, value: Value,
+                        intern: Optional[dict[tuple, int]] = None) -> tuple[Optional[int], Optional[ClockPoint]]:
         """Spec, step 3, "Validity of the data": "the number of whole days the entry time can slip before any
         condition on the field, at any delay a contact can reach it with, reads differently; the generator
         computes it by re-evaluating the conditions with the entry time moved by one day at a time (so an
         exclusive operator gives one day less than the distance from the cut point). A value that no slip of up
         to a year changes is not perishable".
 
-        The largest k in 0..MAX_SLIP_DAYS such that every slip j <= k gives the truth vector of slip 0, and the
-        point that changes first; (None, None) when no slip up to MAX_SLIP_DAYS changes it. Each truth is
-        monotone in the slip (the clock moves forward with it, and a relative reference with the clock), so once a
-        slip changes the vector every later one does: bisection finds the same k as the day-by-day re-evaluation."""
-        base = self._clock_vector(points, value, 0)
-        if self._clock_vector(points, value, MAX_SLIP_DAYS) == base:
-            return None, None
-        low, high = 0, MAX_SLIP_DAYS     # slip ``low`` gives the base vector, slip ``high`` does not
-        while high - low > 1:
-            middle = (low + high) // 2
-            if self._clock_vector(points, value, middle) == base:
-                low = middle
-            else:
-                high = middle
-        changed = self._clock_vector(points, value, high)
-        point = next((p for p, a, b in zip(points, base, changed) if a != b), None)
-        return low, point
+        The largest k such that every slip j <= k gives the behaviour of slip 0 (``_behaviour``: the same decisions
+        on the same paths), and the condition that reads the value differently first; (None, None) when no slip up
+        to MAX_SLIP_DAYS changes it. The slips are tried one day at a time for the first SLIP_SCAN_DAYS; beyond, the
+        behaviour of slip MAX_SLIP_DAYS is compared and the first change found by bisection, reading a change as
+        permanent (each condition is monotone in the slip: the clock only moves forward, a relative reference
+        with it)."""
+        intern = {} if intern is None else intern
+        visited: set = set()
+        base = self._behaviour(ref, value, 0, intern, visited)
+        changed_at: Optional[int] = None
+        for slip in range(1, SLIP_SCAN_DAYS + 1):
+            if self._behaviour(ref, value, slip, intern) != base:
+                changed_at = slip
+                break
+        if changed_at is None:
+            if self._behaviour(ref, value, MAX_SLIP_DAYS, intern) == base:
+                return None, None
+            low, high = SLIP_SCAN_DAYS, MAX_SLIP_DAYS     # slip ``low`` behaves as slip 0, slip ``high`` does not
+            while high - low > 1:
+                middle = (low + high) // 2
+                if self._behaviour(ref, value, middle, intern) == base:
+                    low = middle
+                else:
+                    high = middle
+            changed_at = high
+        return changed_at - 1, self._changed_point(ref, value, changed_at, visited)
+
+    def _changed_point(self, ref: FieldRef, value: Value, slip: int, visited: set) -> Optional[ClockPoint]:
+        """The condition that reads ``value`` differently at ``slip`` days: the first clock point of the field whose
+        truth changes, preferring one evaluated on the value's own paths (``visited``)."""
+        points = self._clock_points(ref)
+        before = self._clock_vector(points, value, 0)
+        after = self._clock_vector(points, value, slip)
+        changed = [p for p, a, b in zip(points, before, after) if a != b]
+        on_paths = [p for p in changed if (p.site, round(p.delay, 6)) in visited]
+        return (on_paths or changed or [None])[0]
 
     def _days_from_entry(self, moment: datetime, day_level: bool) -> float:
         """A moment as days from the entry time: whole days between the dates at day level (the candidates keep
@@ -997,19 +1145,21 @@ class CoverageEngine:
     def _clock_domain(self, ref: FieldRef, conds: list[Condition], nullable: bool) -> list[Value]:
         """Spec, step 3, "Values of a date field read with relative dates or by a wait with an offset":
         "Candidates that take the same branches at every split that reads the field, whatever the delay, are one
-        class; the generator keeps one value per class". A class here is a truth vector over every (condition,
-        delay) of ``_clock_points``: a finer grouping than the branches, which keeps every distinct way the value
-        can be read. One representative per class (``_clock_representative``), sorted by date, null last; their
-        validity is kept in ``validity``, the cut points in ``cut_points``."""
+        class; the generator keeps one value per class". A class here is a behaviour (``_behaviour``): the same
+        decisions on the same paths, each split evaluated with the clock of the path that reaches it (a delay with
+        which only other values reach a split does not separate two values). One representative per class
+        (``_clock_representative``), sorted by date, null last; their validity is kept in ``validity``, the cut
+        points in ``cut_points``."""
         points = self._clock_points(ref)
         cuts = self._cut_points(ref, points, conds)
         candidates = self._clock_candidates(cuts, conds, nullable)
         fmt = self.settings.date_format
         cut_texts = {(self.entry_time + timedelta(days=cut)).strftime(fmt) for cut in cuts}
-        classes: dict[tuple, list[Value]] = {}
+        intern: dict[tuple, int] = {}
+        classes: dict[int, list[Value]] = {}
         for value in candidates:
-            classes.setdefault(self._clock_vector(points, value), []).append(value)
-        validity = {value: self._clock_validity(points, value) for value in candidates}
+            classes.setdefault(self._behaviour(ref, value, 0, intern), []).append(value)
+        validity = {value: self._clock_validity(ref, value, intern) for value in candidates}
         waits = self._attribute_waits(ref)
         chosen = [self._clock_representative(members, validity, cut_texts, waits) for members in classes.values()]
         chosen.sort(key=lambda v: (v is None, self.walker.read_date(v) or datetime.max, str(v)))
@@ -1204,18 +1354,20 @@ class CoverageEngine:
         out.sort(key=lambda sub: sub.first)
         return out
 
-    def _residual(self, formula: Formula, lookup, now: datetime):
+    def _residual(self, formula: Formula, lookup, now: datetime, snapshot=None):
         """A formula simplified with the values decided so far: True, False, or what is left of it (a condition,
-        or an operator with its remaining items), in a form equal for equal remainders."""
+        or an operator with its remaining items), in a form equal for equal remainders. ``snapshot`` answers
+        Journey Data conditions when given (graph.evaluate)."""
         if isinstance(formula, Condition):
             try:
-                result = graph.evaluate(formula, lookup, self.schema, self.settings.case_insensitive_text, now=now)
+                result = graph.evaluate(formula, lookup, self.schema, self.settings.case_insensitive_text, snapshot,
+                                        now=now)
             except criteria.UnsupportedOperator:
                 return False
             return formula if isinstance(result, graph.Unknown) else bool(result)
         items = []
         for item in formula.items:
-            result = self._residual(item, lookup, now)
+            result = self._residual(item, lookup, now, snapshot)
             if result is True or result is False:
                 if (formula.operator == "AND") != result:
                     return result          # a False item decides an AND, a True item decides an OR
@@ -1631,6 +1783,7 @@ class CoverageEngine:
         Only deterministic leaves (no random split on the path) count here: the cover prefers
         paths that avoid random splits. Ties are broken by a fixed random seed."""
         rng = random.Random(self.settings.seed)
+        masks = self._effective_masks([leaf for leaf in self.leaves if leaf.deterministic])
         universe = 0
         for leaf in self.leaves:
             if leaf.deterministic:
@@ -1641,7 +1794,7 @@ class CoverageEngine:
             for leaf_id in sig:
                 leaf = self.leaves[leaf_id]
                 if leaf.deterministic:
-                    mask |= leaf.mask
+                    mask |= masks[leaf.id]
             if mask:
                 candidates.append((sig, assignment, mask))
         rng.shuffle(candidates)
@@ -1666,7 +1819,7 @@ class CoverageEngine:
         for i, (sig, _) in enumerate(chosen):
             for leaf_id in sig:
                 leaf = self.leaves[leaf_id]
-                if leaf.deterministic and leaf.mask:
+                if leaf.deterministic and masks[leaf.id]:
                     case_candidates.append((i, leaf))
         covered = 0
         selected: dict[int, list[Leaf]] = {}
@@ -1678,7 +1831,7 @@ class CoverageEngine:
                 best = None
                 best_key = None
                 for cand in pool:
-                    gain = bin(cand[1].mask & ~covered).count("1")
+                    gain = bin(masks[cand[1].id] & ~covered).count("1")
                     if gain == 0:
                         continue
                     key = (-gain, cand[0], cand[1].class_id, cand[1].id)
@@ -1699,6 +1852,31 @@ class CoverageEngine:
                     break
         scenarios = [(chosen[i][1], leaves) for i, leaves in sorted(selected.items())]
         return scenarios, universe
+
+    def _effective_masks(self, leaves: list[Leaf]) -> dict[int, int]:
+        """Leaf id -> the targets the cover may choose it for. Spec, step 3, "Validity of the data": values are
+        chosen so that the margin is at least the setting "minimum validity of the data" "wherever a class of values
+        allows it". A leaf whose contact or scenario values include one below the minimum validity counts only for
+        the targets that no leaf without such a value reaches (none: it is left out); the others count for all
+        theirs."""
+        if not self.validity:
+            return {leaf.id: leaf.mask for leaf in leaves}
+        short = {leaf.id: self._leaf_is_short(leaf) for leaf in leaves}
+        robust = 0
+        for leaf in leaves:
+            if not short[leaf.id]:
+                robust |= leaf.mask
+        return {leaf.id: leaf.mask & ~robust if short[leaf.id] else leaf.mask for leaf in leaves}
+
+    def _leaf_is_short(self, leaf: Leaf) -> bool:
+        """The leaf's class values or scenario values include a value valid for fewer days than the minimum."""
+        minimum = self.settings.min_validity_days
+        for values in (self.classes[leaf.class_id - 1].values, leaf.assigned):
+            for ref, value in values.items():
+                days = self.validity.get(ref, {}).get(value)
+                if days is not None and days < minimum:
+                    return True
+        return False
 
     def _preferred_per_mask(self, candidates: list) -> list:
         """Spec: "Among values that cover the same branches, the generator prefers those whose path rests on
@@ -1736,6 +1914,7 @@ class CoverageEngine:
         random_universe &= ~det_universe
         if not random_universe:
             return []
+        masks = self._effective_masks([leaf for leaf in self.leaves if not leaf.deterministic])
         groups: list[tuple[dict[FieldRef, Value], int, tuple[ManualAction, ...], list[Leaf], int]] = []
         for sig, assignment in signatures.items():
             by_group: dict[tuple[int, tuple[ManualAction, ...]], list[Leaf]] = {}
@@ -1746,7 +1925,7 @@ class CoverageEngine:
             for (class_id, manual), leaves in by_group.items():
                 mask = 0
                 for leaf in leaves:
-                    mask |= leaf.mask
+                    mask |= masks[leaf.id]
                 groups.append((assignment, class_id, manual, leaves, mask & random_universe))
         rng = random.Random(self.settings.seed + 1)
         rng.shuffle(groups)

@@ -432,15 +432,14 @@ class Checker:
         table = self.package.tables[entry]
         header, rows = self.csv[entry]
         pk = table.primary_key or table.field_names
-        # Spec, step 3, "Honest checks": a column that a split reads and that the query computes with an expression
-        # the generator does not understand holds the value the case needs; it is not compared.
-        read_by_splits = {(t.lower(), c.lower())
-                          for t, c in list(self.coverage.contact_fields) + list(self.coverage.scenario_fields)}
+        # Spec, step 3, "Honest checks": "The trust check on the entry query reports a column it cannot verify (an
+        # expression the generator does not understand, ...) as "not verified", with the reason, and fails only on
+        # what it can verify." Such a column holds the value the case needs when a split reads it, a placeholder
+        # otherwise; either way it is not compared.
         unverified: set[str] = set()
         for item in query.select:
             f = table.field(item.target_column)
-            if f is not None and _has_unsupported(item.expr) and (entry.lower(), f.name.lower()) in read_by_splits \
-                    and f.name not in unverified:
+            if f is not None and _has_unsupported(item.expr) and f.name not in unverified:
                 unverified.add(f.name)
                 notes.append(f"non verificato: {entry}.{f.name} è calcolata da un'espressione non compresa "
                              f"({_unsupported_text(item.expr)})")

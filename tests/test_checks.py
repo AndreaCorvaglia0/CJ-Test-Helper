@@ -333,6 +333,20 @@ def test_entry_check_reports_what_it_cannot_verify_and_fails_only_on_the_rest():
     assert "Emailaddress" in failed(run(world, broken), ENTRY)
 
 
+def test_a_column_computed_by_an_expression_not_understood_is_not_verified_even_when_no_split_reads_it():
+    """Spec, step 3, "Honest checks": a column the check cannot verify is "not verified", whether a split reads it
+    or not (RET_99_4W: Service_Call_Identifier, computed by a CASE and read by no split, holds a placeholder)."""
+    world = example_world("case_when_identifier")
+    unread = replace(world.coverage, contact_fields=[ref for ref in world.coverage.contact_fields
+                                                     if ref != ("DE_Entry", "Email_Identifier")])
+    placeholder = edit(world, "DE_Entry", set_value("ContactId", C1, "Email_Identifier", "TST_Email_Identifier_1"))
+    entry = run(world, placeholder, coverage=unread)[ENTRY]
+    assert entry.passed, entry.details
+    assert any(d.startswith("non verificato: DE_Entry.Email_Identifier è calcolata da un'espressione non compresa")
+               for d in entry.details)
+    assert not any("non lo popola" in d for d in entry.details)
+
+
 @pytest.mark.parametrize("default, value, passes", [
     ("GetDate()", "2026-01-31 08:15", True),     # any date: the column holds what the table fills when inserting
     ("GetDate()", "not a date", False),

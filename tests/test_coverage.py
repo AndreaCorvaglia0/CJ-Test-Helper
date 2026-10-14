@@ -665,12 +665,13 @@ def case_ending(result, key):
     return next(c for c in result.cases if c.end_activity_key == key)
 
 
-def brute_validity(engine, points, value):
-    """Spec, "Validity of the data": re-evaluate the conditions with the entry time moved by one day at a time."""
-    base = engine._clock_vector(points, value, 0)
+def brute_validity(engine, ref, value):
+    """Spec, "Validity of the data": re-evaluate with the entry time moved by one day at a time, up to a year."""
+    intern = {}
+    base = engine._behaviour(ref, value, 0, intern)
     k = 0
     for slip in range(1, coverage.MAX_SLIP_DAYS + 1):
-        if engine._clock_vector(points, value, slip) != base:
+        if engine._behaviour(ref, value, slip, intern) != base:
             return k
         k = slip
     return None
@@ -680,7 +681,7 @@ def assert_validity_matches_simulation(engine, ref):
     points = engine._clock_points(ref)
     cuts = engine._cut_points(ref, points, engine.conditions_by_field[ref])
     for value in engine._clock_candidates(cuts, engine.conditions_by_field[ref], True):
-        assert engine._clock_validity(points, value)[0] == brute_validity(engine, points, value), value
+        assert engine._clock_validity(ref, value)[0] == brute_validity(engine, ref, value), value
 
 
 AFTER_TODAY = [decision("SPLIT-1", "Start date", [("path_a", "Future", "UPD-1", rel("DE_Master", "StartDate", "After", ";+;0;days")),
@@ -721,8 +722,8 @@ def test_relative_date_in_the_past_with_a_strict_operator_and_null_never_represe
 
 
 def test_cut_points_follow_the_fixed_delays_of_each_split():
-    """examples/relative_date_chain_waits: a 2-day wait between two windows. Cut points {45, 47, 90}; classes as
-    truth vectors over (condition, delay); rule 3 drops the cut point 90, rule 4 picks 89 (validity 42)."""
+    """examples/relative_date_chain_waits: a 2-day wait between two windows. Cut points {45, 47, 90}; classes by
+    the branches taken on each path; rule 3 drops the cut point 90, rule 4 picks 89 (validity 42)."""
     window = lambda upper: AND(rel("DE_Master", "EndDate", "AtOrBefore", f";+;{upper};days"),
                                rel("DE_Master", "EndDate", "AtOrAfter", ";+;45;days"))
     acts = [decision("SPLIT-1", "Window", [("path_a", "In", "WAIT-1", window(90))], remainder_next="UPD-3"),
@@ -731,8 +732,10 @@ def test_cut_points_follow_the_fixed_delays_of_each_split():
             update("UPD-1", "1", [], None), update("UPD-2", "2", [], None), update("UPD-3", "3", [], None)]
     engine, r = engine_run(acts)
     assert engine.cut_points[END] == [45.0, 47.0, 90.0]
-    assert r.domains[END] == [day(43), day(46), day(89), day(92), None]
-    assert engine.validity[END] == {day(43): None, day(46): 1, day(89): 42, day(92): 1, None: None}
+    # class A of the README (SPLIT-1 remainder: T0+43, T0+44, T0+91, T0+92 and null take the same branch) is one
+    # class: 43, not perishable, is kept
+    assert r.domains[END] == [day(43), day(46), day(89)]
+    assert engine.validity[END] == {day(43): None, day(46): 1, day(89): 42}
     assert {c.end_activity_key: c.contact_values[END] for c in r.cases} == {"UPD-3": day(43), "UPD-2": day(46),
                                                                              "UPD-1": day(89)}
     assert all(b.status == STATUS_COVERED for b in r.branches)
@@ -1114,3 +1117,66 @@ def test_a_component_over_the_cap_is_complete():
     assert sum(c.member_count for c in r.classes) == 3 ** 13
     assert len(r.classes) == 5      # all true; then B1 and B13 each true or not, with some other field not true
     assert all(b.status == STATUS_COVERED for b in r.branches)
+
+
+def test_a_delay_only_other_values_reach_does_not_separate_a_class():
+    """ret_99_6w: SPLIT-2 is reached at once by the dates the window of SPLIT-1 lets through, and after a 3-day wait
+    by the others. Evaluated at every fixed delay, T0+30 and T0+31 differ at the 3-day delay ("on or after Today +
+    28" three days later), a delay no contact holding them reaches; on their own paths they take the same branches,
+    so they are one class, and the value kept is not on a cut point and lasts longest (T0+33, 3 days)."""
+    acts = [decision("SPLIT-1", "window", [("path_a", "in", "SPLIT-2", rel("DE_Master", "EndDate", "AtOrAfter", ";+;30;days"))],
+                     remainder_next="WAIT-1"),
+            wait_dur("WAIT-1", 3, "DAYS", "SPLIT-2"),
+            decision("SPLIT-2", "still", [("path_a", "in", "UPD-1", rel("DE_Master", "EndDate", "AtOrAfter", ";+;28;days"))],
+                     remainder_next="UPD-2"),
+            update("UPD-1", "1", [], None), update("UPD-2", "2", [], None)]
+    engine, r = engine_run(acts)
+    assert engine.cut_points[END] == [28.0, 30.0, 31.0]
+    points = engine._clock_points(END)
+    assert engine._clock_vector(points, day(30)) != engine._clock_vector(points, day(31))
+    intern = {}
+    assert engine._behaviour(END, day(30), 0, intern) == engine._behaviour(END, day(31), 0, intern)
+    assert r.domains[END] == [day(26), day(33)]
+    assert engine.validity[END] == {day(26): None, day(33): 3}
+    assert all(b.status == STATUS_COVERED for b in r.branches)       # the remainder of SPLIT-2 by T0+26, after the wait
+    assert r.validity_days == 3
+    assert_validity_matches_simulation(engine, END)
+
+
+def _perishable_exit_journey(with_flag: bool):
+    """SPLIT-1 at entry: "EndDate on or after Today + 13"; both branches then wait one day. The exit criteria take
+    out the contacts whose EndDate is exactly 7 days after the wait's end (T0+8, valid 0 days); with the flag, also
+    the flagged contacts of path_a (a value that lasts)."""
+    on_day_8 = AND(rel("DE_Master", "EndDate", "After", ";+;6;days"), rel("DE_Master", "EndDate", "Before", ";+;8;days"))
+    formula = OR(on_day_8, AND(cond("DE_Master", "Perm", "Is", "true"), rel("DE_Master", "EndDate", "AtOrAfter", ";+;13;days"))) \
+        if with_flag else on_day_8
+    acts = [decision("SPLIT-1", "far", [("path_a", "far", "WAIT-2", rel("DE_Master", "EndDate", "AtOrAfter", ";+;13;days"))],
+                     remainder_next="WAIT-1"),
+            wait_dur("WAIT-1", 1, "DAYS", "UPD-2"), wait_dur("WAIT-2", 1, "DAYS", "UPD-1"),
+            update("UPD-1", "1", [], None), update("UPD-2", "2", [], None)]
+    return acts, [exit_filter("E1", formula)]
+
+
+def test_perishable_leaves_do_not_displace_robust_ones():
+    """A leaf holding a value valid for fewer days than the minimum counts in the cover only for the targets no
+    leaf without such a value reaches: here the remainder and the exit are reached by values that last, so the
+    T0+8 contacts are left out and the data stays valid at least one day."""
+    acts, exits = _perishable_exit_journey(with_flag=True)
+    engine, r = engine_run(acts, exits=exits)
+    assert engine.validity[END][day(8)] == 0
+    det = [leaf for leaf in engine.leaves if leaf.deterministic]
+    masks = engine._effective_masks(det)
+    short = [leaf for leaf in det if engine.classes[leaf.class_id - 1].values[END] == day(8)]
+    assert short and all(engine._leaf_is_short(leaf) and masks[leaf.id] == 0 for leaf in short)
+    assert all(c.contact_values[END] != day(8) for c in r.cases)
+    assert all(b.status == STATUS_COVERED for b in r.branches) and r.exit_targets[0].status == STATUS_COVERED
+    assert r.validity_days is not None and r.validity_days >= 1
+
+
+def test_a_perishable_leaf_is_kept_for_a_target_only_it_reaches():
+    acts, exits = _perishable_exit_journey(with_flag=False)
+    _, r = engine_run(acts, exits=exits)
+    leaving = next(c for c in r.cases if c.exit_by_criteria)
+    assert leaving.contact_values[END] == day(8) and leaving.validity_days == 0
+    assert r.exit_targets[0].status == STATUS_COVERED and r.validity_days == 0
+    assert any("resta valido solo 0 giorni" in w for w in r.warnings)
