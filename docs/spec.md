@@ -442,24 +442,33 @@ the ranges now move with the clock, so the values are chosen as offsets from the
 - The candidate values are the entry time moved by every cut point and by every cut point plus or minus
   one and two days, plus the absolute values named by the other conditions, plus null when the schema
   allows it. Candidates that take the same branches at every split that reads the field, whatever the delay,
-  are one class; the generator keeps one value per class, the one farthest from every cut point (the most
-  robust to a late activation), and tries the classes like any other domain.
+  are one class; the generator keeps one value per class, chosen in this order: (1) among the candidates whose
+  validity (see "Validity of the data") reaches the setting "minimum validity of the data", or all of them when
+  none does; (2) the one that makes the waits by attribute on the field end soonest (so the test runs as early
+  as the margin allows; a setting of 0 lets them end at once); (3) not on a cut point; (4) the longest validity;
+  (5) the earliest date. It tries the classes like any other domain.
 - A wait by attribute with an offset no longer writes "the generation time plus the wait offset" into its
   field when the field also has conditions: the field takes the candidate the case needs, and the
   testbook says when the wait ends. A wait by attribute on a field with no condition keeps the earlier rule.
-- When the only values that take a branch sit on a bound (the journey waits until "13 days before the date"
-  and then asks "is the date on or after Today plus 13 days": true exactly on the bound for a contact that
-  arrives in time), the generator uses the bound, and the testbook and the report say that the branch rests
-  on the day-level comparison assumption.
+- Some classes compare on a bound at the split whatever their value (the journey waits until "13 days before
+  the date" and then asks "is the date on or after Today plus 13 days": the wait makes the comparison fall on
+  the bound for every contact that arrives in time). The branch is still covered, by a value of that class
+  chosen with the rules above, and the testbook and the report say that it rests on the day-level comparison
+  assumption.
 
 ### Validity of the data
 
 A value chosen relative to the entry time stops working when the test starts late: a holiday that "starts
-after Today" becomes current. The generator computes for every such value how many days the activation can
-slip before any split reads it differently, and the report and the testbook give the earliest of these as
-the deadline: "import the files and activate the journey by <date>". Values are chosen so that this margin
-is at least the setting "minimum validity of the data" (default 1 day) wherever a class of values allows it;
-a value with a smaller margin is reported.
+after Today" becomes current. The validity of a value is the number of whole days the entry time can slip
+before any condition on the field, at any delay a contact can reach it with, reads differently; the generator
+computes it by re-evaluating the conditions with the entry time moved by one day at a time (so an exclusive
+operator gives one day less than the distance from the cut point). A value that no slip of up to a year
+changes is not perishable and sets no deadline. The report and the testbook give the earliest validity over
+the cases as the deadline: "import the files and activate the journey by <date and time>" (the entry time plus
+that many days). Values are chosen so that this margin is at least the setting "minimum validity of the data"
+(default 1 day) wherever a class of values allows it, and no larger than a wait on the field needs, so that
+the test runs as early as the margin allows (a setting of 0 gives values on which every wait ends at once and
+the data must be activated the same day); a value with a smaller margin is reported.
 
 ### Exit criteria and goals
 

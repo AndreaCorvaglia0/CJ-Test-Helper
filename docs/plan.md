@@ -551,8 +551,13 @@ sms_sent`, `RandomBranch.timeline/exit_by_criteria`, `CoverageResult.exit_target
   ogni condizione relativa e `{-O + W}` per ogni wait con offset `O`, con `W` i ritardi fissi con cui si arriva
   all'attività (`graph.fixed_delays`); candidati = `T0` spostato di ogni punto di taglio e di ogni punto ±1 e ±2 giorni
   (ora del giorno di `T0`), più i valori assoluti nominati, più null se ammesso; i candidati con lo stesso vettore di
-  verità su ogni (condizione, W) sono una classe, e resta il candidato più lontano da ogni punto di taglio (il margine
-  in giorni è la validità del valore). I campi "solo wait" senza offset restano fuori dalla coverage, come prima.
+  verità su ogni (condizione, W) sono una classe. Validità di un candidato: il numero di giorni interi di cui si
+  può spostare in avanti l'ora di ingresso prima che un vettore di verità cambi, calcolata rivalutando le
+  condizioni con l'ingresso spostato di 1, 2, ... giorni (fino a 366: oltre, il valore non è deperibile e la
+  validità è None). Per ogni classe resta un candidato, scelto in quest'ordine: (1) validità ≥
+  `Settings.min_validity_days` (tutti, se nessuno la raggiunge); (2) il wait by attribute sul campo finisce prima
+  (solo quando un wait con offset legge il campo); (3) non su un punto di taglio; (4) validità più lunga;
+  (5) data più vicina. I campi "solo wait" senza condizioni restano fuori dalla coverage, come prima.
 - Target "exit criteria met": un bit per ogni exit criterion supportato nel set cover (`exit_targets`,
   `activity_key` = chiave del criterio, `outcome_key` = `"met"`, `activity_kind` = `"exit"`), coperto dai casi con
   `exit_by_criteria`.
@@ -591,3 +596,11 @@ sms_sent`, `RandomBranch.timeline/exit_by_criteria`, `CoverageResult.exit_target
   quando un branch poggia su un estremo.
 - app.py: impostazione "Validità minima dei dati (giorni)"; la scadenza di attivazione nel riepilogo; gli exit
   criteria nel passo di revisione. `scenarios.csv` non cambia.
+
+### Esempi del passo 3: chiavi aggiunte a expected.json
+
+Lette da `tests/test_examples.py` (`compare_step3`, `case_matches_step3`): `table_roles` (tabella -> ruoli che deve
+avere), `csv_rows` (tabella -> numero di righe del CSV), `csv_values` ("Tabella.Campo" -> insieme dei valori distinti,
+null compreso), `exit_targets` ("CHIAVE/met" -> {status, reason_contains}), `validity_days` (numero o null); per
+caso: `exit_by_criteria`, `sms_sent`, `validity_days`, `timeline` (attività -> "YYYY-MM-DD HH:MM"),
+`contact_values_any_of`, `contact_rows` (una voce per contatto, in ordine di chiave: "Tabella.Campo" -> valore).
