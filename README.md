@@ -183,6 +183,7 @@ L'interfaccia, i messaggi del generatore (warning, trust check, errori di lettur
 | `docs/plan.md` | Come la spec è suddivisa in moduli |
 | `docs/progress.md` | Stato del lavoro e domande aperte |
 | `docs/assumptions.md` | La review Salesforce: assunzioni da verificare e pattern sospetti |
+| `docs/CJ_Test_Helper_Disegno_della_soluzione.docx` | Il disegno della soluzione, report tecnico da consegnare: derivazione dei casi di test, mappa delle data extension, regole di generazione dei dati |
 | `cjhelper/` | Il generatore, un modulo per ogni passo della spec |
 | `tests/` | Test unitari per modulo, gli esempi e il test end-to-end sul pilot |
 | `examples/` | Piccoli journey costruiti a mano con le risposte attese |
